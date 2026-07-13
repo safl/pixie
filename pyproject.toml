@@ -1,0 +1,101 @@
+[project]
+name = "pixie-lab"
+version = "0.1.0"
+description = "Bare-metal netboot appliance: catalog + fetch + NBD + PXE + TFTP + operator TUI in one container"
+readme = "README.md"
+requires-python = ">=3.11"
+authors = [{ name = "Simon A. F. Lund", email = "os@safl.dk" }]
+license = "GPL-3.0-only"
+keywords = ["bare-metal", "imaging", "ipxe", "pxe", "flashing", "netboot", "nbd", "appliance"]
+classifiers = [
+    "License :: OSI Approved :: GNU General Public License v3 (GPLv3)",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Operating System :: POSIX :: Linux",
+]
+# Runtime deps kept intentionally lean for v0.1.0: the skeleton only
+# wires ``/healthz`` + session-cookie login/logout + a placeholder
+# dashboard. Feature deps (rich for the TUI, extra parsing libs) land
+# in the PRs that actually need them.
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.30",
+    "jinja2>=3.1",
+    # SessionMiddleware signs the session cookie; it isn't pulled in
+    # by ``fastapi`` itself.
+    "itsdangerous>=2.1",
+    # Required by FastAPI's ``Form()`` parsing for the login form.
+    "python-multipart>=0.0.9",
+    # v0.42+ pattern (per bty history): Settings-page edits round-trip
+    # through tomlkit so operator comments + ordering in ``pixie.toml``
+    # survive. Included in the skeleton so downstream PRs don't need
+    # to widen deps for a settings write.
+    "tomlkit>=0.12",
+]
+
+[project.scripts]
+# Two console-scripts from one distribution, mirroring how bty ships
+# ``bty`` + ``bty-lab`` from ``bty-lab``. ``pixie`` is the operator TUI
+# (Rich-based, runs in the pixie-media live env on target hardware);
+# ``pixie-lab`` is the deploy generator (init/deploy/purge/upgrade).
+# Both land empty in the skeleton and get bodies in later PRs.
+pixie = "pixie.tui:main"
+pixie-lab = "pixie.deploy:main"
+
+[project.urls]
+Homepage = "https://github.com/safl/pixie"
+Repository = "https://github.com/safl/pixie"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/pixie"]
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
+    "ruff>=0.6",
+    "mypy>=1.10",
+    # FastAPI's TestClient uses httpx; not pulled in by ``fastapi``
+    # itself.
+    "httpx>=0.27",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = ["src"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "RUF", "SIM", "PERF", "RET", "PIE", "C4"]
+# RET504 / RET505: too noisy for "explicit-is-better-than-implicit"
+# control flow we already prefer (``if cond: return X`` followed by
+# ``return Y`` rather than collapsing into a ternary).
+ignore = ["RET504", "RET505"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+explicit_package_bases = true
+mypy_path = "src"
+
+[tool.pyright]
+include = ["src", "tests"]
+extraPaths = ["src"]
+
+# Tests intentionally poke at private state and lean on the leading-
+# underscore lambda arg convention (``lambda *_a, **_kw: ...``) to mark
+# stub parameters the test doesn't care about. Silence the two pyright
+# diagnostic classes that flag these patterns.
+[[tool.pyright.executionEnvironments]]
+root = "tests"
+reportPrivateUsage = "none"
+reportUnusedVariable = "none"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

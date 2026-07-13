@@ -1,0 +1,45 @@
+name: ci
+
+# Skeleton CI at 0.1.0: lint (ruff check + format), typecheck (mypy),
+# and pytest on the supported Python matrix. Publish jobs (PyPI +
+# ghcr.io) land in a follow-up PR once the first release-worthy
+# feature slice exists.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Test (lint + typecheck + pytest ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12", "3.13", "3.14"]
+    steps:
+      - uses: actions/checkout@v6
+      - uses: astral-sh/setup-uv@v7.2.1
+        with:
+          python-version: ${{ matrix.python-version }}
+      - run: uv sync --all-extras --group dev
+      - run: uv run ruff check .
+      - run: uv run ruff format --check .
+      - run: uv run mypy src
+      - run: uv run pytest -v
+
+  build-container:
+    name: Build container (smoke)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      # Smoke-build only: just prove the Containerfile parses + the
+      # apt install layer resolves. No push. Publish to ghcr.io lands
+      # in a follow-up PR once the app has something to serve.
+      - run: podman build -t pixie:ci -f Containerfile .
