@@ -1,11 +1,15 @@
 # pixie plan
 
 Pixie is a bare-metal netboot appliance: catalog + fetch + NBD + PXE + TFTP
-+ operator TUI in one container. It is the merged successor to bty, nbdmux,
-and (a fork of) withcache -- three FastAPI services that grew together on
-the same lab appliance and had accumulated enough cross-service wire
-contract, duplicated code, and coordinating-releases friction that a
-pave-over is cheaper than an in-place merge.
++ operator TUI in one container. It consolidates into one process what
+bty, nbdmux, and a hard-fork of withcache implement today as three
+separate FastAPI services on the same lab appliance -- the goal being one
+wire contract, one state.db, one admin surface, in exchange for the
+compositional flexibility of running them independently.
+
+bty, nbdmux, and withcache all continue as their own projects. Pixie
+does not replace them, deprecate them, or plan for their archival; it
+is a new sibling appliance that starts from a merged design.
 
 This document is the source of truth for what pixie is, what has been
 decided, what is open, and what the ordered work looks like. Rehashed
@@ -144,18 +148,18 @@ Split from PR 3 because the media bake is a large, independently-testable
 diff (~5-10k LOC of live-build config) that can land after the container
 side is proven.
 
-### Repos
+### Relationship to bty / nbdmux / withcache
 
-bty and nbdmux archive AFTER pixie v0.3 tags AND after the 10.20.30.10
-lab has successfully cutover to a pixie deploy; not the moment v0.3
-merges. Buys a rollback window.
+bty, nbdmux, and withcache stay alive as their own projects with their
+own release cadences. Pixie borrows patterns and, for its initial port,
+lifts code from all three (withcache's Store class + oras client,
+nbdmux's NbdServer + fetch mechanics, bty's operator UI + machine
+registry + PXE renderer + TUI + iPXE templates + live-env media
+recipes). Those lifts start as forks, not dependencies; each project
+evolves separately afterwards.
 
-Withcache stays alive as an independent tool. Its curl/wget cache-through
-mission is still coherent even without the appliance context; pixie's
-catalog machinery is a hard-fork that evolves separately.
-
-No migration script from bty state. Fresh pixie install; operator re-adds
-catalog entries and re-fetches the images they want.
+No migration script from an existing bty state.db. Fresh pixie install;
+operator re-adds catalog entries and re-fetches the images they want.
 
 ## Open decisions
 

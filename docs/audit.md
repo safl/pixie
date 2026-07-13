@@ -8,6 +8,13 @@ has to carry, and what ambiguous items still need operator decision.
 Line numbers reference the source trees at their state on 2026-07-13
 (bty commit e3a45dd, withcache + nbdmux at their respective mains).
 Kept in the repo for historical reference; not updated as PRs land.
+
+Historical note: this audit was produced under an earlier plan where
+bty and nbdmux would archive after pixie shipped. That plan was
+subsequently dropped. All three upstreams (bty, nbdmux, withcache)
+continue as their own projects; pixie is a sibling, not a successor.
+References to "archival" or "before archival" inside the audit reflect
+the earlier framing.
 -->
 
 # pixie port audit
