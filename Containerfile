@@ -26,11 +26,13 @@ LABEL org.opencontainers.image.title="pixie" \
 #   gzip / zstd / xz-utils:
 #                    decompressor CLIs the fetch pipeline pipes to
 #                    while streaming into the on-disk image.
-#   nbdkit + file plugin + cow / partition filters:
-#                    the NBD supervisor spawns one nbdkit per export;
-#                    cow gives each ramboot target its own writable
-#                    overlay; partition serves the first partition of
-#                    a full-disk image.
+#   nbdkit:          the NBD supervisor spawns one nbdkit per export;
+#                    the ``file`` plugin and the ``cow`` +
+#                    ``partition`` filters ship inside the base
+#                    ``nbdkit`` package on Ubuntu (they were separate
+#                    packages on older Debian). cow gives each ramboot
+#                    target its own writable overlay; partition serves
+#                    the first partition of a full-disk image.
 #   tftpd-hpa:       BIOS-PXE bootstrap (in-process TFTP path lands
 #                    later; today's placeholder assumes a systemd unit
 #                    approach that matches bty-tftp's model).
@@ -52,9 +54,6 @@ RUN apt-get update \
         zstd \
         xz-utils \
         nbdkit \
-        nbdkit-plugin-file \
-        nbdkit-filter-cow \
-        nbdkit-filter-partition \
         tftpd-hpa \
         qemu-utils \
  && rm -rf /var/lib/apt/lists/*
