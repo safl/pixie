@@ -99,3 +99,10 @@ reportUnusedVariable = "none"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = [
+    "integration: tests that build the pixie container + run against real nbdkit (opt-in via -m integration)",
+]
+# Default runs SKIP the integration suite so the dev loop stays fast;
+# CI runs a separate ``pytest -m integration`` job that builds the
+# container first. Same pattern as bty's integration marker.
+addopts = ["-m", "not integration"]
