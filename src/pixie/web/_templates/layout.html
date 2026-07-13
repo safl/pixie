@@ -14,9 +14,47 @@
             color: #e2e8f0;
         }
         .container {
-            max-width: 720px;
-            margin: 4rem auto;
+            max-width: 960px;
+            margin: 2rem auto;
             padding: 2rem;
+        }
+        .nav {
+            background: #1e293b;
+            padding: 1rem 2rem;
+            border-radius: 8px;
+            margin-bottom: 2rem;
+            display: flex;
+            gap: 1.5rem;
+            align-items: center;
+        }
+        .nav a {
+            color: #e2e8f0;
+            text-decoration: none;
+            font-size: 0.9rem;
+        }
+        .nav a.active {
+            color: #60a5fa;
+            font-weight: 600;
+        }
+        .nav a:hover {
+            color: #93c5fd;
+        }
+        .nav .brand {
+            font-weight: 600;
+            color: #cbd5e1;
+            margin-right: 0.5rem;
+        }
+        .nav .logout {
+            margin-left: auto;
+        }
+        .nav .logout button {
+            background: transparent;
+            padding: 0.25rem 0.75rem;
+            border: 1px solid #334155;
+            font-size: 0.85rem;
+        }
+        .nav .logout button:hover {
+            background: #334155;
         }
         .card {
             background: #1e293b;
@@ -76,6 +114,17 @@
 </head>
 <body>
     <div class="container">
+        {% if authed %}
+        <nav class="nav">
+            <span class="brand">pixie</span>
+            <a href="/ui/" class="{{ 'active' if page == 'dashboard' else '' }}">Catalog</a>
+            <a href="/ui/exports" class="{{ 'active' if page == 'exports' else '' }}">Exports</a>
+            <a href="/ui/machines" class="{{ 'active' if page == 'machines' else '' }}">Machines</a>
+            <form method="post" action="/ui/logout" class="logout">
+                <button type="submit">Sign out</button>
+            </form>
+        </nav>
+        {% endif %}
         {% block content %}{% endblock %}
     </div>
     <div class="version">pixie v{{ version }}</div>

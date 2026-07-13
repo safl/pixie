@@ -1,0 +1,97 @@
+{% extends "layout.html" %}
+{% block title %}pixie machines{% endblock %}
+{% block content %}
+<div class="card">
+    <h1>Machines</h1>
+    <p class="muted">
+        Every MAC pixie has seen (via <code>GET /pxe/&lt;mac&gt;</code>
+        discovery) or that an operator has bound to a catalog entry.
+        Change <code>boot_mode</code> to <code>ramboot</code> and set
+        the content sha to hand a target its image on next PXE.
+    </p>
+
+    <h2>Bind a machine</h2>
+    <form method="post" action="/ui/machines/bind" class="add-form">
+        <div class="row">
+            <label for="mac">MAC</label>
+            <input id="mac" name="mac" type="text" required placeholder="aa:bb:cc:dd:ee:ff">
+        </div>
+        <div class="row">
+            <label for="boot_mode">Boot mode</label>
+            <select id="boot_mode" name="boot_mode">
+                <option value="ipxe-exit">ipxe-exit (boot local disk)</option>
+                <option value="ramboot">ramboot (image over NBD)</option>
+            </select>
+        </div>
+        <div class="row">
+            <label for="image_content_sha256">Image content sha (optional)</label>
+            <input id="image_content_sha256" name="image_content_sha256" type="text"
+                   placeholder="64-char sha of a fetched catalog entry">
+        </div>
+        <div class="row">
+            <button type="submit">Bind</button>
+        </div>
+    </form>
+
+    <h2>Known machines ({{ machines|length }})</h2>
+    {% if machines %}
+    <table>
+        <thead>
+            <tr>
+                <th>MAC</th>
+                <th>Boot mode</th>
+                <th>Image</th>
+                <th>Last seen</th>
+                <th>Actions</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for m in machines %}
+            <tr>
+                <td><code>{{ m.mac }}</code></td>
+                <td>{{ m.boot_mode }}</td>
+                <td>
+                    {% if m.image_content_sha256 %}
+                    <code title="{{ m.image_content_sha256 }}">
+                        {{ m.image_content_sha256[:12] }}
+                    </code>
+                    {% else %}
+                    <span class="muted">-</span>
+                    {% endif %}
+                </td>
+                <td class="small muted">
+                    {{ m.last_seen_at }}
+                    {% if m.last_seen_ip %}<br>{{ m.last_seen_ip }}{% endif %}
+                </td>
+                <td>
+                    <form method="post" action="/ui/machines/delete" style="display:inline">
+                        <input type="hidden" name="mac" value="{{ m.mac }}">
+                        <button type="submit" class="danger">Delete</button>
+                    </form>
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <p class="muted">
+        No machines yet. Bind one above, or wait for a PXE-booting
+        target to hit <code>/pxe/&lt;mac&gt;</code> and auto-discover.
+    </p>
+    {% endif %}
+</div>
+<style>
+    .add-form { display: grid; gap: 0.5rem; margin: 1rem 0; padding: 1rem;
+                background: #0f172a; border-radius: 6px; }
+    .add-form .row { display: grid; grid-template-columns: 12rem 1fr; align-items: center; gap: 1rem; }
+    .add-form input, .add-form select { padding: 0.4rem 0.5rem; background: #1e293b;
+                border: 1px solid #334155; border-radius: 4px; color: #e2e8f0; }
+    table { width: 100%; border-collapse: collapse; margin-top: 1rem; }
+    th, td { padding: 0.5rem; text-align: left; border-bottom: 1px solid #334155; }
+    th { color: #94a3b8; font-weight: 500; font-size: 0.875rem; }
+    button.danger { background: #7f1d1d; }
+    button.danger:hover { background: #991b1b; }
+    button { padding: 0.35rem 0.75rem; font-size: 0.875rem; }
+    .small { font-size: 0.75rem; }
+</style>
+{% endblock %}

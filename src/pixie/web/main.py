@@ -276,7 +276,7 @@ def create_app() -> FastAPI:
         return templates.TemplateResponse(
             request,
             "login.html",
-            {"version": pixie.__version__, "error": None},
+            {"version": pixie.__version__, "error": None, "authed": False, "page": "login"},
         )
 
     @app.post("/ui/login", response_class=HTMLResponse)
@@ -285,7 +285,12 @@ def create_app() -> FastAPI:
             return templates.TemplateResponse(
                 request,
                 "login.html",
-                {"version": pixie.__version__, "error": "Invalid password."},
+                {
+                    "version": pixie.__version__,
+                    "error": "Invalid password.",
+                    "authed": False,
+                    "page": "login",
+                },
                 status_code=status.HTTP_401_UNAUTHORIZED,
             )
         request.session[SESSION_AUTHED_KEY] = True
@@ -307,8 +312,91 @@ def create_app() -> FastAPI:
             {
                 "version": pixie.__version__,
                 "entries": request.app.state.catalog_store.list_entries(),
+                "authed": True,
+                "page": "dashboard",
             },
         )
+
+    @app.get("/ui/exports", response_class=HTMLResponse)
+    def ui_exports(
+        request: Request,
+        _auth: None = Depends(_require_ui_auth),
+    ) -> HTMLResponse:
+        exports_store = request.app.state.exports_store
+        nbd_server = request.app.state.nbd_server
+        # Refresh runtime state per row on read so the operator sees a
+        # honest view when nbdkit died out of band.
+        from pixie.exports._routes import _refresh_row
+
+        exports = [_refresh_row(e, nbd_server, exports_store) for e in exports_store.list()]
+        return templates.TemplateResponse(
+            request,
+            "exports.html",
+            {
+                "version": pixie.__version__,
+                "exports": exports,
+                "authed": True,
+                "page": "exports",
+            },
+        )
+
+    @app.post("/ui/exports/delete")
+    def ui_exports_delete(
+        request: Request,
+        name: str = Form(...),
+        _auth: None = Depends(_require_ui_auth),
+    ) -> RedirectResponse:
+        request.app.state.nbd_server.terminate(name)
+        request.app.state.exports_store.delete(name)
+        return RedirectResponse(url="/ui/exports", status_code=status.HTTP_303_SEE_OTHER)
+
+    @app.get("/ui/machines", response_class=HTMLResponse)
+    def ui_machines(
+        request: Request,
+        _auth: None = Depends(_require_ui_auth),
+    ) -> HTMLResponse:
+        machines = request.app.state.machines_store.list()
+        return templates.TemplateResponse(
+            request,
+            "machines.html",
+            {
+                "version": pixie.__version__,
+                "machines": machines,
+                "authed": True,
+                "page": "machines",
+            },
+        )
+
+    @app.post("/ui/machines/bind")
+    def ui_machines_bind(
+        request: Request,
+        mac: str = Form(...),
+        boot_mode: str = Form(...),
+        image_content_sha256: str = Form(""),
+        _auth: None = Depends(_require_ui_auth),
+    ) -> RedirectResponse:
+        import contextlib as _contextlib
+
+        from pixie.machines._store import BadMac
+
+        # UI-side: silently redirect back on invalid input; a full
+        # field-error flash chain lands in a follow-up.
+        with _contextlib.suppress(BadMac, ValueError):
+            request.app.state.machines_store.upsert_binding(
+                mac,
+                boot_mode=boot_mode,
+                image_content_sha256=image_content_sha256.strip().lower(),
+            )
+        return RedirectResponse(url="/ui/machines", status_code=status.HTTP_303_SEE_OTHER)
+
+    @app.post("/ui/machines/delete")
+    def ui_machines_delete(
+        request: Request,
+        mac: str = Form(...),
+        _auth: None = Depends(_require_ui_auth),
+    ) -> RedirectResponse:
+        request.app.state.machines_store.delete(mac)
+        return RedirectResponse(url="/ui/machines", status_code=status.HTTP_303_SEE_OTHER)
 
     # ---------- ping under session-auth ------------------------------
 
