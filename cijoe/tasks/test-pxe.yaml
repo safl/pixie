@@ -1,0 +1,32 @@
+doc: |
+  pixie PXE bootstrap chain test
+  ==============================
+
+  End-to-end proof that a real firmware PXE boot reaches pixie:
+
+  1. ``pxe_prepare``: build the ``pixie:pxetest`` container image
+     from this checkout.
+  2. ``pxe_run_chain_test``: spin up the containerized pixie on
+     host networking, create a bridge + tap, start a test-side
+     dnsmasq (DHCP + TFTP + iPXE chainload), start a QEMU client
+     with tap NIC + ``-boot n``, and assert every chain marker in
+     ``[test.pxe.chain_markers]`` shows up on the client's serial
+     console (or in pixie's container logs).
+
+  What's covered here: PXE firmware -> DHCP -> TFTP -> iPXE ->
+  HTTP re-DHCP -> ``chain http://pixie:8080/pxe-bootstrap.ipxe``
+  -> per-MAC plan fetch. The default ``ipxe-exit`` plan pixie
+  renders for an unbound machine is enough to prove the surface;
+  ramboot + catalog fetch land in a follow-up.
+
+  Requires: podman, qemu-system-x86, dnsmasq, ipxe (the Debian /
+  Ubuntu package that ships ``/usr/lib/ipxe/undionly.kpxe`` +
+  ``/usr/lib/ipxe/ipxe.efi``), bridge-utils / iproute2, KVM,
+  passwordless sudo.
+
+steps:
+- name: pxe_prepare
+  uses: pxe_prepare
+
+- name: pxe_run_chain_test
+  uses: pxe_run_chain_test

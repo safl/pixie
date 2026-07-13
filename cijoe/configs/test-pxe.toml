@@ -1,0 +1,50 @@
+# pixie PXE bootstrap chain test: containerized pixie + a bridged QEMU client.
+#
+# Usage:
+#   cijoe tasks/test-pxe.yaml --monitor -c configs/test-pxe.toml
+#
+# Pre-conditions:
+# - podman, qemu-system-x86_64, dnsmasq, ipxe (NBPs under /usr/lib/ipxe),
+#   iproute2 on PATH.
+# - passwordless sudo (the test creates a bridge/tap + runs dnsmasq).
+# - KVM accessible.
+
+[pixie]
+variant = "test-pxe"
+
+[cijoe.workflow]
+fail_fast = true
+
+[test.pxe]
+# pixie container image tag (built by pxe_prepare from this checkout).
+pixie_image = "pixie:pxetest"
+
+# Admin password set on the container.
+admin_password = "test-admin-pw"
+
+# Client VM firmware: "bios" (SeaBIOS + NIC option ROM) or "uefi" (OVMF).
+client_firmware = "bios"
+client_mac = "52:54:00:11:22:33"
+
+# Host bridge for the synthetic PXE segment: pixie (published :8080) and the
+# client VM (via a tap) share L2; a test-side dnsmasq on the bridge does DHCP +
+# TFTP. Pixie serves no DHCP; this is test machinery.
+bridge = "br-pxe"
+tap_iface = "tap-pxe"
+server_pxe_ip = "192.168.99.1"
+pxe_netmask = "255.255.255.0"
+dhcp_range_lo = "192.168.99.50"
+dhcp_range_hi = "192.168.99.150"
+
+# Markers asserted on the client serial console (all must appear within the
+# chain timeout). The per-MAC ``/pxe/<mac>`` fetch marker is added by the
+# script automatically. Each entry is (key, substring); the script grepps
+# both the client's serial log and pixie's container logs so a server-side
+# hit still counts when the client-side console doesn't print the raw URL.
+[[test.pxe.chain_markers]]
+key = "ipxe-loaded"
+needle = "iPXE"
+
+[[test.pxe.chain_markers]]
+key = "ipxe-fetch-bootstrap"
+needle = "pxe-bootstrap.ipxe"

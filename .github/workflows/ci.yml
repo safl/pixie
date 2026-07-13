@@ -162,3 +162,61 @@ jobs:
           path: |
             ~/system_imaging/disk/pixie-usbboot-pc-x86_64-v*.iso.gz
             ~/system_imaging/disk/pixie-usbboot-pc-x86_64-v*.sha256
+
+  test-pxe:
+    name: PXE bootstrap chain test (containerized pixie + client QEMU VM)
+    # Independent of the media bake: the chain test only needs the
+    # container to serve /pxe-bootstrap.ipxe + /pxe/<mac>. Wire it to
+    # ``test`` so we don't pay for QEMU on a broken lint/typecheck.
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install host tools (qemu, dnsmasq, ipxe, bridge)
+        run: |
+          set -eu
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            qemu-system-x86 \
+            qemu-utils \
+            dnsmasq \
+            ipxe \
+            bridge-utils \
+            iproute2
+          # /dev/kvm is crw-rw---- root:kvm on the runner but the
+          # runner user is not in the kvm group, so QEMU -enable-kvm
+          # fails "Permission denied". Widen the ACL rather than
+          # mess with group membership (which needs a fresh login
+          # to take effect).
+          sudo chmod a+rw /dev/kvm
+          ls -la /dev/kvm
+
+      - name: Install cijoe
+        run: pipx install --force cijoe
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v8.1.0
+
+      - name: Run PXE bootstrap chain test
+        run: make test-pxe
+
+      # cijoe writes the full run (per-command output + report.html)
+      # under cijoe/cijoe-output/; upload it ALWAYS so a hang / marker
+      # miss leaves a diagnosable artifact.
+      - name: Upload cijoe output
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: cijoe-output-test-pxe
+          path: cijoe/cijoe-output
+          if-no-files-found: warn
+
+      - name: Upload PXE workspace (serial logs, dnsmasq.log)
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: test-pxe-workspace
+          path: cijoe/_build/test-pxe
+          if-no-files-found: warn
