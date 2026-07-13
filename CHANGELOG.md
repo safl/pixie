@@ -11,7 +11,51 @@ operator-facing summary.
 
 ## [Unreleased]
 
-## [0.8.0] - TBD
+## [0.9.0] - TBD
+
+### Added
+
+**Operator TUI ported from bty wholesale.** The Rich-based five-stage
+wizard (source pick, catalog pick, image pick, disk pick, flash) that
+was the successful part of bty ships on pixie under the `pixie`
+console-script. Same UX, same in-live-env behaviour, same server-driven
+mode (`pixie --mac X` fetches `/pxe/<mac>/plan` and dispatches). No
+Textual, no event loop, no alt-screen; Rich Panels + `Prompt.ask` per
+screen.
+
+- `src/pixie/tui/_app.py` (~2200 LOC): the wizard, ported from
+  `bty/src/bty/tui/_app.py` with namespace rewrites (`bty` -> `pixie`,
+  `BTY_` -> `PIXIE_`, `bty-server` -> `pixie`, `bty-lab` -> `pixie-lab`).
+- `src/pixie/tui/__init__.py`: the `pixie` argparse entry point that
+  boots `BtyTui(...).run()` after lazy-loading Rich. Default `--server`
+  is the bare hostname `pixie` (LAN DNS pattern).
+- `src/pixie/flash.py`, `src/pixie/images.py`, `src/pixie/disks.py`,
+  `src/pixie/tui_catalog.py`: the flash engine + image discovery + lsblk
+  disk enumeration + catalog loader, all ported from their bty equivalents.
+- `rich>=13` added to `dependencies` (the console script is a hard
+  requirement; no `[tui]` extra dance).
+
+**Inventory server surface.** The live env's TUI POSTs an lshw + lsblk
+blob after PXE-done; pixie stores it on the machine row so operators
+can inspect discovered hardware from the UI.
+
+- `machines` table gained `inventory_json` + `inventory_at` columns
+  with an idempotent additive migration for existing state.db files.
+- `POST /pxe/{mac}/inventory` accepts a JSON object body
+  (`{"disks": [...], "lshw": ...}`), upserts the row on first
+  contact, and emits a `machine.inventory.updated` event with
+  `disks_count` + `has_lshw` details.
+- `GET /machines/{mac}/inventory` returns the stored blob (or 404).
+
+### Tests
+
+7 new integration tests exercise the full inventory chain against
+the real containerized pixie: store-and-read-back, event emission,
+row upsert on first POST, 404 on empty inventory, bad-MAC rejection,
+bad-body rejection, replace-not-append semantics. Real HTTP, real
+lsblk on the host, real state.db writes. **Total 72 unit + 19
+integration all green locally.**
+
 
 ### Added
 

@@ -1,6 +1,6 @@
 [project]
 name = "pixie-lab"
-version = "0.8.0"
+version = "0.9.0"
 description = "Bare-metal netboot appliance: catalog + fetch + NBD + PXE + TFTP + operator TUI in one container"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -34,6 +34,9 @@ dependencies = [
     # survive. Included in the skeleton so downstream PRs don't need
     # to widen deps for a settings write.
     "tomlkit>=0.12",
+    # Rich powers the operator TUI (``pixie`` console-script). Ported
+    # wholesale from bty's Textual-free Rich wizard, no fallback.
+    "rich>=13",
 ]
 
 [project.scripts]

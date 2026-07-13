@@ -1,18 +1,20 @@
 """PXE + boot flow routes.
 
 * ``GET /pxe-bootstrap.ipxe``: iPXE bootstrap that chain-loads the
-  per-MAC plan. Fetched over HTTP (or served from TFTP after an
-  external TFTP daemon has picked it up; pixie's in-process TFTP
-  lands in a later PR).
-* ``GET /pxe/{mac}``: the per-machine plan. Discovery-side write:
+  per-MAC plan. Fetched over HTTP.
+* ``GET /pxe/{mac}``: per-machine iPXE plan. Discovery-side write:
   every hit upserts the row (creating on first contact) + refreshes
-  ``last_seen_at``. Then renders the plan through
-  :class:`pixie.pxe._renderer.PlanRenderer`.
+  ``last_seen_at``.
+* ``POST /pxe/{mac}/inventory``: accepts a JSON body (``{"lshw":
+  ..., "disks": [...]}``) from a live-env target that has just
+  collected its hardware inventory. Stores the blob on the machine
+  row; ``/ui/machines`` renders it.
 """
 
 from __future__ import annotations
 
 import logging
+from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import PlainTextResponse
@@ -74,6 +76,64 @@ def pxe_bootstrap(request: Request) -> PlainTextResponse:
     ctx = _render_context(request)
     body = _get_renderer(request).render_bootstrap(ctx)
     return PlainTextResponse(body, media_type="text/plain")
+
+
+@router.post("/pxe/{mac}/inventory", status_code=204)
+async def pxe_inventory(request: Request, mac: str) -> PlainTextResponse:
+    """Accept an inventory JSON body from a live-env target.
+
+    The body shape is what bty-tui (and now pixie-tui) POST after
+    ``lshw -json`` + ``lsblk``: ``{"lshw": <object|list>, "disks":
+    [...]}``. We store the whole thing verbatim; the /ui/machines
+    page renders selected fields, the JSON API returns it as-is."""
+    try:
+        canon = normalise_mac(mac)
+    except BadMac as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    try:
+        payload = await request.json()
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"body must be JSON: {exc}") from exc
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="body must be a JSON object")
+
+    machines = _get_machines(request)
+    machines.set_inventory(canon, payload)
+
+    log = getattr(request.app.state, "events_log", None)
+    if log is not None:
+        details: dict[str, Any] = {}
+        disks = payload.get("disks")
+        if isinstance(disks, list):
+            details["disks_count"] = len(disks)
+        details["has_lshw"] = payload.get("lshw") is not None
+        log.emit(
+            "machine.inventory.updated",
+            subject_kind="machine",
+            subject_id=canon,
+            summary=f"{canon} posted inventory",
+            details=details,
+        )
+    return PlainTextResponse("", status_code=204)
+
+
+@router.get("/machines/{mac}/inventory")
+def get_inventory(request: Request, mac: str) -> dict[str, Any]:
+    """Return the stored inventory for a machine, or 404 if none has
+    been posted yet."""
+    try:
+        canon = normalise_mac(mac)
+    except BadMac as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    row = _get_machines(request).get(canon)
+    if row is None or not row.inventory:
+        raise HTTPException(status_code=404, detail=f"no inventory for {canon}")
+    return {
+        "mac": row.mac,
+        "inventory_at": row.inventory_at,
+        "inventory": row.inventory,
+    }
 
 
 @router.get("/pxe/{mac}", response_class=PlainTextResponse)
