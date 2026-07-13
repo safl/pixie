@@ -23,7 +23,7 @@ endif
 
 .PHONY: help \
         deps test lint format format-check typecheck ci wheel \
-        media-deps build \
+        media-deps build ipxe test-pxe \
         clean
 
 help:
@@ -43,6 +43,9 @@ help:
 	@echo "  media-deps    pipx install cijoe"
 	@echo "  build         build a media image (override VARIANT below)"
 	@echo "                  -> ~/system_imaging/disk/pixie-<variant>.*"
+	@echo "  ipxe          build pixie's custom iPXE -> IPXE_OUT/ipxe.efi (default dist/ipxe/)"
+	@echo "  test-pxe      end-to-end PXE bootstrap chain test"
+	@echo "                  (needs podman + QEMU + KVM + dnsmasq; a few min wall clock)"
 	@echo ""
 	@echo "Variant: $(VARIANT)  (override with VARIANT=netboot-pc, ...)"
 	@echo "  usbboot-pc    - bootable USB live ISO via live-build (.iso, x86_64)"
@@ -91,6 +94,23 @@ media-deps:
 # plus passwordless sudo.
 build:
 	cd cijoe && cijoe $(MEDIA_TASK) --monitor -c configs/$(VARIANT).toml
+
+# Build pixie's slim iPXE binary (bin-x86_64-efi/ipxe.efi) with the
+# embedded chain-loader baked in. Landed in the container image so a
+# fresh deploy gets the one-bootfile chain guarantee without needing
+# the operator to touch DHCP beyond pointing PXE clients at pixie.
+IPXE_OUT ?= $(CURDIR)/dist/ipxe
+ipxe:
+	python3 cijoe/scripts/pixie_ipxe_build.py --out "$(IPXE_OUT)"
+	@echo "custom ipxe.efi -> $(IPXE_OUT)/ipxe.efi"
+
+# Real-firmware PXE chain test. Brings up pixie in a container +
+# QEMU client + bridge/tap/dnsmasq, asserts every chain marker
+# in cijoe/configs/test-pxe.toml appears on the client serial log
+# or in pixie's container logs. Ramboot + catalog fetch land in a
+# follow-up. Wall clock: a few minutes per run.
+test-pxe:
+	cd cijoe && cijoe tasks/test-pxe.yaml --monitor -c configs/test-pxe.toml
 
 # ---------- Cleanup ------------------------------------------------------
 
