@@ -3,7 +3,7 @@
 #
 # Primary case (NOT handled here):
 #   The pixie-usb stick was dd'd directly to the device; its trailing
-#   exFAT partition is labelled ``PIXIE_IMAGES`` and gets mounted at
+#   exFAT partition is labelled ``PIXIE_IMGS`` and gets mounted at
 #   ``/var/lib/pixie/images`` by the path-existence-conditional
 #   ``var-lib-pixie-images.mount`` unit. This script exits early when
 #   that mount already happened.
@@ -11,7 +11,7 @@
 # Secondary case (this script):
 #   The pixie-usb.iso was loaded via Ventoy (or another loop-mount
 #   shim like piKVM / JetKVM). The kernel sees the .iso as a single
-#   CD-ROM device; the internal partitions including PIXIE_IMAGES are
+#   CD-ROM device; the internal partitions including PIXIE_IMGS are
 #   not enumerated. The operator's image catalog instead lives on
 #   the surrounding shim's data partition.
 #
@@ -49,7 +49,7 @@ SOURCE=/run/pixie-images-source
 mkdir -p "$TARGET"
 mkdir -p "$SOURCE"
 
-# If the PIXIE_IMAGES mount already happened (dd'd-direct USB) we're
+# If the PIXIE_IMGS mount already happened (dd'd-direct USB) we're
 # done; don't step on it.
 if mountpoint -q "$TARGET"; then
     echo "pixie-images-discover: $TARGET already mounted (dd'd-direct USB path); nothing to do."

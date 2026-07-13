@@ -1,8 +1,8 @@
 #!/bin/sh
 # pixie-skip-usb-only-units-on-netboot: mask units that only make
 # sense when the live env is booted from a USB stick (where
-# /dev/disk/by-label/PIXIE_IMAGES exists). On a netboot the
-# PIXIE_IMAGES partition never appears; the device unit systemd
+# /dev/disk/by-label/PIXIE_IMGS exists). On a netboot the
+# PIXIE_IMGS partition never appears; the device unit systemd
 # auto-generates for it sits at "expected" until the global
 # ``DefaultDeviceTimeoutSec`` (90s) ticks down, holding up every
 # unit ordered after it.
@@ -15,9 +15,9 @@
 # timed out. Net 0s instead of 20s.
 #
 # Units masked:
-#   * pixie-usb-grow.service  -- extends PIXIE_IMAGES on first boot;
+#   * pixie-usb-grow.service  -- extends PIXIE_IMGS on first boot;
 #     irrelevant when the partition doesn't exist
-#   * var-lib-pixie-images.mount -- mounts PIXIE_IMAGES at
+#   * var-lib-pixie-images.mount -- mounts PIXIE_IMGS at
 #     /var/lib/pixie/images; systemd auto-generates a Wants= on the
 #     device for every mount unit, even with the ``nofail`` option
 #     (nofail downgrades Requires->Wants but keeps the Wants=, so

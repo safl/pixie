@@ -16,12 +16,12 @@
 #   ConditionKernelCommandLine gating was retired in v0.22.10 --
 #   the server-side plan endpoint is now the single dispatch
 #   point.
-# - ``var-lib-pixie-images.mount`` mounts the PIXIE_IMAGES partition
+# - ``var-lib-pixie-images.mount`` mounts the PIXIE_IMGS partition
 #   at /var/lib/pixie/images (RO) so ``pixie`` sees it as the local
 #   image catalog. Gated on
-#   ``ConditionPathExists=/dev/disk/by-label/PIXIE_IMAGES`` so it
+#   ``ConditionPathExists=/dev/disk/by-label/PIXIE_IMGS`` so it
 #   no-ops cleanly when the operator booted from a stick that
-#   doesn't have a PIXIE_IMAGES partition (e.g. netboot env, or
+#   doesn't have a PIXIE_IMGS partition (e.g. netboot env, or
 #   the same .iso loaded via Ventoy where the internal partitions
 #   aren't enumerated).
 # - ``pixie-images-discover.service`` handles the case the previous
@@ -33,7 +33,7 @@
 #   pixie.iso's internal partitions from the booted kernel.
 #
 # pixie-usb-grow: on the first boot from a dedicated USB stick,
-# extend PIXIE_IMAGES to fill the disk so the operator gets the
+# extend PIXIE_IMGS to fill the disk so the operator gets the
 # full capacity for their image catalog. Skipped on Ventoy /
 # BMC-virtual-media boots (no separate partition exists in those
 # shims). Content is preserved via tar archive -> tmpfs ->

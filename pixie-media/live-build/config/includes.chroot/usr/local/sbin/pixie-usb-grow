@@ -1,22 +1,22 @@
 #!/bin/sh
-# pixie-usb-grow: extend the PIXIE_IMAGES partition + filesystem to
+# pixie-usb-grow: extend the PIXIE_IMGS partition + filesystem to
 # fill the operator's USB stick on first boot, preserving any
 # baked-in or operator-staged content.
 #
 # The pixie-usb live image is sized to a small minimum so the .iso
 # stays compact (and Ventoy / IP-KVM virtual-media friendly). When
 # an operator flashes it onto a 64 GB / 256 GB / whatever USB
-# stick, the PIXIE_IMAGES partition starts off as the same small
+# stick, the PIXIE_IMGS partition starts off as the same small
 # minimum and the rest of the stick sits unused. This script
 # extends the partition to fill the disk so the operator gets the
 # full capacity for their image catalog.
 #
 # exFAT doesn't support online resize, so the flow is:
 #
-#   1. Mount PIXIE_IMAGES read-only, archive its content to a tmpfs
+#   1. Mount PIXIE_IMGS read-only, archive its content to a tmpfs
 #      staging area (the live env's /tmp is tmpfs in RAM).
 #   2. parted resizepart N 100% on the parent disk.
-#   3. mkfs.exfat -L PIXIE_IMAGES on the resized partition.
+#   3. mkfs.exfat -L PIXIE_IMGS on the resized partition.
 #   4. Mount the new partition read-write, restore the archive,
 #      drop the ``.pixie-grown`` sentinel, unmount.
 #
@@ -39,11 +39,11 @@
 #   * systemd's ``TimeoutStartSec=120s`` on the unit hard-caps
 #     total runtime even if mkfs or tar wedges.
 #
-# Skipped cases (PIXIE_IMAGES untouched):
+# Skipped cases (PIXIE_IMGS untouched):
 #
 #   * Ventoy / BMC virtual-media boot: the .iso is loop-mounted
 #     by the shim, so the kernel sees a single CD-ROM device --
-#     no PIXIE_IMAGES partition exists. ConditionPathExists on the
+#     no PIXIE_IMGS partition exists. ConditionPathExists on the
 #     unit handles this; the script never runs.
 #   * Already grown: ``.pixie-grown`` sentinel present.
 #   * Already tried + failed: ``.pixie-grown-failed`` sentinel
@@ -52,7 +52,7 @@
 
 set -eu
 
-LABEL=PIXIE_IMAGES
+LABEL=PIXIE_IMGS
 SENTINEL_OK=.pixie-grown
 SENTINEL_FAILED=.pixie-grown-failed
 SLACK_BYTES=$((16 * 1024 * 1024))  # 16 MiB tolerance for end-of-disk metadata
@@ -112,7 +112,7 @@ if [ ! -b "${DISK}" ]; then
     log "could not resolve parent disk for ${PART}; skipping"
     exit 0
 fi
-log "PIXIE_IMAGES at ${PART}; parent disk ${DISK} (partition ${PARTNUM})"
+log "PIXIE_IMGS at ${PART}; parent disk ${DISK} (partition ${PARTNUM})"
 
 # Mount RO to inspect sentinels + measure content size.
 TMP=$(mktemp -d)
@@ -233,4 +233,4 @@ sync
 umount "${TMP}"
 
 rm -f "${STASH}"
-log "PIXIE_IMAGES grown to fill ${DISK}; content preserved; sentinel ${SENTINEL_OK} dropped"
+log "PIXIE_IMGS grown to fill ${DISK}; content preserved; sentinel ${SENTINEL_OK} dropped"

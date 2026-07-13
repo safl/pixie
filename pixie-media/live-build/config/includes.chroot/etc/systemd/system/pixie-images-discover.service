@@ -3,12 +3,12 @@ Description=Discover pixie image catalog on attached block devices
 Documentation=https://github.com/safl/pixie
 # Best-effort discovery for the case where the live env is loaded
 # via Ventoy / piKVM / JetKVM and the pixie.iso's internal
-# PIXIE_IMAGES partition isn't enumerated by the booted kernel. The
+# PIXIE_IMGS partition isn't enumerated by the booted kernel. The
 # script scans all attached vfat / exfat partitions for image
 # content and bind-mounts the first hit at /var/lib/pixie/images.
 #
 # ``var-lib-pixie-images.mount`` handles the directly-dd'd-USB case
-# via a path-existence condition on /dev/disk/by-label/PIXIE_IMAGES;
+# via a path-existence condition on /dev/disk/by-label/PIXIE_IMGS;
 # we explicitly run AFTER that unit so its mount wins when both
 # fire (the script exits early when the target is already a
 # mountpoint).

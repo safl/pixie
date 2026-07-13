@@ -21,13 +21,13 @@ Workflow:
    ``auto/config``).
 3. Publish the resulting hybrid ISO to ``publish.dir`` from the
    cijoe config, renamed to ``pixie-usbboot-pc-x86_64.iso``.
-4. Append a writable PIXIE_IMAGES exFAT partition to the trailing
+4. Append a writable PIXIE_IMGS exFAT partition to the trailing
    edge of the artifact (sfdisk + losetup + mkfs.exfat) so the
    single dd-able file carries both the boot path and the
    operator's image catalog.
 5. Write a sha256 manifest covering the .iso (uncompressed; the
    ~200 MiB ISO is well under GitHub's 2 GiB asset limit since
-   PIXIE_IMAGES is 32 MiB at bake).
+   PIXIE_IMGS is 32 MiB at bake).
 
 The cwd at run time is ``cijoe/`` (the Makefile cd's there before
 invoking cijoe), so the pixie-media tree lives at
@@ -51,7 +51,7 @@ from pathlib import Path
 
 PUBLISH_BASENAME_FMT = "pixie-usbboot-pc-x86_64-v{version}.iso"
 
-# Just the PIXIE_IMAGES partition stub; the bake doesn't populate it.
+# Just the PIXIE_IMGS partition stub; the bake doesn't populate it.
 # Operators drop their own image files (.qcow2 / .img.gz / .img / .iso /
 # .iso.gz) onto the partition; the live env's image-root scan picks
 # them up. The catalog of nosi + pixie images is a release-side
@@ -225,7 +225,7 @@ def main(args, cijoe):
 
     # Linux-side post-bake verification. Catches structural
     # regressions in the pre-built ISO (partition count / types /
-    # overlap / PIXIE_IMAGES label / exFAT mountability) before
+    # overlap / PIXIE_IMGS label / exFAT mountability) before
     # we waste CI cycles on the gzip step. Necessary but not
     # sufficient -- doesn't catch host-OS handler bugs (the
     # ``feedback_verify_flasher_compat`` rule: any compression /
@@ -235,7 +235,7 @@ def main(args, cijoe):
     if err:
         return err
 
-    # Publish the .iso uncompressed. With PIXIE_IMAGES = 32 MiB at bake
+    # Publish the .iso uncompressed. With PIXIE_IMGS = 32 MiB at bake
     # time, the total ISO is ~200 MiB -- comfortably under GitHub's
     # 2 GiB per-release-asset upload limit. gzip was dropped: every
     # flasher (Etcher, RPi Imager, Rufus, dd) reads plain .iso
@@ -353,7 +353,7 @@ def _verify_iso(cijoe, iso_path: Path) -> int:
       violated).
     - p1 type 0 + bootable flag (live-build's iso-hybrid + isohdpfx.bin).
     - p2 type ef (EFI ESP).
-    - p3 type 07 (exFAT) labeled PIXIE_IMAGES, mountable as exFAT on
+    - p3 type 07 (exFAT) labeled PIXIE_IMGS, mountable as exFAT on
       Linux (proves mkfs.exfat completed and the FAT/bitmap/root are
       coherent).
 
@@ -383,7 +383,7 @@ def _verify_iso(cijoe, iso_path: Path) -> int:
     expected = [
         ("0", True, "ISO9660"),
         ("ef", False, "EFI ESP"),
-        ("7", False, "PIXIE_IMAGES exFAT"),
+        ("7", False, "PIXIE_IMGS exFAT"),
     ]
     for i, (p, (etype, ebootable, name)) in enumerate(
         zip(partitions, expected, strict=True), start=1
@@ -425,11 +425,11 @@ def _verify_iso(cijoe, iso_path: Path) -> int:
     err, state = cijoe.run_local(f"sudo blkid -o value -s LABEL {loop}p3")
     label = state.output().strip() if not err else ""
     cijoe.run_local(f"sudo losetup -d {loop}")
-    if err or label != "PIXIE_IMAGES":
-        log.error(f"p3 label expected PIXIE_IMAGES, got {label!r}")
+    if err or label != "PIXIE_IMGS":
+        log.error(f"p3 label expected PIXIE_IMGS, got {label!r}")
         return errno.EIO
 
-    log.info("ISO structure OK: 3 non-overlapping partitions, p3 labeled PIXIE_IMAGES")
+    log.info("ISO structure OK: 3 non-overlapping partitions, p3 labeled PIXIE_IMGS")
     return 0
 
 
@@ -453,14 +453,14 @@ def _read_pixie_version(cijoe_dir: Path) -> str:
 
 def _extend_with_exfat(cijoe, iso_path: Path) -> int:
     """Relocate the EFI partition out of the iso-hybrid overlap, then
-    append a trailing exFAT partition labelled PIXIE_IMAGES.
+    append a trailing exFAT partition labelled PIXIE_IMGS.
 
     live-build's iso-hybrid output puts the EFI partition entry
     *inside* the ISO9660 partition's byte range (the EFI FAT image is
     embedded in the ISO9660 stream, and the MBR partition entry just
     points at where it lives). Linux handles overlapping MBR entries
     fine, but Windows refuses to enumerate partitions past the
-    overlap, so the PIXIE_IMAGES partition we append is invisible to
+    overlap, so the PIXIE_IMGS partition we append is invisible to
     Windows operators.
 
     Fix: copy the EFI FAT bytes to a non-overlapping location after
@@ -469,7 +469,7 @@ def _extend_with_exfat(cijoe, iso_path: Path) -> int:
 
       - p1: ISO9660 (covers live-build's ISO9660 portion, unchanged)
       - p2: EFI ESP, relocated to the byte range right after p1
-      - p3: PIXIE_IMAGES exFAT, fills the rest of the file
+      - p3: PIXIE_IMGS exFAT, fills the rest of the file
 
     The El Torito catalog inside the ISO9660 still has its embedded
     EFI image for CD-style UEFI boot; the relocated MBR partition
@@ -488,11 +488,11 @@ def _extend_with_exfat(cijoe, iso_path: Path) -> int:
     4. Rewrite the MBR partition table via ``sfdisk`` stdin form so
        all three entries land at non-overlapping byte ranges in
        a single atomic operation. Bootable flag preserved on p1.
-    5. ``losetup -fP`` + ``mkfs.exfat -L PIXIE_IMAGES`` on p3.
+    5. ``losetup -fP`` + ``mkfs.exfat -L PIXIE_IMGS`` on p3.
     6. ``losetup -d``.
     """
-    log.info(f"Extending {iso_path} with +{TRAILING_EXFAT_SIZE} PIXIE_IMAGES exFAT")
-    log.info("Layout: ISO9660 + relocated EFI + PIXIE_IMAGES (non-overlapping for Windows)")
+    log.info(f"Extending {iso_path} with +{TRAILING_EXFAT_SIZE} PIXIE_IMGS exFAT")
+    log.info("Layout: ISO9660 + relocated EFI + PIXIE_IMGS (non-overlapping for Windows)")
 
     err, _ = cijoe.run_local(f"truncate -s +{TRAILING_EXFAT_SIZE} {iso_path}")
     if err:
@@ -551,12 +551,12 @@ def _extend_with_exfat(cijoe, iso_path: Path) -> int:
     new_bty_size = file_sectors - new_bty_start
     if new_bty_size <= 0:
         log.error(
-            f"no room for PIXIE_IMAGES: file_sectors={file_sectors}, new_bty_start={new_bty_start}"
+            f"no room for PIXIE_IMGS: file_sectors={file_sectors}, new_bty_start={new_bty_start}"
         )
         return errno.EIO
 
     log.info(f"Relocating EFI to sectors {new_efi_start}..{new_efi_start + efi_size - 1}")
-    log.info(f"PIXIE_IMAGES at sectors {new_bty_start}..{new_bty_start + new_bty_size - 1}")
+    log.info(f"PIXIE_IMGS at sectors {new_bty_start}..{new_bty_start + new_bty_size - 1}")
 
     # Copy EFI FAT bytes from old overlapping location to new
     # non-overlapping location. The new region is currently sparse
@@ -593,8 +593,8 @@ def _extend_with_exfat(cijoe, iso_path: Path) -> int:
         log.error("sfdisk partition-table rewrite failed")
         return err
 
-    part_num = "3"  # PIXIE_IMAGES is partition 3 in the rewritten table
-    log.info(f"PIXIE_IMAGES is partition #{part_num}")
+    part_num = "3"  # PIXIE_IMGS is partition 3 in the rewritten table
+    log.info(f"PIXIE_IMGS is partition #{part_num}")
 
     err, state = cijoe.run_local(f"sudo losetup -fP --show {iso_path}")
     if err:
@@ -610,13 +610,13 @@ def _extend_with_exfat(cijoe, iso_path: Path) -> int:
     # (no nvme-style boundary case here).
     part_dev = f"{loop}p{part_num}"
     cijoe.run_local("sudo udevadm settle")
-    err, _ = cijoe.run_local(f"sudo mkfs.exfat -L PIXIE_IMAGES {part_dev}")
+    err, _ = cijoe.run_local(f"sudo mkfs.exfat -L PIXIE_IMGS {part_dev}")
     if err:
         cijoe.run_local(f"sudo losetup -d {loop}")
         log.error(f"mkfs.exfat {part_dev} failed")
         return err
 
-    # The PIXIE_IMAGES partition stays empty here -- operator-managed; a
+    # The PIXIE_IMGS partition stays empty here -- operator-managed; a
     # fresh stick boots with something flashable in the catalog. The
     # eight entries are:
     #
@@ -628,7 +628,7 @@ def _extend_with_exfat(cijoe, iso_path: Path) -> int:
     #
     # Fail-loud: if the populate step fails (mount failure, write
     # failure, exfat-fuse missing on the runner), the whole bake
-    # The PIXIE_IMAGES partition is left empty -- it's plain operator
+    # The PIXIE_IMGS partition is left empty -- it's plain operator
     # storage for local image files (.qcow2 / .img.gz / .img / .iso /
     # .iso.gz) discovered by ``images.list_images`` in the live env.
     # The default catalog (oras nosi images + pixie) is a
@@ -641,5 +641,5 @@ def _extend_with_exfat(cijoe, iso_path: Path) -> int:
         log.error(f"losetup -d {loop} failed")
         return err
 
-    log.info(f"Extended {iso_path} with PIXIE_IMAGES exFAT partition (p{part_num})")
+    log.info(f"Extended {iso_path} with PIXIE_IMGS exFAT partition (p{part_num})")
     return 0

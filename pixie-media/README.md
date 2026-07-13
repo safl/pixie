@@ -3,7 +3,7 @@
 Source content for the pixie media images. Three variants:
 
 - **USB live image** (`VARIANT=usbboot-pc`) - bootable USB carrying the
-  pixie runtime + a writable exFAT `PIXIE_IMAGES` partition for pre-built
+  pixie runtime + a writable exFAT `PIXIE_IMGS` partition for pre-built
   images. Built via Debian's live-build (`iso-hybrid` output);
   shipped gzip-compressed as `pixie-usbboot-pc-x86_64.iso.gz` (Etcher / Rufus
   / Raspberry Pi Imager all decompress `.gz` natively; xz tripped
@@ -57,7 +57,7 @@ right one based on the variant:
 - `usbboot-pc` -> `cijoe tasks/usbboot-pc.yaml`. Drives Debian's `live-build`
   with `PIXIE_VARIANT=usbboot-pc` selecting `iso-hybrid` output, then
   post-processes the pre-built ISO to append a writable exFAT
-  `PIXIE_IMAGES` partition (`sfdisk --append`, `losetup -fP`,
+  `PIXIE_IMGS` partition (`sfdisk --append`, `losetup -fP`,
   `mkfs.exfat`) and gzip-compresses it. Output is
   `pixie-usbboot-pc-x86_64.iso.gz`. No QEMU full-system bake.
 
@@ -79,7 +79,7 @@ right one based on the variant:
 The x86 variants stage the pixie-lab wheel via `pixie_wheel_stage` into
 the live-build chroot includes, then drive live-build via
 `live_build` (usbboot-pc additionally runs `usb_iso_build` for the
-exFAT `PIXIE_IMAGES` post-processing). usbboot-rpi also runs
+exFAT `PIXIE_IMGS` post-processing). usbboot-rpi also runs
 `pixie_wheel_stage` first, then `rpios_image_build` consumes the same
 staged wheel inside the RPiOS chroot.
 
@@ -89,7 +89,7 @@ All three variants (live-build):
 - `live-build` (`sudo apt install live-build`)
 - `debootstrap`, `squashfs-tools`, `xorriso` (pulled in by
   `live-build`'s recommends, or install explicitly)
-- `exfatprogs` for the usbboot-pc post-build PIXIE_IMAGES exFAT step
+- `exfatprogs` for the usbboot-pc post-build PIXIE_IMGS exFAT step
   (`mkfs.exfat`)
 - `xz-utils` for compressing the final usbboot-pc artifact (always
   present on Ubuntu/Debian; listed for completeness)
@@ -128,7 +128,7 @@ to end. Most operators never run this build pipeline themselves -
 
 - **usbboot-pc.** Hybrid ISO that boots into a Debian live environment
   with the `pixie` wizard installed into `/opt/pixie/venv`, and an
-  exFAT `PIXIE_IMAGES` partition for pre-built images. live-boot's
+  exFAT `PIXIE_IMGS` partition for pre-built images. live-boot's
   SquashFS + tmpfs overlay provides the ephemeral rootfs (no
   `overlayroot` package needed). End-to-end use case in
   [`docs/src/tutorials/pixie-usbboot-pc.md`](../docs/src/tutorials/pixie-usbboot-pc.md).
@@ -144,7 +144,7 @@ to end. Most operators never run this build pipeline themselves -
   cmdline (e.g. USB-local boot), ``pixie`` falls back to scanning
   the local image-root directory.
 - **usbboot-rpi.** arm64 Pi-bootable raw image (FAT32 firmware + ext4
-  live squashfs + auto-growing exFAT `PIXIE_IMAGES`). Boots a CM5 /
+  live squashfs + auto-growing exFAT `PIXIE_IMGS`). Boots a CM5 /
   Pi5 / Pi4 from a USB stick into the same pixie TUI as usbboot-pc;
   the headline use case is reflashing a CM5 in a closed IO-case
   (eMMC) without the jumper-rpiboot-Etcher disassembly dance.

@@ -1,10 +1,10 @@
 [Unit]
-Description=Grow PIXIE_IMAGES partition to fill the USB on first boot
+Description=Grow PIXIE_IMGS partition to fill the USB on first boot
 Documentation=https://github.com/safl/pixie
-# Skip cleanly when the USB doesn't have a PIXIE_IMAGES partition
+# Skip cleanly when the USB doesn't have a PIXIE_IMGS partition
 # (Ventoy / loopback boot path -- pixie-images-discover.service
 # handles those).
-ConditionPathExists=/dev/disk/by-label/PIXIE_IMAGES
+ConditionPathExists=/dev/disk/by-label/PIXIE_IMGS
 # Wait for the by-label device unit so the ConditionPathExists
 # above evaluates after udev has created the symlink. Without
 # this, on fast-USB boards (GMKTec NUCBOX G10, etc.) the unit
@@ -13,13 +13,13 @@ ConditionPathExists=/dev/disk/by-label/PIXIE_IMAGES
 # bake-time size. systemd auto-generates a ``.device`` unit
 # for every udev-tracked device; the escaped-name form here is
 # what ``systemd-escape -p`` produces from the by-label path.
-Wants=dev-disk-by\x2dlabel-PIXIE_IMAGES.device
-After=dev-disk-by\x2dlabel-PIXIE_IMAGES.device
+Wants=dev-disk-by\x2dlabel-PIXIE_IMGS.device
+After=dev-disk-by\x2dlabel-PIXIE_IMGS.device
 # Must run BEFORE the mount unit so it sees the grown partition.
 Before=var-lib-pixie-images.mount pixie-images-discover.service pixie-on-tty1.service
 After=local-fs.target systemd-udev-settle.service
 # Cap the JOB (dep wait + ExecStart) at 20s. The ``After=...
-# PIXIE_IMAGES.device`` above is essential on USB-boot (it gives
+# PIXIE_IMGS.device`` above is essential on USB-boot (it gives
 # udev time to create the by-label symlink before the
 # ConditionPathExists check), but on a netboot-only boot the
 # label never appears -- systemd's DefaultDeviceTimeoutSec (90s)

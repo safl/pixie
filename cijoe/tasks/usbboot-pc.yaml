@@ -11,7 +11,7 @@ doc: |
   The chroot carries the pixie runtime and ``pixie-on-tty1.service``
   (the merged dispatcher: GETs ``<server>/pxe/<mac>/plan`` and
   runs auto-flash / interactive wizard / no-op). The pre-built
-  artifact ships a writable ``PIXIE_IMAGES`` exFAT partition that
+  artifact ships a writable ``PIXIE_IMGS`` exFAT partition that
   ``var-lib-pixie-images.mount`` attaches at
   ``/var/lib/pixie/images``. When booted from USB with no
   ``pixie.server`` / ``pixie.mac`` on the kernel cmdline, ``pixie``

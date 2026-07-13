@@ -3,9 +3,9 @@
 
   CLI:        pixie --help
   Tool:       pixie
-  Mounted:    /var/lib/pixie/images   (PIXIE_IMAGES exFAT, RO in live env)
+  Mounted:    /var/lib/pixie/images   (PIXIE_IMGS exFAT, RO in live env)
   Logs:       journalctl -u pixie-on-tty1
 
   This rootfs is a read-only squashfs with a tmpfs overlay -- any
-  changes vanish on reboot. Files dropped onto PIXIE_IMAGES from
+  changes vanish on reboot. Files dropped onto PIXIE_IMGS from
   another host persist on the stick.

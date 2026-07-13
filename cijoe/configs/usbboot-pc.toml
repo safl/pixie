@@ -2,7 +2,7 @@
 #
 # Drives Debian's live-build to produce a hybrid ISO that boots both
 # from CD media and from a USB stick (BIOS + UEFI). The ISO ships
-# uncompressed (``pixie-usbboot-pc-x86_64.iso``) at ~200 MiB: PIXIE_IMAGES is
+# uncompressed (``pixie-usbboot-pc-x86_64.iso``) at ~200 MiB: PIXIE_IMGS is
 # just 32 MiB at bake time (auto-grows to fill the stick on first boot
 # via ``pixie-usb-grow.service``), so the artifact is comfortably under
 # GitHub's 2 GiB per-release-asset limit without compression.
