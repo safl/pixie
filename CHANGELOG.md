@@ -38,6 +38,21 @@ Requires `nbdkit` >= 1.44 on the runtime path (per audit
 `docs/audit.md#nbdmux`); the base container image already pins
 `ubuntu:26.04` for this reason.
 
+### Tests
+
+The exports surface is verified end-to-end against the REAL pixie
+container running REAL nbdkit. Fake-argv shims for `subprocess.Popen`
+were tried first and removed on operator feedback -- they produced
+false confidence in nbdkit argv construction that didn't survive
+contact with the real binary. New `tests/integration/` builds
+`pixie:integration-test` from the Containerfile, starts it with
+`--network=host` + a bind-mounted state dir, and drives the JSON
+API over HTTP; the "is nbdkit really up?" assertion is a raw
+socket NBD handshake against the returned port that reads back
+`NBDMAGIC` + `IHAVEOPT`. Gated behind `-m integration` so the fast
+unit loop stays fast; CI runs it as its own job after building the
+container.
+
 ## [0.2.0] - TBD
 
 ### Added

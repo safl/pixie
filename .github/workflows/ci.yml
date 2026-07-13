@@ -1,9 +1,15 @@
 name: ci
 
-# Skeleton CI at 0.1.0: lint (ruff check + format), typecheck (mypy),
-# and pytest on the supported Python matrix. Publish jobs (PyPI +
-# ghcr.io) land in a follow-up PR once the first release-worthy
-# feature slice exists.
+# Three jobs:
+#   * ``test``: fast unit tests on the Python matrix.
+#   * ``integration``: builds the container, starts it under podman,
+#     runs ``pytest -m integration`` against the running container
+#     (real nbdkit, real HTTP, real NBD wire).
+#   * ``build-container``: separate smoke build kept for the "does
+#     the Containerfile parse on a fresh runner" signal.
+#
+# Publish jobs to PyPI + ghcr.io land in a follow-up PR once the
+# first operator-usable release is ready.
 
 on:
   pull_request:
@@ -34,12 +40,33 @@ jobs:
       - run: uv run mypy src
       - run: uv run pytest -v
 
+  integration:
+    name: Integration (real container + real nbdkit)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: astral-sh/setup-uv@v7.2.1
+        with:
+          python-version: "3.13"
+      - name: Install podman
+        run: |
+          # GHA ubuntu-latest already ships podman; a version check
+          # documents what we got and fails loud if podman disappears
+          # from the runner image later.
+          podman --version
+      - run: uv sync --all-extras --group dev
+      # The integration suite's ``container`` fixture builds
+      # ``pixie:integration-test`` on demand, but running the build
+      # explicitly here surfaces build failures as their own step
+      # rather than buried in a pytest skip.
+      - name: Build pixie container
+        run: podman build -t pixie:integration-test -f Containerfile .
+      - name: Run integration tests
+        run: uv run pytest -v -m integration -o addopts=
+
   build-container:
     name: Build container (smoke)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      # Smoke-build only: just prove the Containerfile parses + the
-      # apt install layer resolves. No push. Publish to ghcr.io lands
-      # in a follow-up PR once the app has something to serve.
       - run: podman build -t pixie:ci -f Containerfile .
