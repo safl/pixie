@@ -381,17 +381,28 @@ def _start_client_vm(workspace: Path, cfg, log_path: Path, firmware: str = "bios
 
 def _build_markers(cfg):
     """Every ``[test.pxe.chain_markers]`` entry is (key, substring)
-    matched against the client serial log. The per-MAC ``/pxe/<mac>``
-    fetch is added automatically from ``cfg['client_mac']``.
+    matched against the client serial log AND pixie's container
+    logs (so a server-side hit still counts when the client-side
+    console doesn't spell the fetch out). The per-MAC ``/pxe/<mac>``
+    fetch marker is added automatically.
 
-    Also includes a container-log assertion: the request for
-    ``/pxe-bootstrap.ipxe`` must appear in podman logs. That's
-    verified alongside the serial markers so a race between iPXE
-    printing "chaining to..." and the server actually receiving the
-    request is caught."""
+    iPXE emits colon-form MACs in its console output
+    (``http://.../pxe/52:54:00:11:22:33``); uvicorn logs the URL
+    percent-encoded (``52%3A54%3A00%3A11%3A22%3A33``). To match
+    both without a special case, key on the colon-form MAC (which
+    contains no delimiters the encoder rewrites -- ``52:54:...``
+    literally in the serial log) OR its percent-encoded twin
+    (``52%3A54%3A...``) via the ``/pxe/52`` prefix + first octet;
+    both hits are strictly under ``/pxe/`` so no bootstrap-side
+    collision."""
     out = [(entry["key"], entry["needle"]) for entry in cfg.get("chain_markers", [])]
-    mac_hyphen = cfg["client_mac"].replace(":", "-")
-    out.append(("ipxe-fetch-permac", f"/pxe/{mac_hyphen}"))
+    mac_colon = cfg["client_mac"].lower()
+    first_octet = mac_colon.split(":", 1)[0]
+    # ``/pxe/<mac[0:2]>`` is a stable substring that appears in both
+    # iPXE's console output and uvicorn's access log; ``/pxe-bootstrap
+    # .ipxe`` (the earlier marker) starts with ``/pxe-`` not ``/pxe/``
+    # so there's no ambiguity.
+    out.append(("ipxe-fetch-permac", f"/pxe/{first_octet}"))
     return out
 
 
