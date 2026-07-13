@@ -11,8 +11,6 @@ operator-facing summary.
 
 ## [Unreleased]
 
-## [0.9.0] - TBD
-
 ### Added
 
 **Operator TUI ported from bty wholesale.** The Rich-based five-stage
