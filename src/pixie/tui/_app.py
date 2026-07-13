@@ -82,8 +82,8 @@ from rich.prompt import Prompt
 from rich.table import Table
 
 import pixie
-from pixie import catalog as _catalog
 from pixie import disks, flash, images
+from pixie import tui_catalog as _catalog
 from pixie.tui import DEFAULT_SERVER as _DEFAULT_SERVER
 
 # ---------------------------------------------------------------------------

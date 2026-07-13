@@ -1373,7 +1373,7 @@ def _read_observed_digest(sha_proc: subprocess.Popen[bytes]) -> str:
     try to flush that closed handle and raise ``ValueError``.
     """
     assert sha_proc.stdout is not None
-    out = sha_proc.stdout.read()
+    out: bytes = sha_proc.stdout.read()
     sha_proc.stdout.close()
     return "sha256:" + out.split()[0].decode()
 
