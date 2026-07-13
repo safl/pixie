@@ -11,6 +11,63 @@ operator-facing summary.
 
 ## [Unreleased]
 
+## [0.4.0] - TBD
+
+### Added
+
+**Machines + PXE plan renderer (image-native ramboot MVP).** An
+operator can now bind a MAC to a fetched catalog entry and target
+that machine boots into that image with its own kernel and root over
+NBD.
+
+- `machines` table on the shared `state.db`. MAC normalisation
+  accepts `aa:bb:...`, `AA-BB-...` and `AABBCCDDEEFF` shapes.
+  Closed set of boot modes: `ipxe-exit` (default) and `ramboot`.
+- `GET /pxe-bootstrap.ipxe` -> iPXE bootstrap that chain-loads
+  `/pxe/${net0/mac}`; served over HTTP (and by an external TFTP
+  daemon for BIOS-PXE clients until the in-process TFTP router
+  lands).
+- `GET /pxe/<mac>` -> discovery upsert + per-machine plan. First
+  hit creates the row (default `ipxe-exit`); subsequent hits
+  refresh `last_seen_at`.
+- `GET/PUT/DELETE /machines[/<mac>]` for operator-driven CRUD.
+- Ramboot plan: walks `catalog[image_sha] -> netboot_src ->
+  catalog[bundle]` by URL cross-reference, verifies the bundle's
+  `manifest.json` is unpacked, ensures an NBD export against the
+  disk-image blob is spawned, and renders the ramboot iPXE plan
+  with content-addressed artifact URLs +
+  `pixie.nbd=tcp://${nbd-host}:${nbd-port}`.
+- Missing / corrupt / not-yet-fetched bundle -> the renderer emits
+  the `unavailable.j2` template with the reason baked in the plan
+  comment and `exit`. NO fallback to a bty-media-baked kernel;
+  a mismatched image-vs-modules boot is a worse operator experience
+  than a clean `exit`.
+- Auto-export lifecycle: binding a machine to `ramboot` triggers
+  an idempotent `spawn` of an NBD export named `pixie-<sha[:12]>.img`
+  for the disk-image blob. Same-machine re-binds no-op; distinct
+  content shas get distinct exports on distinct ports.
+- Env knobs: `PIXIE_PUBLIC_HOST` (override the URL host baked into
+  the plan when pixie is fronted by a proxy), `PIXIE_NBD_PUBLIC_HOST`
+  (override the NBD-side host for the same reason).
+
+### Tests
+
+Two new integration tests build the real container, place synthetic
+blobs + unpacked bundle bytes under the bind-mounted state dir, add
+catalog entries via the JSON API, bind a machine to the disk-image
+entry, and prove the ramboot plan:
+
+- References `/artifacts/<bundle-sha>/vmlinuz` +
+  `/artifacts/<bundle-sha>/initrd`.
+- Auto-spawns an NBD export that actually speaks NBD (raw socket
+  read of `NBDMAGIC` on the port the plan advertises).
+- Falls back cleanly to `unavailable.j2` + `exit` when the bundle's
+  artifacts aren't unpacked on disk.
+
+Plus 12 pure-Python unit tests over MAC normalisation, boot-mode
+validation, discovery upsert, and the negative paths on the
+operator write route.
+
 ## [0.3.0] - TBD
 
 ### Added
