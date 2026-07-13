@@ -1,25 +1,26 @@
-"""pixie-lab (deploy generator).
+"""pixie-lab: deploy generator + operator convenience CLI.
 
-Placeholder at 0.1.0: the real deploy generator, ported from bty-lab
-and shaped for one container on ``--network=host``, lands in PR 3.
-This stub exists so the ``pixie-lab`` console-script is a valid entry
-point at package-install time.
+``pixie-lab init [dest]`` emits a ready-to-run compose deployment for
+pixie: a ``compose.yml`` with one service on ``--network=host``, an
+``envvars.example`` with the settings an operator MUST fill (admin
+password, host address for LAN visibility), a ``data/`` scaffold and
+a README pointing at ``PLAN.md``.
+
+``pixie-lab deploy [dest]`` builds on init: auto-fills envvars with a
+detected LAN IP + generated password, then runs ``podman compose
+up -d`` and waits for ``/healthz`` to answer 200.
+
+``pixie-lab purge [dest]`` tears the stack down (``podman compose
+down -v``) so a fresh ``deploy`` on the same dir starts clean.
+
+Kept deliberately shallower than bty-lab: pixie is one container, so
+the whole file is measured in hundreds of LOC, not thousands. The
+extra knobs (Quadlet emission, upgrade paths, backup / restore) land
+in a follow-up if operators ask.
 """
 
 from __future__ import annotations
 
-import sys
+from pixie.deploy._main import main
 
-
-def main(argv: list[str] | None = None) -> int:
-    argv = argv if argv is not None else sys.argv[1:]
-    print(
-        "pixie-lab: deploy generator not implemented in 0.1.0.\n"
-        "See PLAN.md; init/deploy/purge ports from bty-lab in PR 3.",
-        file=sys.stderr,
-    )
-    return 1
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())
+__all__ = ["main"]

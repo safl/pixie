@@ -11,6 +11,43 @@ operator-facing summary.
 
 ## [Unreleased]
 
+## [0.5.0] - TBD
+
+### Added
+
+**`pixie-lab` deploy generator.** The `pixie-lab` console-script
+(previously a placeholder that exited 1) now emits a working compose
+deployment.
+
+- `pixie-lab init [dest]` writes `compose.yml` (one service on
+  `--network=host`), `envvars.example`, `README.md`, and a `data/`
+  scaffold. The image tag baked into `compose.yml` is
+  `ghcr.io/safl/pixie:<pixie-version>` at generation time; the
+  operator overrides via `--image`.
+- `pixie-lab deploy [dest]` builds on init: auto-detects the LAN
+  address via a UDP-connect probe, generates a random admin
+  password (unless `--admin-password` is passed), realises
+  `envvars`, runs `podman compose up -d`, and waits for
+  `/healthz`.
+- `pixie-lab purge [dest]` runs `podman compose down`; add
+  `--wipe-data` to drop the state volume too.
+- Compose runner detection: prefers `podman-compose`, falls back to
+  `podman compose`, then `docker compose`. Fails loud if none of
+  those are on PATH.
+
+Kept deliberately shallower than bty-lab (one container, no Quadlet
+emission, no upgrade flow yet). Additional knobs land in follow-ups
+if operators ask.
+
+### Tests
+
+10 unit tests over the file-emitter + argparse shape. One **real
+container** integration test: `pixie-lab init` builds a deploy dir,
+`podman-compose up` brings the stack up, `/healthz` answers 200. The
+integration test reuses the container image the shared fixture
+already built, so it adds ~30s to the CI wallclock rather than a
+second full build.
+
 ## [0.4.0] - TBD
 
 ### Added
