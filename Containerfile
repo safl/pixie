@@ -33,9 +33,16 @@ LABEL org.opencontainers.image.title="pixie" \
 #                    packages on older Debian). cow gives each ramboot
 #                    target its own writable overlay; partition serves
 #                    the first partition of a full-disk image.
-#   tftpd-hpa:       BIOS-PXE bootstrap (in-process TFTP path lands
-#                    later; today's placeholder assumes a systemd unit
-#                    approach that matches bty-tftp's model).
+#   tftpd-hpa:       serves iPXE NBPs to BIOS/UEFI PXE targets. pixie
+#                    supervises ``in.tftpd`` as a subprocess (see
+#                    pixie.tftp._supervisor); the daemon binds
+#                    udp/69 which the LAN-only ``--network=host``
+#                    deploy exposes directly.
+#   ipxe:            UEFI + BIOS network bootloaders. The package
+#                    ships ``undionly.kpxe`` (BIOS) + ``ipxe.efi``
+#                    (UEFI) + ``snponly.efi`` under
+#                    /usr/lib/ipxe/, which we copy into pixie's
+#                    TFTP root so the daemon can serve them.
 #   qemu-utils:      qemu-img info + qemu-nbd for qcow2 handling.
 #   ca-certificates: HTTPS fetch of ORAS + release assets.
 #
@@ -55,6 +62,7 @@ RUN apt-get update \
         xz-utils \
         nbdkit \
         tftpd-hpa \
+        ipxe \
         qemu-utils \
  && rm -rf /var/lib/apt/lists/*
 
@@ -68,12 +76,26 @@ COPY pyproject.toml README.md LICENSE /app/
 COPY src/ /app/src/
 RUN pip install --break-system-packages --no-cache-dir .
 
+# Bake the iPXE NBPs into the TFTP root pixie's supervisor serves.
+# The ``ipxe`` package drops them under ``/usr/lib/ipxe/``; copy the
+# common three (BIOS + UEFI + SNP-only UEFI) so a fresh target's
+# firmware finds the right one on next-server/filename lookup.
+RUN mkdir -p /usr/share/pixie/tftp && \
+    cp /usr/lib/ipxe/undionly.kpxe /usr/share/pixie/tftp/ 2>/dev/null || true && \
+    cp /usr/lib/ipxe/ipxe.efi      /usr/share/pixie/tftp/ 2>/dev/null || true && \
+    cp /usr/lib/ipxe/snponly.efi   /usr/share/pixie/tftp/ 2>/dev/null || true
+
 # Persistent state under /var/lib/pixie: state.db, session-secret,
 # blobs/, artifacts/, images/. The Quadlet/compose bind-mounts an
 # operator-owned host directory here so a container rebuild keeps
 # every catalog entry + downloaded blob.
 ENV PIXIE_DATA_DIR=/var/lib/pixie
 VOLUME ["/var/lib/pixie"]
+
+# TFTP supervisor is off by default (unit-test / dev fires up the app
+# on non-root); flip on inside the container image so a compose bring-
+# up ships a working PXE-first hop.
+ENV PIXIE_TFTP_ENABLED=1
 
 # --network=host in production (both for udp/69 TFTP and the NBD port
 # range). Expose 8080 as documentation for a compose-bridge dev run.

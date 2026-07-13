@@ -11,6 +11,43 @@ operator-facing summary.
 
 ## [Unreleased]
 
+## [0.6.0] - TBD
+
+### Added
+
+**TFTP subprocess supervision.** pixie's FastAPI lifespan now
+manages an `in.tftpd` (from the `tftpd-hpa` package) that serves
+iPXE NBPs so a target's BIOS-PXE / UEFI-PXE first hop can chain
+into pixie's HTTP bootstrap without an external TFTP daemon on the
+LAN.
+
+- `src/pixie/tftp/_supervisor.py` -- `TftpServer` class. Idempotent
+  `start()` + `stop()` with a 200 ms spawn grace period. Fails
+  loud if the binary is missing, root dir doesn't exist, or the
+  child exits within the grace period.
+- The `Containerfile` now installs the `ipxe` package and copies
+  `undionly.kpxe` (BIOS), `ipxe.efi` (UEFI), and `snponly.efi`
+  (SNP-only UEFI) into `/usr/share/pixie/tftp/`. `PIXIE_TFTP_ENABLED=1`
+  is set in the image env so a fresh compose bring-up serves TFTP
+  by default.
+- Env knobs: `PIXIE_TFTP_ENABLED`, `PIXIE_TFTP_BIND`,
+  `PIXIE_TFTP_PORT`, `PIXIE_TFTP_ROOT`, `PIXIE_TFTP_BIN`. Non-root
+  callers must set `PIXIE_TFTP_PORT` to a non-privileged port.
+- FastAPI lifespan calls `TftpServer.start()` on app boot (if
+  enabled) and `stop()` on shutdown so a Ctrl-C doesn't leave the
+  daemon holding udp/69.
+
+### Tests
+
+3 real-container integration tests using `curl` over UDP TFTP
+against the container's actual `in.tftpd`:
+
+- Fetch `undionly.kpxe` -> non-empty NBP bytes.
+- Fetch `ipxe.efi` -> starts with the PE/COFF `MZ` magic.
+- Fetch a missing file -> curl exits non-zero.
+
+Zero shims. The tests speak the real TFTP wire.
+
 ## [0.5.0] - TBD
 
 ### Added

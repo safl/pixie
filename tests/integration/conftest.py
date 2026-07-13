@@ -42,6 +42,8 @@ IMAGE_TAG = "pixie:integration-test"
 CONTAINER_NAME = "pixie-integration-test"
 HOST_HTTP_PORT = 18080  # avoid 8080 clash if the operator's bty-web is up
 HOST_NBD_PORT_BASE = 19809
+# udp/69 requires root; use a high port for TFTP integration tests.
+HOST_TFTP_PORT = 20069
 
 _HERE = Path(__file__).resolve().parent
 _REPO_ROOT = _HERE.parent.parent
@@ -153,6 +155,10 @@ def container(tmp_path_factory: pytest.TempPathFactory) -> Iterator[dict[str, ob
             f"PIXIE_NBD_PORT_BASE={HOST_NBD_PORT_BASE}",
             "-e",
             "PIXIE_NBD_BIND=127.0.0.1",
+            "-e",
+            f"PIXIE_TFTP_PORT={HOST_TFTP_PORT}",
+            "-e",
+            "PIXIE_TFTP_BIND=127.0.0.1",
             # A local writable dir for state; the container's default
             # /var/lib/pixie is intended to be a volume mount.
             "-v",
@@ -179,6 +185,7 @@ def container(tmp_path_factory: pytest.TempPathFactory) -> Iterator[dict[str, ob
             "state_dir": state_dir,
             "admin_password": admin_pw,
             "nbd_port_base": HOST_NBD_PORT_BASE,
+            "tftp_port": HOST_TFTP_PORT,
         }
     finally:
         subprocess.run(
@@ -254,6 +261,7 @@ def api(container: dict[str, object]) -> dict[str, object]:
         "cookie": cookie,
         "state_dir": container["state_dir"],
         "nbd_port_base": container["nbd_port_base"],
+        "tftp_port": container["tftp_port"],
     }
 
 

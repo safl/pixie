@@ -44,6 +44,7 @@ from pixie.machines._routes import router as machines_router
 from pixie.machines._store import MachinesStore
 from pixie.pxe._renderer import PlanRenderer
 from pixie.pxe._routes import router as pxe_router
+from pixie.tftp import DEFAULT_TFTP_ROOT, TftpServer
 from pixie.web._auth import (
     SESSION_AUTHED_KEY,
     SESSION_COOKIE,
@@ -68,6 +69,18 @@ DEFAULT_NBD_BIND = "0.0.0.0"
 NBDKIT_BIN_ENV = "PIXIE_NBDKIT_BIN"
 DEFAULT_NBDKIT_BIN = "nbdkit"
 
+# TFTP subprocess supervision. OFF by default so unit-test / dev
+# runs don't try to bind udp/69 (root-required); flipped on inside
+# the container image by the compose file's default env.
+TFTP_ENABLED_ENV = "PIXIE_TFTP_ENABLED"
+TFTP_BIND_ENV = "PIXIE_TFTP_BIND"
+TFTP_PORT_ENV = "PIXIE_TFTP_PORT"
+TFTP_ROOT_ENV = "PIXIE_TFTP_ROOT"
+TFTP_BIN_ENV = "PIXIE_TFTP_BIN"
+DEFAULT_TFTP_BIND = "0.0.0.0"
+DEFAULT_TFTP_PORT = 69
+DEFAULT_TFTP_BIN = "in.tftpd"
+
 
 def _resolve_nbd_port_base() -> int:
     raw = (os.environ.get(NBD_PORT_BASE_ENV) or "").strip()
@@ -85,6 +98,33 @@ def _resolve_nbd_bind() -> str:
 
 def _resolve_nbdkit_bin() -> str:
     return (os.environ.get(NBDKIT_BIN_ENV) or "").strip() or DEFAULT_NBDKIT_BIN
+
+
+def _tftp_enabled() -> bool:
+    return (os.environ.get(TFTP_ENABLED_ENV) or "").strip().lower() in ("1", "true", "yes", "on")
+
+
+def _resolve_tftp_bind() -> str:
+    return (os.environ.get(TFTP_BIND_ENV) or "").strip() or DEFAULT_TFTP_BIND
+
+
+def _resolve_tftp_port() -> int:
+    raw = (os.environ.get(TFTP_PORT_ENV) or "").strip()
+    if not raw:
+        return DEFAULT_TFTP_PORT
+    try:
+        return max(1, int(raw))
+    except ValueError:
+        return DEFAULT_TFTP_PORT
+
+
+def _resolve_tftp_root() -> Path:
+    override = (os.environ.get(TFTP_ROOT_ENV) or "").strip()
+    return Path(override) if override else DEFAULT_TFTP_ROOT
+
+
+def _resolve_tftp_bin() -> str:
+    return (os.environ.get(TFTP_BIN_ENV) or "").strip() or DEFAULT_TFTP_BIN
 
 
 def _resolve_state_dir() -> Path:
@@ -130,15 +170,26 @@ def create_app() -> FastAPI:
 
     @asynccontextmanager
     async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
-        # startup: state already attached below; nothing async to do.
+        # startup: state already attached below; kick off TFTP if
+        # enabled (bind udp/69 requires root; disabled in unit / dev).
+        if getattr(app.state, "tftp_server", None) is not None:
+            try:
+                app.state.tftp_server.start()
+            except RuntimeError as exc:
+                import logging as _logging
+
+                _logging.getLogger(__name__).warning("tftp start failed: %s", exc)
         try:
             yield
         finally:
-            # Stop nbdkit children on graceful shutdown so a Ctrl-C
-            # + restart doesn't leave orphan processes clinging to
-            # NBD ports.
+            # Stop children on graceful shutdown so a Ctrl-C +
+            # restart doesn't leave orphan processes clinging to
+            # NBD ports or udp/69.
             with contextlib_suppress(Exception):
                 app.state.nbd_server.stop()
+            if getattr(app.state, "tftp_server", None) is not None:
+                with contextlib_suppress(Exception):
+                    app.state.tftp_server.stop()
 
     app = FastAPI(
         title="pixie",
@@ -162,6 +213,16 @@ def create_app() -> FastAPI:
         catalog=app.state.catalog_store,
         exports=app.state.exports_store,
         nbd=app.state.nbd_server,
+    )
+    app.state.tftp_server = (
+        TftpServer(
+            bind=_resolve_tftp_bind(),
+            port=_resolve_tftp_port(),
+            root=_resolve_tftp_root(),
+            bin=_resolve_tftp_bin(),
+        )
+        if _tftp_enabled()
+        else None
     )
     app.state.fetch_pool = ThreadPoolExecutor(
         max_workers=_resolve_fetch_pool_size(),
