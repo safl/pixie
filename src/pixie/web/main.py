@@ -40,6 +40,10 @@ from pixie.catalog._store import CatalogStore
 from pixie.exports._routes import router as exports_router
 from pixie.exports._store import ExportsStore
 from pixie.exports._supervisor import DEFAULT_PORT_BASE, NbdServer
+from pixie.machines._routes import router as machines_router
+from pixie.machines._store import MachinesStore
+from pixie.pxe._renderer import PlanRenderer
+from pixie.pxe._routes import router as pxe_router
 from pixie.web._auth import (
     SESSION_AUTHED_KEY,
     SESSION_COOKIE,
@@ -148,10 +152,16 @@ def create_app() -> FastAPI:
     state_dir = _resolve_state_dir()
     app.state.catalog_store = CatalogStore(state_dir)
     app.state.exports_store = ExportsStore(app.state.catalog_store.db_path)
+    app.state.machines_store = MachinesStore(app.state.catalog_store.db_path)
     app.state.nbd_server = NbdServer(
         port_base=_resolve_nbd_port_base(),
         bind=_resolve_nbd_bind(),
         nbdkit_bin=_resolve_nbdkit_bin(),
+    )
+    app.state.pxe_renderer = PlanRenderer(
+        catalog=app.state.catalog_store,
+        exports=app.state.exports_store,
+        nbd=app.state.nbd_server,
     )
     app.state.fetch_pool = ThreadPoolExecutor(
         max_workers=_resolve_fetch_pool_size(),
@@ -342,6 +352,8 @@ def create_app() -> FastAPI:
     # operator muscle memory + iPXE templates keep working.
     app.include_router(catalog_router)
     app.include_router(exports_router)
+    app.include_router(machines_router)
+    app.include_router(pxe_router)
 
     return app
 

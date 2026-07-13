@@ -1,0 +1,10 @@
+#!ipxe
+# pixie plan for {{ mac }} - boot_mode=ipxe-exit
+#
+# The default for a discovered-but-not-yet-bound machine, and for
+# machines the operator has explicitly told pixie to leave alone.
+# iPXE's ``exit`` unloads itself; the firmware's next boot entry
+# fires -- typically the local disk when the operator has DHCP
+# pointing at pixie only for imaging bring-up.
+
+exit

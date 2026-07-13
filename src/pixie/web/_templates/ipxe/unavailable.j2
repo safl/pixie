@@ -1,0 +1,14 @@
+#!ipxe
+# pixie plan for {{ mac }} - {{ reason_slug }}
+#
+# The operator asked for boot_mode=ramboot but the plan can't be
+# rendered right now. Reason:
+#
+#   {{ reason }}
+#
+# We deliberately do NOT chain-load anything else here (no bty-media
+# fallback, no generic "keep trying" loop). ``exit`` unloads iPXE so
+# the firmware's next boot device fires; the operator sees the reason
+# in ``/ui/machines/<mac>`` and on pixie's event log.
+
+exit

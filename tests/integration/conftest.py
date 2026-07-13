@@ -237,10 +237,14 @@ def api(container: dict[str, object]) -> dict[str, object]:
     password = str(container["admin_password"])
     cookie = _login_cookie(base_url, password)
 
-    # Reset state: kill every export, delete every catalog entry.
+    # Reset state: kill every export, delete every machine + catalog
+    # entry so tests can't leak state to each other.
     exports = json.loads(_get(base_url, "/exports").read()).get("exports", [])
     for e in exports:
         _delete(base_url, f"/exports/{e['name']}", cookie=cookie)
+    machines = json.loads(_get(base_url, "/machines").read()).get("machines", [])
+    for m in machines:
+        _delete(base_url, f"/machines/{m['mac']}", cookie=cookie)
     entries = json.loads(_get(base_url, "/catalog").read()).get("entries", [])
     for e in entries:
         _delete(base_url, f"/catalog/entries?name={e['name']}", cookie=cookie)

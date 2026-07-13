@@ -1,6 +1,6 @@
 [project]
 name = "pixie-lab"
-version = "0.3.0"
+version = "0.4.0"
 description = "Bare-metal netboot appliance: catalog + fetch + NBD + PXE + TFTP + operator TUI in one container"
 readme = "README.md"
 requires-python = ">=3.11"

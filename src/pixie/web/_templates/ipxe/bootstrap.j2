@@ -1,0 +1,12 @@
+#!ipxe
+# pixie iPXE bootstrap. TFTP + HTTP consumers land here from DHCP;
+# the chain-load below re-routes each MAC to its target-specific
+# plan at /pxe/<mac>.
+#
+# ``${net0/mac}`` is iPXE's own view of the primary NIC, which
+# matches what the target announces on DHCP + what pixie's
+# machines table keys on. We deliberately don't pass ``?ip=...``:
+# operator inventory lives in bty-inventory (a later PR).
+
+set pixie-base http://{{ host }}:{{ port }}
+chain ${pixie-base}/pxe/${net0/mac}
