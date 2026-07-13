@@ -185,9 +185,13 @@ jobs:
             ipxe \
             bridge-utils \
             iproute2
-          # KVM devnode + group membership; the runner user is in kvm
-          # by default on ubuntu-latest but this documents the ask.
-          ls -la /dev/kvm || true
+          # /dev/kvm is crw-rw---- root:kvm on the runner but the
+          # runner user is not in the kvm group, so QEMU -enable-kvm
+          # fails "Permission denied". Widen the ACL rather than
+          # mess with group membership (which needs a fresh login
+          # to take effect).
+          sudo chmod a+rw /dev/kvm
+          ls -la /dev/kvm
 
       - name: Install cijoe
         run: pipx install --force cijoe
