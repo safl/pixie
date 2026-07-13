@@ -1,15 +1,124 @@
 {% extends "layout.html" %}
-{% block title %}pixie dashboard{% endblock %}
+{% block title %}pixie{% endblock %}
 {% block content %}
 <div class="card">
     <h1>pixie</h1>
     <p class="muted">
-        Skeleton at v{{ version }}. No catalog, no fetch, no exports,
-        no PXE plan renderer, no TFTP. Feature routers land in later
-        PRs; see <code>PLAN.md</code>.
+        v{{ version }}. Operator-curated image library. Add an entry
+        (nosi disk image or netboot bundle) and hit <strong>Fetch</strong>
+        to download it onto this pixie.
     </p>
-    <form method="post" action="/ui/logout">
-        <button type="submit">Sign out</button>
+
+    <h2>Add entry</h2>
+    <form method="post" action="/ui/catalog/add" class="add-form">
+        <div class="row">
+            <label for="name">Name</label>
+            <input id="name" name="name" type="text" required
+                   placeholder="nosi ubuntu-2604-headless (x86_64, 2026.W28)">
+        </div>
+        <div class="row">
+            <label for="src">Source URL</label>
+            <input id="src" name="src" type="text" required
+                   placeholder="oras://ghcr.io/... or https://...">
+        </div>
+        <div class="row">
+            <label for="format">Format</label>
+            <select id="format" name="format">
+                <option value="img.gz">img.gz</option>
+                <option value="img.zst">img.zst</option>
+                <option value="img.xz">img.xz</option>
+                <option value="img">img</option>
+                <option value="qcow2">qcow2</option>
+                <option value="tar.gz">tar.gz (netboot bundle)</option>
+            </select>
+        </div>
+        <div class="row">
+            <label for="arch">Arch (optional)</label>
+            <input id="arch" name="arch" type="text" placeholder="x86_64">
+        </div>
+        <div class="row">
+            <label for="netboot_src">Netboot bundle URL (optional)</label>
+            <input id="netboot_src" name="netboot_src" type="text"
+                   placeholder="oras://.../ubuntu-2604-headless-netboot:2026.W28">
+        </div>
+        <div class="row">
+            <label for="description">Description (optional)</label>
+            <input id="description" name="description" type="text">
+        </div>
+        <div class="row">
+            <button type="submit">Add</button>
+        </div>
     </form>
+
+    <h2>Catalog ({{ entries|length }})</h2>
+    {% if entries %}
+    <table>
+        <thead>
+            <tr>
+                <th>Name</th>
+                <th>Format</th>
+                <th>Arch</th>
+                <th>Size</th>
+                <th>Content sha</th>
+                <th>Actions</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for e in entries %}
+            <tr>
+                <td>
+                    <code>{{ e.name }}</code>
+                    {% if e.description %}<br><span class="muted">{{ e.description }}</span>{% endif %}
+                    <br><span class="muted"><code>{{ e.src }}</code></span>
+                    {% if e.netboot_src %}
+                    <br><span class="muted">netboot: <code>{{ e.netboot_src }}</code></span>
+                    {% endif %}
+                </td>
+                <td>{{ e.format }}</td>
+                <td>{{ e.arch or "-" }}</td>
+                <td>{{ e.size_bytes if e.size_bytes else "-" }}</td>
+                <td>
+                    {% if e.content_sha256 %}
+                    <code title="{{ e.content_sha256 }}">{{ e.content_sha256[:12] }}</code>
+                    {% else %}
+                    <span class="muted">not fetched</span>
+                    {% endif %}
+                </td>
+                <td>
+                    <form method="post" action="/ui/catalog/fetch" style="display:inline">
+                        <input type="hidden" name="name" value="{{ e.name }}">
+                        <button type="submit">Fetch</button>
+                    </form>
+                    <form method="post" action="/ui/catalog/delete" style="display:inline">
+                        <input type="hidden" name="name" value="{{ e.name }}">
+                        <button type="submit" class="danger">Delete</button>
+                    </form>
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <p class="muted">No entries yet. Add one above.</p>
+    {% endif %}
+
+    <p style="margin-top: 2rem">
+        <form method="post" action="/ui/logout" style="display:inline">
+            <button type="submit">Sign out</button>
+        </form>
+    </p>
 </div>
+<style>
+    .add-form { display: grid; gap: 0.5rem; margin: 1rem 0; padding: 1rem;
+                background: #0f172a; border-radius: 6px; }
+    .add-form .row { display: grid; grid-template-columns: 12rem 1fr; align-items: center; gap: 1rem; }
+    .add-form input, .add-form select { padding: 0.4rem 0.5rem; background: #1e293b;
+                border: 1px solid #334155; border-radius: 4px; color: #e2e8f0; }
+    table { width: 100%; border-collapse: collapse; margin-top: 1rem; }
+    th, td { padding: 0.5rem; text-align: left; border-bottom: 1px solid #334155; }
+    th { color: #94a3b8; font-weight: 500; font-size: 0.875rem; }
+    button.danger { background: #7f1d1d; }
+    button.danger:hover { background: #991b1b; }
+    button { padding: 0.35rem 0.75rem; font-size: 0.875rem; }
+</style>
 {% endblock %}

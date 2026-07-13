@@ -1,22 +1,26 @@
 """FastAPI application factory.
 
-Skeleton at 0.1.0: exposes ``/healthz`` (open, JSON) + session-cookie
-login/logout under ``/ui/`` + a placeholder dashboard. Feature routers
-land in later PRs; this file becomes the mount point.
+At 0.2.0: skeleton auth + catalog router mounted. The app attaches a
+:class:`pixie.catalog.CatalogStore` and a fetch thread pool onto
+``app.state`` so the routes can find them via a request-scoped dep.
 
 Run locally with:
 
     uv run uvicorn pixie.web.main:app --reload
 
-Serialised session secret: a random URL-safe 32-byte token per process,
-persisted across restarts is a v0.2+ concern (a settings-store row or a
-``session-secret`` file in the state dir). At 0.1.0 sessions expire on
-every restart, which is fine while nothing operator-visible is stored.
+State + fetch-pool configuration falls back to sane defaults, so a
+plain ``uv run pytest`` never needs env-vars set. Overrides:
+
+* ``PIXIE_DATA_DIR``   - state dir (default: /var/lib/pixie).
+* ``PIXIE_FETCH_POOL_SIZE`` - concurrent fetches (default: 4).
 """
 
 from __future__ import annotations
 
+import os
 import secrets
+import tempfile
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
@@ -28,6 +32,8 @@ from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
 
 import pixie
+from pixie.catalog._routes import router as catalog_router
+from pixie.catalog._store import CatalogStore
 from pixie.web._auth import (
     SESSION_AUTHED_KEY,
     SESSION_COOKIE,
@@ -39,6 +45,38 @@ _HERE = Path(__file__).resolve().parent
 _TEMPLATES_DIR = _HERE / "_templates"
 _STATIC_DIR = _HERE / "_static"
 
+DEFAULT_STATE_DIR = Path("/var/lib/pixie")
+STATE_DIR_ENV = "PIXIE_DATA_DIR"
+FETCH_POOL_SIZE_ENV = "PIXIE_FETCH_POOL_SIZE"
+DEFAULT_FETCH_POOL_SIZE = 4
+
+
+def _resolve_state_dir() -> Path:
+    """Where pixie writes state.db + blobs/ + artifacts/.
+
+    Falls back to a per-invocation tempdir when the default
+    ``/var/lib/pixie`` is not writable (test environments), so tests
+    don't have to set env-vars to construct the app.
+    """
+    override = os.environ.get(STATE_DIR_ENV, "").strip()
+    if override:
+        return Path(override)
+    if os.access(str(DEFAULT_STATE_DIR.parent), os.W_OK):
+        DEFAULT_STATE_DIR.mkdir(parents=True, exist_ok=True)
+        return DEFAULT_STATE_DIR
+    return Path(tempfile.mkdtemp(prefix="pixie-state-"))
+
+
+def _resolve_fetch_pool_size() -> int:
+    raw = (os.environ.get(FETCH_POOL_SIZE_ENV) or "").strip()
+    if not raw:
+        return DEFAULT_FETCH_POOL_SIZE
+    try:
+        n = int(raw)
+    except ValueError:
+        return DEFAULT_FETCH_POOL_SIZE
+    return max(1, n)
+
 
 class NotAuthenticated(Exception):
     """Raised by the UI dependency when a browser request lacks the
@@ -46,8 +84,6 @@ class NotAuthenticated(Exception):
 
 
 def _require_ui_auth(request: Request) -> None:
-    """UI variant of ``require_auth``: raises :class:`NotAuthenticated`
-    so the handler can redirect the browser instead of returning JSON."""
     if not request.session.get(SESSION_AUTHED_KEY):
         raise NotAuthenticated
 
@@ -61,10 +97,18 @@ def create_app() -> FastAPI:
         description="Bare-metal netboot appliance.",
     )
 
+    # State + fetch pool on app.state. Route handlers read them
+    # request-scoped via ``request.app.state.catalog_store`` etc.
+    app.state.catalog_store = CatalogStore(_resolve_state_dir())
+    app.state.fetch_pool = ThreadPoolExecutor(
+        max_workers=_resolve_fetch_pool_size(),
+        thread_name_prefix="pixie-fetch",
+    )
+    app.state.fetch_states = {}
+
     # SessionMiddleware signs the ``pixie-token`` cookie. Sliding TTL:
-    # 7 days from last touch. ``https_only=False`` because the pixie
-    # deploy is LAN-only by design; operators front with TLS if they
-    # want it, we don't force a scheme.
+    # 7 days from last touch. ``https_only=False`` because pixie is
+    # LAN-only by design; operators front with TLS if they want it.
     app.add_middleware(
         SessionMiddleware,
         secret_key=secrets.token_urlsafe(32),
@@ -81,13 +125,11 @@ def create_app() -> FastAPI:
     # ---------- exception handlers -----------------------------------
 
     @app.exception_handler(NotAuthenticated)
-    async def _redirect_to_login(request: Request, _exc: NotAuthenticated) -> RedirectResponse:
+    async def _redirect_to_login(_request: Request, _exc: NotAuthenticated) -> RedirectResponse:
         return RedirectResponse(url="/ui/login", status_code=status.HTTP_303_SEE_OTHER)
 
     @app.exception_handler(RequestValidationError)
     async def _validation_error(_request: Request, exc: RequestValidationError) -> JSONResponse:
-        # Mirror the shape the operator UI expects downstream; keeps the
-        # JSON body compact vs. FastAPI's default.
         return JSONResponse(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             content={"detail": exc.errors()},
@@ -97,7 +139,6 @@ def create_app() -> FastAPI:
 
     @app.get("/healthz")
     def healthz() -> dict[str, Any]:
-        """Liveness probe. Container healthcheck reads this."""
         return {"status": "ok", "service": "pixie", "version": pixie.__version__}
 
     @app.get("/", include_in_schema=False)
@@ -139,20 +180,114 @@ def create_app() -> FastAPI:
         return templates.TemplateResponse(
             request,
             "dashboard.html",
-            {"version": pixie.__version__},
+            {
+                "version": pixie.__version__,
+                "entries": request.app.state.catalog_store.list_entries(),
+            },
         )
 
     # ---------- ping under session-auth ------------------------------
-    #
-    # A protected endpoint that returns JSON. Exists so tests + monitoring
-    # can prove session-cookie auth works end-to-end without depending on
-    # feature routes that don't exist yet.
 
     @app.get("/api/ping")
     def api_ping(
         _auth: None = Depends(require_auth),
     ) -> dict[str, Any]:
         return {"pong": True, "version": pixie.__version__}
+
+    # ---------- ui: catalog admin forms ------------------------------
+    #
+    # These forms redirect back to /ui/ so an operator's browser stays
+    # on the dashboard after each mutation. Behaviour mirrors the JSON
+    # /catalog routes but with form-encoded input + 303 redirect.
+
+    from pixie._util import now_iso as _now_iso
+    from pixie.catalog._fetcher import FetchError
+    from pixie.catalog._fetcher import fetch as _fetch
+    from pixie.catalog._schema import CatalogEntry as _Entry
+    from pixie.catalog._store import CatalogStore as _Store  # noqa: F401
+
+    @app.post("/ui/catalog/add")
+    def ui_catalog_add(
+        request: Request,
+        name: str = Form(...),
+        src: str = Form(...),
+        format: str = Form(...),
+        arch: str = Form(""),
+        description: str = Form(""),
+        netboot_src: str = Form(""),
+        _auth: None = Depends(_require_ui_auth),
+    ) -> RedirectResponse:
+        store = request.app.state.catalog_store
+        if store.get_entry(name):
+            # 303 back to /ui/ silently on conflict; UI shows the row
+            # already exists.
+            return RedirectResponse(url="/ui/", status_code=status.HTTP_303_SEE_OTHER)
+        store.upsert(
+            _Entry(
+                name=name.strip(),
+                src=src.strip(),
+                format=format.strip(),
+                arch=arch.strip(),
+                description=description.strip(),
+                netboot_src=netboot_src.strip(),
+                added_at=_now_iso(),
+            )
+        )
+        return RedirectResponse(url="/ui/", status_code=status.HTTP_303_SEE_OTHER)
+
+    @app.post("/ui/catalog/fetch")
+    def ui_catalog_fetch(
+        request: Request,
+        name: str = Form(...),
+        _auth: None = Depends(_require_ui_auth),
+    ) -> RedirectResponse:
+        store = request.app.state.catalog_store
+        entry = store.get_entry(name)
+        if entry is None:
+            return RedirectResponse(url="/ui/", status_code=status.HTTP_303_SEE_OTHER)
+
+        states = request.app.state.fetch_states
+        if states.get(name, {}).get("state") == "fetching":
+            return RedirectResponse(url="/ui/", status_code=status.HTTP_303_SEE_OTHER)
+        states[name] = {"state": "fetching", "started_at": _now_iso(), "error": None}
+
+        def _run() -> None:
+            try:
+                _fetch(entry, store)
+                states[name] = {"state": "done", "started_at": states[name].get("started_at")}
+            except FetchError as exc:
+                states[name] = {
+                    "state": "error",
+                    "started_at": states[name].get("started_at"),
+                    "error": str(exc),
+                }
+            except Exception as exc:  # pragma: no cover -- defensive
+                states[name] = {
+                    "state": "error",
+                    "started_at": states[name].get("started_at"),
+                    "error": f"internal: {exc}",
+                }
+
+        request.app.state.fetch_pool.submit(_run)
+        return RedirectResponse(url="/ui/", status_code=status.HTTP_303_SEE_OTHER)
+
+    @app.post("/ui/catalog/delete")
+    def ui_catalog_delete(
+        request: Request,
+        name: str = Form(...),
+        _auth: None = Depends(_require_ui_auth),
+    ) -> RedirectResponse:
+        store = request.app.state.catalog_store
+        store.delete(name)
+        request.app.state.fetch_states.pop(name, None)
+        return RedirectResponse(url="/ui/", status_code=status.HTTP_303_SEE_OTHER)
+
+    # ---------- feature routers --------------------------------------
+    #
+    # Catalog + blob + artifacts routes live at the same URL shape they
+    # had in the trio (``/catalog``, ``/b/``, ``/artifacts/``) so
+    # operator muscle memory + iPXE templates keep working.
+    app.include_router(catalog_router)
 
     return app
 
