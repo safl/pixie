@@ -35,9 +35,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import IO, Any, TypeAlias
 
-from pixie import oras
-
-from pixie import images
+from pixie import images, oras
 
 # ``cancel`` callbacks return True to abort an in-flight flash. The
 # flash code polls ~4Hz from a watchdog thread; on True it terminates
