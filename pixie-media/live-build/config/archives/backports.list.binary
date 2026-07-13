@@ -1,0 +1,19 @@
+# trixie-backports for the running live env's apt.
+#
+# Companion to backports.list.chroot. The .chroot variant only
+# affects apt while live-build is building the chroot; the .binary
+# variant lands in the final image's /etc/apt/sources.list.d/ so
+# an operator running ``sudo apt-get update`` from tty2 (e.g. to
+# install lynx for debugging a broken catalog source, or to pull
+# a newer module) sees the same view apt had at bake time.
+#
+# Without this file, the runtime apt only knows ``trixie main``;
+# the operator's ``apt-get update`` succeeds against main but
+# ``apt-get install <package>/trixie-backports`` would fail with
+# "no installation candidate". Worse: any apt source the operator
+# pulled in via cloud-init / their own /etc/apt/sources.list.d
+# entry might be missing pieces.
+#
+# Pairs with config/preferences/backports.pref.binary, which pins
+# the same package set at runtime as the chroot pin does.
+deb http://deb.debian.org/debian trixie-backports main non-free-firmware

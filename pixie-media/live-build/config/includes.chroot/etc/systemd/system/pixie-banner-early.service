@@ -1,0 +1,20 @@
+[Unit]
+Description=pixie boot banner -- step 1 of 3 (early)
+Documentation=https://github.com/safl/pixie
+# Ordered as early as possible: just after the kernel hands
+# off to systemd, before sysinit.target completes. The
+# operator's first visible pixie identity marker.
+DefaultDependencies=no
+Before=sysinit.target
+# Don't block on anything; this is a print statement.
+RefuseManualStop=yes
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/pixie-boot-banner early
+StandardOutput=journal+console
+StandardError=journal+console
+RemainAfterExit=yes
+
+[Install]
+WantedBy=sysinit.target

@@ -1,0 +1,26 @@
+
+======================================================================
+  pixie __PIXIE_VERSION__ live env
+
+  ``pixie-on-tty1.service`` runs on tty1 unconditionally. When
+  ``pixie.server=URL`` + ``pixie.mac=MAC`` are on the kernel command
+  line (set by ``ipxe_tui.j2`` / ``ipxe_flash.j2`` for PXE boots),
+  ``pixie`` GETs ``<server>/pxe/<mac>/plan`` and dispatches:
+
+      mode=auto        -> flash without prompts, then reboot.
+      mode=interactive -> drop into the wizard.
+      mode=local       -> print a notice and exit cleanly.
+
+  USB-local (no cmdline args) falls back to scanning the local
+  image-root directory. See ``journalctl -u pixie-on-tty1`` for
+  details.
+
+  Alt+F2 (through Alt+F6) drops into a root shell on the alternate
+  VTs for diagnostics; Alt+F1 returns to ``pixie``.
+
+  Remote diagnostics: sshd is up on port 22.
+      ssh root@\4      password: pixie
+  (lab credential -- assumes the live env runs on a trusted segment)
+======================================================================
+
+pixie __PIXIE_VERSION__ on \n (\l)

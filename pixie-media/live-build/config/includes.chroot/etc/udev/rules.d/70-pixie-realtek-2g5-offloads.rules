@@ -1,0 +1,43 @@
+# Disable suspect NIC offloads on Realtek 2.5GbE interfaces at
+# link-up.
+#
+# Long-standing Realtek RTL8125 / RTL8125B / RTL8126 regression:
+# the hardware claims TSO (TCP segmentation offload), GSO
+# (generic segmentation offload), GRO (generic receive offload),
+# and TX checksum offload, but in some firmware revisions emits
+# malformed packets that peers (Debian apt mirrors, OCI
+# registries, etc.) drop without telling the sender. Symptoms
+# from the operator's perspective:
+#
+#   * DHCP succeeds (small packets, no offloads needed).
+#   * ICMP succeeds (small packets).
+#   * Any TCP transfer larger than a few packets stalls or
+#     fails entirely. ``apt-get update`` errors with
+#     ``Could not connect`` or ``Failed to fetch``. The live
+#     env's ``pixie`` can't reach catalog.toml. Image fetches
+#     hang mid-transfer.
+#
+# Disabling the offloads at the kernel-driver level forces the
+# stack to do the segmentation + checksum in software. ~3-5%
+# CPU cost on a sustained 2.5GbE transfer (which the mini-PCs
+# this affects have plenty of headroom for) for "the link
+# actually works".
+#
+# Fires for both ``r8125`` (out-of-tree DKMS) and ``r8169``
+# (in-tree) because we can't always tell at bake time which
+# driver the operator's appliance will end up with -- the modprobe
+# alias prefers r8125 for RTL8125/RTL8126 device IDs, but a
+# kernel update or operator override could put r8169 back in
+# play. The udev rule fires on whichever driver bound the device.
+#
+# ``ATTR{type}=="1"`` filters to ethernet interfaces (skips
+# tap / bridge / etc. that NetworkManager creates later).
+#
+# RUN+= runs as a one-shot when the device becomes ready. The
+# offload state persists across NetworkManager link cycles -- the
+# kernel keeps the disable setting until module unload.
+ACTION=="add", SUBSYSTEM=="net", ATTR{type}=="1", DRIVERS=="r8125", \
+    RUN+="/sbin/ethtool -K $env{INTERFACE} tso off gso off gro off lro off tx-checksum-ip-generic off"
+
+ACTION=="add", SUBSYSTEM=="net", ATTR{type}=="1", DRIVERS=="r8169", \
+    RUN+="/sbin/ethtool -K $env{INTERFACE} tso off gso off gro off lro off tx-checksum-ip-generic off"

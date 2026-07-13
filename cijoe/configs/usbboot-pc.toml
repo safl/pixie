@@ -1,0 +1,37 @@
+# pixie USB live appliance - build configuration
+#
+# Drives Debian's live-build to produce a hybrid ISO that boots both
+# from CD media and from a USB stick (BIOS + UEFI). The ISO ships
+# uncompressed (``pixie-usbboot-pc-x86_64.iso``) at ~200 MiB: PIXIE_IMAGES is
+# just 32 MiB at bake time (auto-grows to fill the stick on first boot
+# via ``pixie-usb-grow.service``), so the artifact is comfortably under
+# GitHub's 2 GiB per-release-asset limit without compression.
+#
+# Operators on a GUI flasher (Etcher / RPi Imager / Rufus DD-mode)
+# open the .iso directly -- no decompress step. CLI:
+#
+#     dd if=pixie-usbboot-pc-x86_64.iso of=/dev/sdX bs=4M
+#
+# Ventoy users: drop the .iso onto the Ventoy data partition; no
+# decompress step needed since v0.25.4.
+#
+# This is the live-build replacement for an earlier cloud-init bake
+# of the ``usbboot-pc`` variant; the cloud-init path was retired in
+# favour of live-build's iso-hybrid output.
+#
+# Usage:
+#   cijoe tasks/usbboot-pc.yaml --config configs/usbboot-pc.toml --monitor
+# (or via the Makefile dispatcher: ``make build VARIANT=usbboot-pc``)
+
+[pixie]
+variant = "usbboot-pc"
+hostname = "pixie-usb"
+timezone = "UTC"
+
+[cijoe.workflow]
+fail_fast = true
+
+# Where the published artifact lands. Mirrors the netboot-pc
+# variant's default so all images live under one tree.
+[system-imaging.images.pixie-usbboot-pc-x86_64-iso]
+publish.dir = "{{ local.env.HOME }}/system_imaging/disk"

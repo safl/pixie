@@ -1,0 +1,12 @@
+# trixie-backports for newer kernel + firmware blobs.
+#
+# Why: stock trixie ships kernel 6.12.x; some recent consumer NICs
+# (Realtek RTL8125/8126 2.5GbE on mini-PCs, Intel I225/I226) and
+# WiFi (rtw89, mt7925) only see solid in-tree driver support in
+# 6.13+. Backports rebuilds the latest stable kernel from sid/
+# testing for trixie users; same archive key, same channel.
+#
+# Pairs with config/preferences/backports.pref.chroot, which pins
+# the kernel + firmware packages to backports so apt picks the
+# newer versions during the chroot install phase.
+deb http://deb.debian.org/debian trixie-backports main non-free-firmware

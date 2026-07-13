@@ -1,0 +1,23 @@
+[Unit]
+Description=pixie boot banner -- step 3 of 3 (multi-user reached)
+Documentation=https://github.com/safl/pixie
+# Just after multi-user.target. The banner is informational --
+# DO NOT add ``Before=pixie-on-tty1.service`` here even though
+# it would read nicely: that unit is itself ``WantedBy=multi-
+# user.target``, so ordering this unit ``Before=`` it while also
+# being ``After=multi-user.target`` creates an ordering cycle.
+# systemd silently breaks the cycle by dropping one of the units
+# from the boot transaction. Same trap as the server's
+# ``pixie-banner-late.service`` -- surfaced on v0.22.4 when pixie-web
+# got dropped on the server appliance.
+After=multi-user.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/pixie-boot-banner late
+StandardOutput=journal+console
+StandardError=journal+console
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,11 @@
+# Pin linux-image-amd64 + firmware-* to trixie-backports for the
+# running live env's apt. Companion to backports.pref.chroot
+# (which only affects the chroot during the bake).
+#
+# Without this file, an operator who ran ``apt-get install
+# linux-image-amd64`` at runtime would get the trixie version
+# rather than the newer backports build the live env was baked
+# against. The pin keeps runtime + bake-time on the same archive.
+Package: linux-image-amd64 linux-image-*-amd64 linux-headers-amd64 linux-headers-*-amd64 firmware-* intel-microcode amd64-microcode
+Pin: release a=trixie-backports
+Pin-Priority: 990

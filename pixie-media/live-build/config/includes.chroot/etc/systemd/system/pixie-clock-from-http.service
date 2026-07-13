@@ -1,0 +1,31 @@
+[Unit]
+Description=Step system clock from HTTP Date header (fallback when NTP fails)
+Documentation=https://github.com/safl/pixie
+# Run after the network is up enough to do an HTTP request, and
+# after systemd-timesyncd has had a chance to fix the clock the
+# proper way. If timesyncd succeeded, the script's "clock
+# already within 60s" gate makes it a no-op. If timesyncd
+# couldn't reach NTP (air-gapped lab), this kicks in.
+After=network-online.target systemd-timesyncd.service
+Wants=network-online.target
+# Run BEFORE anything that does package install / image pull /
+# signature verification so the corrected clock is in place by
+# the time apt, oras, or pixie-flash inspect it.
+Before=apt-daily.service pixie-on-tty1.service
+
+[Service]
+Type=oneshot
+# pixie-trace hooks: see pixie-usb-grow.service for the rationale.
+ExecStartPre=/usr/local/sbin/pixie-trace pixie-clock-from-http starting
+ExecStart=/usr/local/sbin/pixie-clock-from-http
+ExecStartPost=/usr/local/sbin/pixie-trace pixie-clock-from-http ready
+RemainAfterExit=yes
+StandardOutput=journal
+StandardError=journal
+# Bounded total runtime: 3 curl attempts at 10s each + parsing
+# overhead is well under 60s. Hard cap at 90s so a wedged HTTP
+# fetch can't delay boot indefinitely.
+TimeoutStartSec=90s
+
+[Install]
+WantedBy=multi-user.target

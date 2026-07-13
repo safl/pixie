@@ -1,0 +1,35 @@
+#!/bin/sh
+# 0700-pixie-clock-from-http.hook.chroot - finalise the clock-from-
+# HTTP fallback service.
+#
+# The script and unit file are already in the chroot via the
+# includes.chroot/ tree. This hook:
+#
+#   * Makes the script executable (live-build doesn't preserve
+#     +x by default on files coming from includes.chroot/).
+#   * Enables systemd-timesyncd (the primary NTP path) -- it
+#     ships in trixie but isn't enabled by default.
+#   * Enables pixie-clock-from-http.service (the HTTP fallback).
+#
+# Belt-and-braces ``ln -sf`` for both units to survive
+# ``systemctl enable`` no-op edge cases in live-build chroots
+# (see 0900-pixie-enable-services.hook.chroot for the long form of
+# why).
+
+set -eu
+
+chmod 0755 /usr/local/sbin/pixie-clock-from-http
+
+systemctl enable systemd-timesyncd.service 2>/dev/null || true
+systemctl enable pixie-clock-from-http.service 2>/dev/null || true
+
+mkdir -p /etc/systemd/system/sysinit.target.wants \
+         /etc/systemd/system/multi-user.target.wants
+
+# systemd-timesyncd's vendor preset puts it in sysinit.target.wants
+# (it's a sysinit-class service). Belt-and-braces symlink to match.
+ln -sf /usr/lib/systemd/system/systemd-timesyncd.service \
+       /etc/systemd/system/sysinit.target.wants/systemd-timesyncd.service
+
+ln -sf /etc/systemd/system/pixie-clock-from-http.service \
+       /etc/systemd/system/multi-user.target.wants/pixie-clock-from-http.service

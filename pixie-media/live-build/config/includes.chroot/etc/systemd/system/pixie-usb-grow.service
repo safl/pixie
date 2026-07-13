@@ -1,0 +1,65 @@
+[Unit]
+Description=Grow PIXIE_IMAGES partition to fill the USB on first boot
+Documentation=https://github.com/safl/pixie
+# Skip cleanly when the USB doesn't have a PIXIE_IMAGES partition
+# (Ventoy / loopback boot path -- pixie-images-discover.service
+# handles those).
+ConditionPathExists=/dev/disk/by-label/PIXIE_IMAGES
+# Wait for the by-label device unit so the ConditionPathExists
+# above evaluates after udev has created the symlink. Without
+# this, on fast-USB boards (GMKTec NUCBOX G10, etc.) the unit
+# can be evaluated before udev finishes its blkid probe; the
+# condition fails silently and the partition stays at the
+# bake-time size. systemd auto-generates a ``.device`` unit
+# for every udev-tracked device; the escaped-name form here is
+# what ``systemd-escape -p`` produces from the by-label path.
+Wants=dev-disk-by\x2dlabel-PIXIE_IMAGES.device
+After=dev-disk-by\x2dlabel-PIXIE_IMAGES.device
+# Must run BEFORE the mount unit so it sees the grown partition.
+Before=var-lib-pixie-images.mount pixie-images-discover.service pixie-on-tty1.service
+After=local-fs.target systemd-udev-settle.service
+# Cap the JOB (dep wait + ExecStart) at 20s. The ``After=...
+# PIXIE_IMAGES.device`` above is essential on USB-boot (it gives
+# udev time to create the by-label symlink before the
+# ConditionPathExists check), but on a netboot-only boot the
+# label never appears -- systemd's DefaultDeviceTimeoutSec (90s)
+# would otherwise tick down before downstream units could
+# proceed, wasting ~87s of every PXE boot for no benefit.
+# Measured empirically on a local QEMU PXE boot of 0.55.8: the
+# gap between pixie-clock-from-http ready and pixie-images-discover
+# starting was 86.8s, almost entirely this device wait. With
+# JobTimeoutSec=20s, the job aborts at 20s when the device
+# never appears; the unit is marked failed (harmless: the
+# ConditionPathExists would have skipped the ExecStart anyway,
+# and downstream units depending on pixie-usb-grow check unit
+# active-or-failed, not just active). 20s rather than the
+# tight 10s the project memory suggested because the legitimate
+# USB path's ExecStart (mount + sfdisk + mkfs.exfat + mount +
+# touch + umount) takes 8-18s on typical hardware; 20s leaves
+# enough headroom that a successful grow lands inside the cap.
+JobTimeoutSec=20s
+
+[Service]
+Type=oneshot
+# pixie-trace hooks bracket the real work with [ T ] pixie-trace:
+# ``pixie-usb-grow starting`` / ``pixie-usb-grow ready`` lines via
+# /dev/kmsg, so an operator following IPMI SoL or running
+# ``dmesg -T`` post-boot can see the per-unit wall-clock cost of
+# this step. Same hooks live on pixie-clock-from-http,
+# pixie-images-discover, and pixie-on-tty1; together they triangulate
+# where multi-second boot delays actually live.
+ExecStartPre=/usr/local/sbin/pixie-trace pixie-usb-grow starting
+ExecStart=/usr/local/sbin/pixie-usb-grow
+ExecStartPost=/usr/local/sbin/pixie-trace pixie-usb-grow ready
+RemainAfterExit=yes
+StandardOutput=journal
+StandardError=journal
+# Hard cap on total runtime. parted resizepart + mkfs.exfat are
+# seconds-scale on any USB; tar archive + restore of a ~1 GiB
+# pre-baked pixie-server image dominates the wall clock at ~30-60s
+# on USB 3.0. 120s leaves ample headroom while preventing a
+# wedged mkfs from delaying boot indefinitely.
+TimeoutStartSec=120s
+
+[Install]
+WantedBy=multi-user.target

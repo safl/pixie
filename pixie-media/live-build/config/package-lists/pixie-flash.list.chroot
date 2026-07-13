@@ -1,0 +1,37 @@
+# Packages pixie needs to flash a target disk and run
+# ``pixie-on-tty1.service`` (the merged dispatcher). qemu-utils for
+# qemu-img, parted for partitioning, zstd for .img.zst, nvme-cli
+# for block-device discovery. ``util-linux`` is intentionally
+# absent: it's ``Essential: yes`` in Debian and always installed
+# by debootstrap.
+
+# pixie runtime. ``python3-venv`` ships ensurepip, so the venv created
+# by ``hooks/normal/0500-pixie-install.hook.chroot`` has its own pip;
+# no system ``python3-pip`` needed.
+python3
+python3-venv
+git
+curl
+ca-certificates
+
+# pixie flash dependencies
+qemu-utils
+nvme-cli
+parted
+gdisk
+dosfstools
+e2fsprogs
+exfatprogs
+zstd
+
+# Register a UEFI NVRAM boot entry for the flashed disk after a flash.
+# A dd'd image carries an EFI System Partition + bootloader but NO
+# firmware boot entry, so a UEFI box has nothing in its boot order and
+# falls back to netboot. ``pixie`` runs efibootmgr post-flash to point the
+# firmware at the ESP's fallback loader. (UEFI-only; no-op on BIOS.)
+efibootmgr
+
+# Full hardware inventory (CPU / RAM / NICs+MACs / peripherals) that
+# ``pixie`` collects via ``lshw -json`` and posts to /pxe/{mac}/inventory
+# on every live-env boot. Supplementary to the lsblk disk inventory.
+lshw

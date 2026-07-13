@@ -1,0 +1,148 @@
+# Minimum arch-agnostic packages for a netboot live env: just enough
+# to boot to a console. The pixie runtime + flash dependencies
+# (qemu-utils, nvme-cli, parted, zstd, python3, etc.) come from
+# ``pixie-flash.list.chroot``.
+#
+# The amd64 kernel + microcode + r8125 DKMS build env are emitted at
+# bake time by ``auto/config`` into a sibling file
+# ``pixie-arch.list.chroot`` (both live-build variants are amd64; the
+# arm64 usbboot-rpi flasher does not use live-build). live-build 3.0~a57's
+# per-arch suffix scheme (``.list.chroot_<arch>``) is not honoured
+# reliably on the trixie / Ubuntu lb shipping in our build
+# environment, so the package list lives in ``auto/config`` (which
+# always runs first).
+live-boot
+live-config
+live-tools
+# Plymouth was retired in v0.22.1: plymouth-quit-wait wedged on
+# certain Intel iGPUs (MS-01 / EPYC bring-up box) and the mascot
+# splash didn't justify the workaround stack. ``plymouth.enable=0``
+# stays on the kernel cmdline as belt-and-braces, but the package
+# is not installed in either variant (no ``pixie-plymouth.list.chroot``).
+
+# Vendor firmware blobs. ``--firmware-chroot true`` in
+# ``auto/config`` pulls the ``firmware-linux-nonfree`` metapackage,
+# which Depends on every individual ``firmware-*`` package
+# (realtek, iwlwifi, atheros, brcm80211, mediatek, ath11k, bnx2/
+# bnx2x, netronome, nvidia-graphics, amd-graphics, misc-nonfree,
+# ...). Layered on top, ``config/archives/backports.list.chroot``
+# + ``config/preferences/backports.pref.chroot`` make apt resolve
+# each ``firmware-*`` to its trixie-backports version, which has
+# noticeably newer blobs (iwlwifi MAC firmware, realtek RTL8851/
+# 8852 WiFi, amdgpu / i915 microcode revisions). A curated
+# subset is too narrow: Realtek WiFi/BT chipsets alone span half
+# a dozen firmware packages and consumer mini-PCs cycle them
+# quickly.
+
+# ``firmware-realtek`` is explicit (also pulled transitively by
+# firmware-linux-nonfree) so the package list visibly advertises
+# Realtek NIC support: in particular the RTL8125 / RTL8125B /
+# RTL8126 2.5GbE chipset on GMKTec NUCBOX G10 (Ryzen 5) and the
+# wider Realtek 2.5GbE mini-PC ecosystem (BeeLink SER, Minisforum
+# UM, etc.). The blobs (``rtl_nic/rtl8125a-3.fw``,
+# ``rtl_nic/rtl8125b-2.fw``, ``rtl_nic/rtl8126a-3.fw`` etc.) load
+# at NIC-init time; without them the r8169 in-tree driver / the
+# r8125 out-of-tree DKMS variant probe and fail.
+firmware-realtek
+
+# CPU microcode + the amd64 kernel are emitted into
+# ``pixie-arch.list.chroot`` by ``auto/config`` (both live-build
+# variants are amd64).
+
+# ``ethtool`` is used by the offload-disable udev rule
+# (``70-pixie-realtek-2g5-offloads.rules``) that fires on RTL8125 /
+# RTL8126 link-up to turn off TSO / GSO / GRO / TX checksum
+# offload, working around the long-standing Realtek 2.5GbE
+# offload regression where the hardware claims checksum +
+# segmentation offload but emits malformed packets that peers
+# drop. Whether the specific G10 / G5 / etc. board this happens
+# to needs the offloads off is hardware-by-hardware; the rule
+# is narrow (only fires on r8125 / r8169 drivers) so leaving it
+# in place is cheap and harmless on non-Realtek hardware. Also
+# useful at runtime for diagnostics: ``ethtool -k eth0`` to read
+# offload state, ``-S`` for stats, ``-i`` for driver / firmware.
+ethtool
+
+# Time synchronisation. The live env boots with whatever the
+# target's RTC reports, which can be wildly wrong on consumer
+# mini-PCs with dead BIOS batteries (GMKTec NUCBOX G10 boots with
+# RTC ~6 months in the past). systemd's bake-time clock-epoch
+# floor advances the system clock to roughly when the squashfs
+# was created, but that's still days-to-weeks behind real time
+# by the time an operator boots the .iso. Symptoms when the
+# clock is behind:
+#
+#   * ``apt-get update`` fails: sqv rejects InRelease signatures
+#     as "Not live until <future timestamp>" because the
+#     signature's creation time is after the system clock.
+#   * ``oras pull`` fails on freshly-rotated registry certs
+#     whose NotBefore is after the system clock.
+#   * Any signature-timestamp-aware verification (cosign /
+#     notation / similar) fails for the same reason.
+#
+# ``systemd-timesyncd`` is the lightweight SNTP client shipped
+# with systemd. Once enabled it queries the default Debian NTP
+# pool (``[0-3].debian.pool.ntp.org``) on every network-up event
+# and steps the clock to the truth. Cost: ~200 KiB on disk,
+# one-shot ~2 KiB UDP exchange per sync.
+#
+# Belt-and-braces fallback for air-gapped labs (no internet,
+# only LAN with the pixie-web server reachable):
+# ``pixie-clock-from-http.service`` reads the HTTP ``Date:`` header
+# from the kernel-cmdline ``pixie.server=`` URL and ``date -s``'s
+# it. Installed by hooks/normal/0700-pixie-clock-from-http.hook.chroot
+# alongside its companion script. timesyncd wins if NTP works;
+# otherwise the HTTP fallback rescues the air-gapped case.
+systemd-timesyncd
+# ``curl`` is the HTTP client used by the clock-from-http
+# fallback. Already part of pixie-flash's runtime list but
+# repeated here so the base list is self-contained for the
+# pixie-netboot variant which doesn't pull pixie-flash.
+curl
+
+# ``openssh-server`` so an operator (or a debugging session) can
+# ssh into the live env when the local console is unusable --
+# the GMKTec NUCBOX G5 boots Trixie far enough to reach
+# multi-user but pixie-on-tty1 didn't visibly take tty1 there,
+# and the G5's USB keyboard doesn't switch ttys via
+# Ctrl+Alt+F2 so console-side diagnosis was blocked. With sshd
+# baked in, the next PXE / USB boot answers on port 22.
+#
+# Credential: root password is set to ``pixie`` by
+# hooks/normal/0800-pixie-ssh-live.hook.chroot; PasswordAuthentication
+# stays on, PermitRootLogin yes. Same lab-trust model as the
+# pixie-server appliance's ``pixie:pixie`` / ``odus:odus.321`` -- this is
+# the live env an operator boots themselves on bare metal in a
+# trusted segment, not a service exposed to a hostile network.
+# Every boot regenerates host keys via the standard openssh-
+# server postinst, so there is no shared-host-key problem across
+# operators downloading the same .iso.
+openssh-server
+
+# The r8125 DKMS build environment (dkms / build-essential /
+# linux-headers-amd64) lives in ``pixie-base.list.chroot_amd64``:
+# the r8125 driver is x86-only (RTL8125 / RTL8126 chipsets sit on
+# x86 mini-PCs, not Pi boards), and the matching kernel headers
+# only exist for amd64.
+
+# NetworkManager pulls in ``nmtui`` (a curses-friendly network picker)
+# and the daemon that backs it. Use case: operator boots pixie-usb on
+# a WiFi-only laptop / mini-PC and needs to associate to an SSID
+# before ``pixie`` can hit ``oras://`` image URLs. Drops to tty2 with
+# Ctrl+Alt+F2, runs ``nmtui``, joins the network, returns to ``pixie``
+# on tty1. The live env has no networkd ``.network`` files in
+# its chroot, so NM is the sole network manager here and
+# nothing competes for interface ownership.
+network-manager
+
+# Hardware diagnosis tooling. ``lshw`` (the inventory uploader)
+# does a structured tree dump but is verbose for at-the-console
+# triage; ``lspci -k`` / ``lsusb -t`` are the muscle memory an
+# operator reaches for when a NIC isn't probing or a USB device
+# is missing. Cheap on disk (~1 MiB each), saves a /sys-walk
+# every time something doesn't show up. Added after the ASUS
+# PN51-E1 / Secure-Boot r8125-rejection triage, where the
+# missing ``lspci`` cost an extra round of /sys/bus/pci/devices/
+# uevent reads before the NIC chipset was even identified.
+pciutils
+usbutils

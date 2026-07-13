@@ -1,0 +1,31 @@
+# pixie network-boot live env - build configuration
+#
+# Drives Debian's live-build (``--binary-images netboot``) to
+# produce a kernel + initrd + squashfs trio that pixie hosts
+# over HTTP for PXE clients to chain into via iPXE. Same chroot
+# config tree as the ``usbboot-pc`` variant; only the binary-images
+# output mode differs (selected by ``PIXIE_VARIANT=netboot-pc`` in
+# the live-build env, which is the default).
+#
+# Renamed from ``live-x86`` to ``netboot-pc``: the previous name
+# was ambiguous because ``usbboot-pc`` is also a "live" image (live-
+# build, ephemeral squashfs+tmpfs); the actual distinction is the
+# delivery mechanism (network boot vs USB stick).
+#
+# Usage:
+#   cijoe tasks/netboot-pc.yaml --config configs/netboot-pc.toml --monitor
+# (or via the Makefile dispatcher: ``make build VARIANT=netboot-pc``)
+
+[pixie]
+variant = "netboot-pc"
+hostname = "pixie-netboot"
+timezone = "UTC"
+
+[cijoe.workflow]
+fail_fast = true
+
+# Where the published artifacts land. Mirrors the usbboot-pc
+# variant's default so all images live under one
+# directory tree.
+[system-imaging.images.pixie-netboot-pc-x86_64]
+publish.dir = "{{ local.env.HOME }}/system_imaging/disk"

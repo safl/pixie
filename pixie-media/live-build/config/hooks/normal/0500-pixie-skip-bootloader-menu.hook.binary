@@ -1,0 +1,277 @@
+#!/bin/sh
+# 0500-pixie-skip-bootloader-menu.hook.binary - skip the live-build
+# default Debian boot menu and go straight to the pixie live env.
+#
+# Problem this fixes: live-build's default bootloader configs
+# render a Debian-branded menu ("Live system" / "Live system
+# (failsafe)" / etc.) with a 30-second auto-boot countdown.
+# Operators see "Debian Trixie" first and wonder if they put pixie
+# on the stick at all -- bad first impression for what's
+# supposed to be the pixie USB image.
+#
+# Fix: make the menu invisible on UEFI (grub-efi
+# ``timeout_style=hidden`` + ``timeout=0``) and effectively
+# instant on legacy BIOS (syslinux ``timeout 1`` =  0.1s + ``prompt
+# 0``). The default boot entry that live-build emits is the
+# normal "Live system" path, which is what we want; we just
+# don't want operators to see / wait through a Debian menu to
+# get there. Operators who need recovery boots (rescue, edit
+# kernel cmdline) can hold Esc / Shift during firmware POST to
+# interrupt; modern grub respects that even with hidden menus.
+#
+# Re-brands menu titles too (``Debian Live`` -> ``pixie``) so
+# any flash of the menu that does render identifies as pixie,
+# not Debian. The splash image is overridden separately via
+# ``config/bootloaders/syslinux/splash.png`` and
+# ``config/bootloaders/grub-efi/splash.png`` (both files are
+# copies of ``src/pixie/web/_static/pixie-mascot.png``); live-build
+# copies those into the binary-stage bootloader directories
+# during its normal build flow, no edit needed in this hook.
+#
+# Hook stage: ``binary``. Runs after live-build has assembled
+# ``binary/isolinux/`` and ``binary/boot/grub/`` from its
+# bootloader templates, before xorriso wraps everything into
+# the hybrid ISO. No-op on the netboot-pc build since that
+# variant doesn't use a bootloader menu at all (PXE chain
+# loads the kernel directly).
+
+set -eu
+
+# Live-build's ``binary_hooks`` does ``cd binary`` before running
+# the hook, so our CWD is ``<build-dir>/binary/`` rather than the
+# build root. Step out so all our ``binary/...`` paths below
+# resolve correctly. Verified in
+# ``/usr/lib/live/build/binary_hooks`` line 50:
+#
+#   cd binary
+#   ../"${HOOK}" || ...
+#
+# The hook process's ``cd ..`` only affects this shell, not
+# binary_hooks itself (which restores its CWD via $OLDPWD after
+# the hook returns).
+cd ..
+
+# No-op on builds that don't emit an isolinux/grub-efi tree:
+# the netboot-pc variant emits a plain kernel+initrd+squashfs
+# trio (PXE chains the kernel directly), and the usbboot-rpi arm64
+# variant boots via the Pi firmware chain (no syslinux / no grub).
+# In both cases ``binary/isolinux/`` and ``binary/boot/grub/``
+# never exist, so this hook has nothing to do. Skip cleanly so
+# the bake doesn't fail trying to operate on absent directories.
+if [ ! -d binary/isolinux ] && [ ! -d binary/boot/grub ]; then
+    echo "0500-pixie-skip-bootloader-menu: no isolinux/grub tree; skipping (Pi or netboot build)" >&2
+    exit 0
+fi
+
+# Hook-ran sentinel. ``cijoe/scripts/usb_iso_build.py``'s verify
+# step asserts this file exists post-build, catching the "hook
+# didn't actually execute" class of bugs.
+touch binary/.pixie-bootloader-hook-ran
+
+# ---- nuke gfxboot's binary entirely ----------------------------------------
+#
+# Belt-and-suspenders: regardless of whether the sed below catches
+# the ``UI gfxboot.c32 ...`` directive, search the whole binary
+# tree for the gfxboot module + its bootlogo asset and delete them.
+# Without ``gfxboot.c32`` syslinux can't load it, so any ``UI``
+# directive we miss falls through to text-mode rendering
+# automatically.
+#
+# The ``find`` form covers any subdirectory live-build's binary
+# stage might emit (path drifts release-to-release); earlier hook
+# versions enumerated specific paths and missed because the actual
+# location had moved. ``-print -delete`` lets us see what got
+# deleted in the build log.
+
+echo "0500-pixie-skip-bootloader-menu: searching binary/ for menu binaries..." >&2
+# ``vesamenu.c32`` is what trixie's live-build actually uses
+# (the ``default vesamenu.c32`` line in
+# ``/usr/share/live/build/bootloaders/isolinux/isolinux.cfg``).
+# Delete it AND the legacy gfxboot path. Without these, syslinux
+# falls through to its built-in text-mode prompt, which our
+# ``TIMEOUT 1 / PROMPT 0`` settings boot immediately.
+find binary -type f \
+    \( -name 'gfxboot.c32' -o -name 'vesamenu.c32' \
+       -o -name 'menu.c32' \
+       -o -name 'bootlogo' -o -name 'bootlogo.*' \) \
+    -print -delete 2>/dev/null || true
+
+# Diagnostic dump: list every file under binary/isolinux/ and
+# binary/syslinux/ so a future regex / path-pattern miss surfaces
+# in the build log instead of waiting for a hardware test to fail.
+echo "==== binary/isolinux/ contents ====" >&2
+ls -la binary/isolinux/ 2>&1 | head -40 >&2 || true
+echo "==== binary/syslinux/ contents (if any) ====" >&2
+ls -la binary/syslinux/ 2>&1 | head -40 >&2 || true
+
+# ---- syslinux / isolinux (legacy BIOS) -------------------------------------
+#
+# Two layers in play here that earlier hook versions handled
+# only partly:
+#
+#   1. ``isolinux.cfg`` / ``syslinux.cfg`` -- the master config
+#      that syslinux loads first. Contains the ``UI``,
+#      ``DEFAULT``, ``TIMEOUT``, ``PROMPT`` directives that
+#      decide whether a menu renders at all and which graphical
+#      backend renders it. Earlier hook versions never touched
+#      this file -> ``UI gfxboot.c32 bootlogo`` stayed in place
+#      and Debian's "yellow hard hat + Debian Trixie" splash
+#      rendered regardless of what we did to the included
+#      menu.cfg files.
+#   2. ``menu.cfg`` / ``live.cfg`` / ``stdmenu.cfg`` -- INCLUDEd
+#      from isolinux.cfg, contain the actual menu entries +
+#      submenu timeouts. Earlier hook versions edited these.
+#
+# Fix: replace ``UI gfxboot.c32 ...`` with ``UI menu.c32``. That
+# drops gfxboot entirely (no graphical splash from its embedded
+# bootlogo artwork) and falls back to the plain syslinux text
+# menu. Then force ``TIMEOUT 1`` + ``PROMPT 0`` in the master
+# config so the menu auto-boots in 0.1s without ever showing
+# the ``boot:`` prompt. Combined with the per-included-file
+# timeout edits we already did, this fully suppresses the
+# menu render on BIOS boot.
+#
+# Operators who want recovery boots (rescue / edit kernel
+# cmdline) can still hit Esc / Tab during the brief (sub-100ms)
+# window; modern syslinux respects that even with TIMEOUT 1.
+
+# Master config: nuke gfxboot, force timeout 1 + prompt 0.
+for cfg in \
+    binary/isolinux/isolinux.cfg \
+    binary/syslinux/syslinux.cfg
+do
+    [ -f "$cfg" ] || continue
+    echo "0500-pixie-skip-bootloader-menu: editing $cfg" >&2
+    # Strip the menu UI directives so syslinux falls through to
+    # its built-in text-mode behaviour (which our TIMEOUT 1 /
+    # PROMPT 0 settings boot immediately). Live-build's default
+    # template uses ``default vesamenu.c32`` -- in syslinux that
+    # loads vesamenu as the UI module. We just deleted vesamenu.c32
+    # above, so leaving the directive errors out at boot. Replace
+    # it with ``default live`` (the LABEL defined in menu.cfg /
+    # live.cfg), so syslinux boots that label directly.
+    # The default LABEL must match a real label in the INCLUDE'd
+    # menu.cfg. live-build trixie+ uses ``label live-amd64`` (the arch
+    # suffix), NOT ``label live``. Pointing ``default live`` at a
+    # non-existent label makes SYSLINUX treat the word as a filename
+    # and the boot fails with ``Loading live... failed: No such file
+    # or directory`` -- which is exactly how v0.25.5 retags #3 + #4
+    # surfaced. ``live-amd64`` matches the binary's label and so
+    # the auto-boot lands on the LABEL's KERNEL /live/vmlinuz line.
+    sed -i \
+        -e 's/^[[:space:]]*UI[[:space:]]\+\(gfxboot\|vesamenu\|menu\)\.c32.*//I' \
+        -e 's/^[[:space:]]*default[[:space:]]\+\(gfxboot\|vesamenu\|menu\)\.c32.*/default live-amd64/I' \
+        "$cfg"
+    # Force timeout + prompt regardless of what live-build set.
+    sed -i \
+        -e 's/^[[:space:]]*TIMEOUT[[:space:]].*/TIMEOUT 1/' \
+        -e 's/^[[:space:]]*timeout[[:space:]].*/timeout 1/' \
+        -e 's/^[[:space:]]*PROMPT[[:space:]].*/PROMPT 0/' \
+        -e 's/^[[:space:]]*prompt[[:space:]].*/prompt 0/' \
+        "$cfg"
+done
+
+# Included menu configs: same timeout/prompt enforcement +
+# re-brand any leftover "Debian" titles.
+for cfg in \
+    binary/isolinux/menu.cfg \
+    binary/isolinux/live.cfg \
+    binary/isolinux/stdmenu.cfg \
+    binary/syslinux/menu.cfg \
+    binary/syslinux/live.cfg \
+    binary/syslinux/stdmenu.cfg
+do
+    [ -f "$cfg" ] || continue
+    sed -i \
+        -e 's/^[[:space:]]*timeout[[:space:]].*/timeout 1/' \
+        -e 's/^[[:space:]]*prompt[[:space:]].*/prompt 0/' \
+        "$cfg"
+    sed -i \
+        -e 's/Debian Live/pixie __PIXIE_VERSION__/g' \
+        -e 's/Debian GNU\/Linux/pixie __PIXIE_VERSION__/g' \
+        "$cfg"
+done
+
+# Diagnostic dump: master configs first, then a list of every
+# included menu file in case a future regex miss strikes.
+for cfg in \
+    binary/isolinux/isolinux.cfg \
+    binary/syslinux/syslinux.cfg
+do
+    [ -f "$cfg" ] || continue
+    echo "==== $cfg (first 30 lines) ====" >&2
+    head -n 30 "$cfg" >&2 || true
+done
+
+# ---- grub-efi (UEFI) -------------------------------------------------------
+#
+# ``timeout=0`` boots default immediately;
+# ``timeout_style=hidden`` skips menu render entirely so there's
+# nothing for the operator to see, not even a flash. The
+# default entry (the live-system one) is what gets booted.
+#
+# Live-build's grub-efi pipeline emits multiple grub configs and
+# the version drifts release-to-release: the primary used to be
+# ``binary/boot/grub/grub.cfg``, but recent live-build also ships
+# ``binary/boot/grub/loopback.cfg`` (used when grub chain-loads
+# the iso from a Ventoy-style stick) and may stage a stub at
+# ``binary/EFI/boot/grub.cfg``. Earlier hook versions only edited
+# the primary, so on hardware where firmware loaded a different
+# config (or the primary's pattern didn't match) the menu still
+# rendered. Iterate over every ``grub.cfg`` / ``loopback.cfg``
+# under ``binary/`` and apply the same edits to all.
+
+GRUB_CFGS=$(find binary -type f \( -name 'grub.cfg' -o -name 'loopback.cfg' \) 2>/dev/null || true)
+
+if [ -z "$GRUB_CFGS" ]; then
+    echo "0500-pixie-skip-bootloader-menu: no grub.cfg / loopback.cfg under binary/ (BIOS-only build?)" >&2
+fi
+
+for GRUB_CFG in $GRUB_CFGS; do
+    echo "0500-pixie-skip-bootloader-menu: editing $GRUB_CFG" >&2
+
+    # Force timeout=0. Patterns we've seen across live-build versions:
+    #   set timeout=30
+    #   set timeout='30'
+    #   timeout=30
+    # Run all three sed forms; whichever matches takes effect, the
+    # others are no-ops. Use a permissive regex on the right-hand
+    # side so any value (quoted or not) gets replaced.
+    sed -i \
+        -e "s/^[[:space:]]*set[[:space:]]\+timeout[[:space:]]*=.*/set timeout=0/" \
+        -e "s/^[[:space:]]*timeout[[:space:]]*=.*/timeout=0/" \
+        "$GRUB_CFG"
+
+    # Force timeout_style=hidden. Same pattern variants.
+    sed -i \
+        -e "s/^[[:space:]]*set[[:space:]]\+timeout_style[[:space:]]*=.*/set timeout_style=hidden/" \
+        -e "s/^[[:space:]]*timeout_style[[:space:]]*=.*/timeout_style=hidden/" \
+        "$GRUB_CFG"
+
+    # Belt + braces: if neither timeout nor timeout_style appears
+    # in the config (some loopback.cfg variants omit them and
+    # inherit defaults from grub itself), prepend both at the top.
+    if ! grep -q '^set timeout=0' "$GRUB_CFG" && ! grep -q '^timeout=0' "$GRUB_CFG"; then
+        sed -i '1i set timeout=0' "$GRUB_CFG"
+    fi
+    if ! grep -q '^set timeout_style=hidden' "$GRUB_CFG" \
+       && ! grep -q '^timeout_style=hidden' "$GRUB_CFG"; then
+        sed -i '1i set timeout_style=hidden' "$GRUB_CFG"
+    fi
+
+    # Re-brand any menu entry title; grub.cfg lines look like
+    # ``menuentry "Debian GNU/Linux Live (kernel ...)" ...``.
+    sed -i \
+        -e 's/Debian GNU\/Linux Live/pixie __PIXIE_VERSION__/g' \
+        -e 's/Debian GNU\/Linux/pixie __PIXIE_VERSION__/g' \
+        -e 's/Debian Live/pixie __PIXIE_VERSION__/g' \
+        "$GRUB_CFG"
+done
+
+# Diagnostic dump: print the first 30 lines of every grub config
+# so the build log shows exactly what landed in the cooked ISO.
+# Cheap and invaluable when a regex pattern miss strikes again.
+for GRUB_CFG in $GRUB_CFGS; do
+    echo "==== $GRUB_CFG (first 30 lines) ====" >&2
+    head -n 30 "$GRUB_CFG" >&2 || true
+done

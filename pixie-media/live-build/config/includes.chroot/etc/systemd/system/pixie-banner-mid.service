@@ -1,0 +1,19 @@
+[Unit]
+Description=pixie boot banner -- step 2 of 3 (network online)
+Documentation=https://github.com/safl/pixie
+# After the network is up. The mid-boot heartbeat: if the
+# operator sees step 1 but never sees step 2, the wedge is
+# in network bring-up (DHCP timeout, NIC driver hang,
+# systemd-networkd-wait-online stalling, ...).
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/pixie-boot-banner mid
+StandardOutput=journal+console
+StandardError=journal+console
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

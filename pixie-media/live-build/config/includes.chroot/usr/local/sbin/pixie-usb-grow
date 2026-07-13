@@ -1,0 +1,236 @@
+#!/bin/sh
+# pixie-usb-grow: extend the PIXIE_IMAGES partition + filesystem to
+# fill the operator's USB stick on first boot, preserving any
+# baked-in or operator-staged content.
+#
+# The pixie-usb live image is sized to a small minimum so the .iso
+# stays compact (and Ventoy / IP-KVM virtual-media friendly). When
+# an operator flashes it onto a 64 GB / 256 GB / whatever USB
+# stick, the PIXIE_IMAGES partition starts off as the same small
+# minimum and the rest of the stick sits unused. This script
+# extends the partition to fill the disk so the operator gets the
+# full capacity for their image catalog.
+#
+# exFAT doesn't support online resize, so the flow is:
+#
+#   1. Mount PIXIE_IMAGES read-only, archive its content to a tmpfs
+#      staging area (the live env's /tmp is tmpfs in RAM).
+#   2. parted resizepart N 100% on the parent disk.
+#   3. mkfs.exfat -L PIXIE_IMAGES on the resized partition.
+#   4. Mount the new partition read-write, restore the archive,
+#      drop the ``.pixie-grown`` sentinel, unmount.
+#
+# The mount unit (``var-lib-pixie-images.mount``) re-mounts at
+# ``/var/lib/pixie/images`` read-only afterwards.
+#
+# Safeties (the user's stated concerns are long-running / failure
+# / mess-up):
+#
+#   * Hard size cap: if archived content would exceed
+#     ``MAX_CONTENT_MIB`` we bail rather than risk OOM in tmpfs.
+#     The bake-time content is empty (operator-owned image files only)
+#     plus optionally one ``pixie-server.img.gz`` (~1 GiB); 4 GiB cap
+#     is comfortably above that.
+#   * Sentinel ``.pixie-grown`` on the partition prevents re-runs
+#     once the partition has been extended successfully.
+#   * Sentinel ``.pixie-grown-failed`` prevents repeated thrashing
+#     if a run errors mid-flight. Operator removes that file (and
+#     checks ``journalctl -u pixie-usb-grow``) to retry.
+#   * systemd's ``TimeoutStartSec=120s`` on the unit hard-caps
+#     total runtime even if mkfs or tar wedges.
+#
+# Skipped cases (PIXIE_IMAGES untouched):
+#
+#   * Ventoy / BMC virtual-media boot: the .iso is loop-mounted
+#     by the shim, so the kernel sees a single CD-ROM device --
+#     no PIXIE_IMAGES partition exists. ConditionPathExists on the
+#     unit handles this; the script never runs.
+#   * Already grown: ``.pixie-grown`` sentinel present.
+#   * Already tried + failed: ``.pixie-grown-failed`` sentinel
+#     present.
+#   * No free space behind the partition.
+
+set -eu
+
+LABEL=PIXIE_IMAGES
+SENTINEL_OK=.pixie-grown
+SENTINEL_FAILED=.pixie-grown-failed
+SLACK_BYTES=$((16 * 1024 * 1024))  # 16 MiB tolerance for end-of-disk metadata
+MAX_CONTENT_MIB=4096                # 4 GiB ceiling on what we'll archive
+STASH=/run/pixie-usb-grow.tar
+
+STATUS=/run/pixie-usb-grow.status
+
+log() {
+    logger -t pixie-usb-grow -s -- "$@"
+    # Mirror to a status file so the operator can ``cat
+    # /run/pixie-usb-grow.status`` from tty1 to see what happened
+    # without having to grep journalctl. /run is tmpfs (small
+    # cost) and forgotten on reboot, so the file shows the most
+    # recent run's outcome.
+    echo "$(date -u +%FT%TZ) $*" >> "${STATUS}" 2>/dev/null || true
+}
+
+drop_failure_sentinel() {
+    # Best-effort: try to mount the partition and drop the failure
+    # sentinel so the next boot doesn't repeat the failed work.
+    # If the partition is in a bad enough state that we can't even
+    # mount it, the next boot's journal will surface the same
+    # failure.
+    _tmp=$(mktemp -d 2>/dev/null) || return 0
+    if mount -t exfat "${PART}" "${_tmp}" 2>/dev/null; then
+        touch "${_tmp}/${SENTINEL_FAILED}" 2>/dev/null || true
+        sync
+        umount "${_tmp}"
+    fi
+    rmdir "${_tmp}" 2>/dev/null || true
+}
+
+PART=$(readlink -f "/dev/disk/by-label/${LABEL}" 2>/dev/null || true)
+if [ -z "${PART}" ] || [ ! -b "${PART}" ]; then
+    log "no ${LABEL} partition; skipping (Ventoy / BMC loop boot?)"
+    exit 0
+fi
+
+# Resolve the parent disk + partition number.
+# /dev/sda1      -> /dev/sda      part=1
+# /dev/nvme0n1p2 -> /dev/nvme0n1  part=2
+# /dev/mmcblk0p1 -> /dev/mmcblk0  part=1
+PART_BASE=$(basename "${PART}")
+case "${PART_BASE}" in
+    *p[0-9]*)
+        DISK_BASE=$(echo "${PART_BASE}" | sed -E 's/p[0-9]+$//')
+        PARTNUM=$(echo "${PART_BASE}" | sed -E 's/.*p([0-9]+)$/\1/')
+        ;;
+    *)
+        DISK_BASE=$(echo "${PART_BASE}" | sed -E 's/[0-9]+$//')
+        PARTNUM=$(echo "${PART_BASE}" | sed -E 's/.*[^0-9]([0-9]+)$/\1/')
+        ;;
+esac
+DISK="/dev/${DISK_BASE}"
+if [ ! -b "${DISK}" ]; then
+    log "could not resolve parent disk for ${PART}; skipping"
+    exit 0
+fi
+log "PIXIE_IMAGES at ${PART}; parent disk ${DISK} (partition ${PARTNUM})"
+
+# Mount RO to inspect sentinels + measure content size.
+TMP=$(mktemp -d)
+trap 'umount "${TMP}" 2>/dev/null || true; rmdir "${TMP}" 2>/dev/null || true' EXIT
+if ! mount -t exfat -o ro "${PART}" "${TMP}"; then
+    log "could not mount ${PART} read-only; skipping"
+    exit 0
+fi
+
+if [ -e "${TMP}/${SENTINEL_OK}" ]; then
+    log "already grown (sentinel ${SENTINEL_OK} present); skipping"
+    exit 0
+fi
+if [ -e "${TMP}/${SENTINEL_FAILED}" ]; then
+    log "previous grow failed (sentinel ${SENTINEL_FAILED} present); skipping"
+    exit 0
+fi
+
+# Free space behind the partition. parted's MBR classifier rejects
+# the pixie-usb iso-hybrid layout as ``unknown:`` and emits no
+# partition rows (caught by the QEMU auto-grow test). blockdev was
+# the first attempted bypass but ``--getstart /dev/sdaN`` returned
+# empty on that geometry too -- whatever util-linux version-or-quirk
+# is in play, we sidestep it by reading the kernel's own view via
+# sysfs (``/sys/class/block/sdaN/{start,size}``). Both files are 512-
+# byte-sector counts; multiplying + adding gives the on-disk byte
+# offset of the partition's end.
+DISK_BYTES=$(blockdev --getsize64 "${DISK}")
+SYSFS_PART="/sys/class/block/${PART_BASE}"
+PART_START_SECTORS=$(cat "${SYSFS_PART}/start" 2>/dev/null || true)
+PART_SIZE_SECTORS=$(cat "${SYSFS_PART}/size" 2>/dev/null || true)
+if [ -z "${PART_START_SECTORS}" ] || [ -z "${PART_SIZE_SECTORS}" ]; then
+    log "could not read sysfs partition geometry from ${SYSFS_PART} (start=${PART_START_SECTORS:-unset}, size=${PART_SIZE_SECTORS:-unset}); skipping"
+    exit 0
+fi
+PART_END=$(( (PART_START_SECTORS + PART_SIZE_SECTORS) * 512 ))
+FREE=$((DISK_BYTES - PART_END))
+if [ "${FREE}" -lt "${SLACK_BYTES}" ]; then
+    log "no significant free space behind partition (${FREE} B); skipping"
+    exit 0
+fi
+
+# Measure content size before we commit to anything destructive.
+# ``du -sm`` reports total used MiB; we cap to keep tmpfs happy.
+CONTENT_MIB=$(du -sm "${TMP}" 2>/dev/null | awk '{print $1}')
+if [ -z "${CONTENT_MIB}" ]; then
+    CONTENT_MIB=0
+fi
+log "growing partition: ${FREE} B free behind it, ${CONTENT_MIB} MiB content to preserve"
+if [ "${CONTENT_MIB}" -gt "${MAX_CONTENT_MIB}" ]; then
+    log "content ${CONTENT_MIB} MiB exceeds ${MAX_CONTENT_MIB} MiB cap; refusing to grow"
+    exit 0
+fi
+
+# Archive content to tmpfs. ``tar c`` from the mount root preserves
+# the whole tree; we restore with ``tar x`` after reformat. We use
+# the BSD tar features ``-C dir -cf - .`` so paths are relative,
+# avoiding any leading-/ replays that would write outside the new
+# mount point.
+log "archiving content to ${STASH}"
+if ! tar -C "${TMP}" -cf "${STASH}" . 2>/dev/null; then
+    log "tar create failed; aborting"
+    exit 1
+fi
+umount "${TMP}"
+trap 'rm -f "${STASH}"; rmdir "${TMP}" 2>/dev/null || true' EXIT
+
+# Resize the partition via ``sfdisk -N`` rather than ``parted
+# resizepart``: parted refuses to operate on a partition table it
+# classified as ``unknown`` (which the iso-hybrid MBR triggers), so
+# the resize fails the same way the inspect did. sfdisk reads + writes
+# the raw MBR without relying on parted's classifier; the input ``, +``
+# means "keep this partition's start, extend its size to fill the
+# disk." ``--no-reread`` skips the BLKRRPART that fails on
+# in-use devices (we ``partprobe`` immediately after instead).
+if ! printf ', +\n' | sfdisk --no-reread -N "${PARTNUM}" "${DISK}"; then
+    log "sfdisk extend failed; aborting"
+    drop_failure_sentinel
+    exit 1
+fi
+partprobe "${DISK}" 2>/dev/null || true
+udevadm settle --timeout=10 || true
+
+# Re-resolve the partition device after the kernel re-read. The
+# /dev/disk/by-label/ symlink may briefly disappear during the
+# repartition + reformat; the path-by-name (PART_BASE) is stable.
+PART="/dev/${PART_BASE}"
+
+# Reformat as exfat with the same label. Wipes any leftover
+# filesystem state (which we've already archived).
+if ! mkfs.exfat -L "${LABEL}" "${PART}" >/dev/null; then
+    log "mkfs.exfat failed; partition is in an inconsistent state"
+    drop_failure_sentinel
+    exit 1
+fi
+udevadm settle --timeout=10 || true
+
+# Restore content + drop sentinel.
+TMP=$(mktemp -d)
+trap 'rm -f "${STASH}"; umount "${TMP}" 2>/dev/null || true; rmdir "${TMP}" 2>/dev/null || true' EXIT
+if ! mount -t exfat "${PART}" "${TMP}"; then
+    log "could not mount grown partition; aborting"
+    drop_failure_sentinel
+    exit 1
+fi
+if [ "${CONTENT_MIB}" -gt 0 ]; then
+    log "restoring ${CONTENT_MIB} MiB of content"
+    if ! tar -C "${TMP}" -xf "${STASH}"; then
+        log "tar extract failed; partition is grown but empty"
+        touch "${TMP}/${SENTINEL_FAILED}"
+        sync
+        umount "${TMP}"
+        exit 1
+    fi
+fi
+touch "${TMP}/${SENTINEL_OK}"
+sync
+umount "${TMP}"
+
+rm -f "${STASH}"
+log "PIXIE_IMAGES grown to fill ${DISK}; content preserved; sentinel ${SENTINEL_OK} dropped"

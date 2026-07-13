@@ -1,0 +1,193 @@
+#!/bin/sh
+# pixie-clock-from-http: best-effort fallback that sets the system
+# clock from the HTTP Date: header of the pixie-web server URL on
+# the kernel command line.
+#
+# Why this exists:
+#
+# The live env boots with whatever the target's RTC reports. On
+# consumer mini-PCs with dead BIOS batteries the RTC can be
+# wildly wrong; even when systemd's bake-time clock-epoch floor
+# advances the clock to roughly when the squashfs was created,
+# the result is still days-to-weeks behind real time by the time
+# an operator boots the .iso. A clock that wrong breaks:
+#
+#   * ``apt-get update``: sqv rejects the InRelease signatures
+#     as "Not live until <future timestamp>".
+#   * Any HTTPS handshake against a freshly-rotated cert whose
+#     NotBefore is in the system clock's future.
+#   * Signature-timestamp verification (cosign / notation /
+#     similar): the signature was signed "in the future" from
+#     the system's point of view.
+#
+# ``systemd-timesyncd`` is the primary fix: SNTP to the Debian
+# NTP pool, runs on every network-online event. Works whenever
+# the lab LAN has internet egress + DNS. Fails silently on
+# air-gapped labs where only the pixie-web server is reachable.
+#
+# This script is the belt-and-braces fallback for that case.
+# The pixie-web server is, by definition, reachable from the PXE
+# / USB-booted target (otherwise none of the rest of pixie would
+# work), and its HTTP responses include a Date: header that
+# reflects the server's clock -- which is generally trustworthy
+# because the server runs systemd-timesyncd / has a working RTC.
+#
+# Strategy:
+#
+#   1. Find a candidate URL. Preferred: ``pixie.server=URL`` on
+#      /proc/cmdline (set by ipxe.j2 / usb-iso bake when the
+#      target was meant to talk to pixie-web). Fallback to a
+#      handful of public HTTPS endpoints if the kernel cmdline
+#      doesn't carry one (USB-local boots without pixie.server).
+#   2. ``curl -sI --max-time 10`` to fetch the response headers.
+#   3. Parse the ``Date:`` header (RFC 7231 IMF-fixdate format).
+#   4. ``date -u -s "${parsed}"`` to set the system clock.
+#   5. ``hwclock --systohc`` to push the new time to the RTC so
+#      it sticks across the next reboot. Best-effort -- hwclock
+#      isn't installed in every live env variant and the RTC may
+#      be read-only on some hypervisors.
+#
+# Idempotent: safe to run on every boot. systemd-timesyncd
+# normally wins the race when it has internet + NTP servers;
+# this script's contribution is invisible in that case (the
+# clock is already correct, ``date -s`` becomes a no-op).
+#
+# Run gating:
+#
+#   * Refuses to run if the clock is already within ``MAX_SKEW``
+#     of the parsed Date. timesyncd has already fixed things.
+#   * Refuses to run if the clock is AFTER the parsed Date by
+#     more than ``MAX_SKEW`` (server's clock is behind ours --
+#     don't roll our clock backwards on the basis of a stale
+#     server response).
+#   * Exits 0 (not error) on any "couldn't fetch / parse"
+#     scenario so the service doesn't loop / red-X. The clock
+#     stays whatever timesyncd or the bake-time floor set it
+#     to, and apt / oras may fail downstream -- but at least
+#     ``pixie`` (on tty1) starts.
+
+set -eu
+
+LOG_TAG=pixie-clock-from-http
+STATUS=/run/pixie-clock-from-http.status
+MAX_SKEW_SEC=$((24 * 3600))  # 24h tolerance before we refuse to step
+
+log() {
+    logger -t "${LOG_TAG}" -s -- "$@" 2>/dev/null || true
+    echo "$(date -u +%FT%TZ) $*" >> "${STATUS}" 2>/dev/null || true
+}
+
+# Pull the first pixie.server=URL token off /proc/cmdline. The
+# kernel cmdline format is space-separated key=value tokens; we
+# don't quote-split inside values because pixie.server URLs are
+# always plain http://host[:port] / https://host[:port] forms
+# that don't contain whitespace.
+cmdline_url() {
+    for tok in $(cat /proc/cmdline 2>/dev/null); do
+        case "${tok}" in
+            pixie.server=*)
+                echo "${tok#pixie.server=}"
+                return 0
+                ;;
+        esac
+    done
+    return 1
+}
+
+# Try in order: kernel-cmdline pixie.server, then a couple of
+# public HTTPS endpoints so the USB-local boot path (no
+# pixie.server set) still benefits.
+candidate_urls() {
+    if url=$(cmdline_url); then
+        echo "${url}"
+    fi
+    echo "https://www.google.com/generate_204"
+    echo "https://www.cloudflare.com/cdn-cgi/trace"
+}
+
+fetch_date_header() {
+    _url=$1
+    # -sS so transport errors come out on stderr (logged) but
+    # non-200 responses don't fail the script (Date: header is
+    # still present on 4xx / 5xx). -I HEAD-only to keep it cheap.
+    # --max-time bounds wall-clock per attempt.
+    curl -sS -I --max-time 10 "${_url}" 2>/dev/null \
+        | tr -d '\r' \
+        | awk 'BEGIN{IGNORECASE=1} /^date:/ {sub(/^[Dd]ate:[[:space:]]*/, ""); print; exit}'
+}
+
+# Parse an RFC 7231 IMF-fixdate ("Sun, 06 Nov 1994 08:49:37 GMT")
+# into something ``date -u -s`` accepts. GNU date handles that
+# format natively so this is just a passthrough -- but we
+# validate that the parse round-trips so a corrupted header
+# can't push the clock to 1970.
+parse_to_epoch() {
+    _hdr=$1
+    date -u -d "${_hdr}" +%s 2>/dev/null
+}
+
+mkdir -p "$(dirname "${STATUS}")" 2>/dev/null || true
+: > "${STATUS}" 2>/dev/null || true
+
+# Iterate via ``for ... in $(candidate_urls)`` -- the previous shape
+# was ``candidate_urls | while read -r url; do ... done`` which runs
+# the loop body in a SUBSHELL (POSIX sh's pipe-to-while rule). Every
+# ``exit 0`` inside the body only exited the subshell, after which
+# control fell through to the trailing log line, so even when a URL
+# successfully stepped the clock the script always logged "no
+# candidate URL produced a Date: header; clock unchanged" -- an
+# operator chasing a phantom NTP failure read this as proof the
+# script had no effect when in fact it had just adjusted the clock.
+# URLs contain no whitespace (kernel-cmdline + the two HTTPS
+# fallbacks above are all plain ``http(s)://host[:port]/path``
+# tokens), so $()  word-splitting is safe here.
+for url in $(candidate_urls); do
+    [ -z "${url}" ] && continue
+    log "trying ${url}"
+    hdr=$(fetch_date_header "${url}" || true)
+    if [ -z "${hdr}" ]; then
+        log "  no Date: header from ${url}; trying next"
+        continue
+    fi
+    target_epoch=$(parse_to_epoch "${hdr}" || true)
+    if [ -z "${target_epoch}" ]; then
+        log "  could not parse Date: '${hdr}'; trying next"
+        continue
+    fi
+    now_epoch=$(date -u +%s)
+    skew=$((target_epoch - now_epoch))
+    abs_skew=${skew#-}
+    log "  parsed Date: ${hdr} (epoch ${target_epoch}); current epoch ${now_epoch}; skew ${skew}s"
+    if [ "${abs_skew}" -le 60 ]; then
+        log "  clock already within 60s of server time; nothing to do"
+        exit 0
+    fi
+    if [ "${skew}" -lt 0 ]; then
+        # Server clock is BEHIND ours. Don't roll our clock
+        # backwards on the basis of a single response -- the
+        # server may itself be drifted, or we may be looking at
+        # a cached response from a CDN edge. systemd-timesyncd
+        # is the authority for backwards corrections.
+        if [ "${abs_skew}" -gt "${MAX_SKEW_SEC}" ]; then
+            log "  refusing to roll clock backwards by ${abs_skew}s"
+        else
+            log "  server time is ${abs_skew}s behind; leaving clock alone"
+        fi
+        exit 0
+    fi
+    # Forward correction: step the clock to the server's Date.
+    if date -u -d "${hdr}" '+%Y-%m-%d %H:%M:%S' \
+            | xargs -I{} date -u -s '{}' >/dev/null 2>&1; then
+        log "  stepped clock forward by ${skew}s to match ${url}"
+        # Best-effort RTC write so the new time survives reboot.
+        hwclock --systohc 2>/dev/null || true
+        exit 0
+    else
+        log "  date -s failed; clock unchanged"
+        exit 0
+    fi
+done
+
+# Got here only if no URL produced a usable Date: header.
+log "no candidate URL produced a Date: header; clock unchanged"
+exit 0
