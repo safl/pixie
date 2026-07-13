@@ -1,0 +1,88 @@
+#!/bin/sh
+# 0800-pixie-ssh-live.hook.chroot - enable sshd in the pixie live env.
+#
+# The pixie-usb / pixie-netboot live env runs in a trusted lab segment
+# behind whatever NAT / firewall the operator's pixie-server lives
+# behind. sshd is baked in so an operator can ssh into a target
+# that's PXE-booted (or USB-booted) when the local console is
+# unavailable or unusable -- common case: GMKTec NUCBOX G5 boots
+# Trixie far enough to reach multi-user but its USB keyboard
+# doesn't switch ttys, so a console-side `Ctrl+Alt+F2` to drop to
+# a shell is a no-op.
+#
+# Credential: root password = ``pixie``. Matches the lab-trust
+# model already established on the pixie-server appliance
+# (``pixie:pixie`` for the web UI, ``odus:odus.321`` for shell). The live
+# env is ephemeral -- every PXE / USB boot starts fresh, so a
+# credential rotation policy beyond "rotate the next release" has
+# no surface to bite on.
+#
+# Threat model: anyone on the LAN that can reach the booted box's
+# IP gets shell. The pixie-server's lab is assumed to be a trusted
+# subnet (PXE boot relies on broadcast DHCP / no NAT in the way)
+# so this matches the existing model -- not a regression.
+# Operators who want a different password rotate it by:
+#
+#   sudo passwd root
+#
+# on the running live env (resets at next boot), or by re-baking
+# with a different value here.
+#
+# The hook:
+#
+#   * Enables ssh.service (and its sshd.service alias) so it
+#     starts at multi-user.target without operator action.
+#   * Writes /etc/ssh/sshd_config.d/zz-pixie-live.conf to allow
+#     PasswordAuthentication and PermitRootLogin -- defaults on
+#     Debian's openssh-server postinst are increasingly
+#     restrictive across releases, so explicit overrides survive
+#     a future stricter default.
+#   * Sets the root password via chpasswd (so the encrypted form
+#     ends up in /etc/shadow at bake time; no plaintext copy on
+#     disk on the booted live env).
+#   * REMOVES the squashfs-baked host keys. openssh-server's
+#     postinst already created a set during ``apt install``;
+#     leaving them in the squashfs would mean every operator
+#     booting a downloaded .iso / netboot squashfs presents
+#     identical host keys. Generating per-boot keys is the job
+#     of the live-config ssh component / openssh-server's first-
+#     boot hook depending on the variant; deleting the bake-time
+#     keys here forces that path.
+#
+# Belt-and-braces explicit `ln -sf` for the wants symlinks,
+# matching the pattern in 0900-pixie-enable-services.hook.chroot --
+# ``systemctl enable`` in a live-build chroot occasionally
+# produces a no-op.
+
+set -eu
+
+# Set root password to ``pixie``. chpasswd accepts ``user:plaintext``
+# on stdin; the resulting crypt(3) hash lands in /etc/shadow.
+echo 'root:pixie' | chpasswd
+
+# sshd_config drop-in. Two-line override against Debian's
+# OpenSSH defaults.
+mkdir -p /etc/ssh/sshd_config.d
+cat > /etc/ssh/sshd_config.d/zz-pixie-live.conf <<'EOF'
+# pixie live env: allow root password login so an operator can
+# ssh in for diagnosis (USB keyboard / console unavailable, etc.)
+# Override against potentially-stricter Debian defaults.
+PermitRootLogin yes
+PasswordAuthentication yes
+EOF
+chmod 0644 /etc/ssh/sshd_config.d/zz-pixie-live.conf
+
+# Enable sshd at boot. ``ssh.service`` is the Debian unit name;
+# we enable both the canonical name and the systemd-shipped
+# alias so a future Debian rename doesn't silently break this.
+systemctl enable ssh.service 2>/dev/null || true
+
+mkdir -p /etc/systemd/system/multi-user.target.wants
+ln -sf /lib/systemd/system/ssh.service \
+       /etc/systemd/system/multi-user.target.wants/ssh.service
+
+# Strip squashfs-baked host keys so the live env regenerates a
+# fresh set on first boot. openssh-server's systemd unit + the
+# Debian ssh-keygen postinst hook handle that; with the keys
+# absent, the first sshd start triggers generation.
+rm -f /etc/ssh/ssh_host_*

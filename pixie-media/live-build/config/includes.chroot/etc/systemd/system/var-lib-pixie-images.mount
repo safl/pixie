@@ -1,0 +1,42 @@
+[Unit]
+Description=Mount PIXIE_IMGS partition at /var/lib/pixie/images
+Documentation=https://github.com/safl/pixie
+# systemd mount unit names must match the mount path with ``/``
+# replaced by ``-``; this unit's filename is therefore
+# ``var-lib-pixie-images.mount`` and ``Where=`` MUST be
+# ``/var/lib/pixie/images`` (systemd refuses to load the unit
+# otherwise).
+#
+# Gated on the PIXIE_IMGS partition existing. Skipped on netboot
+# live-x86 (no such partition) and on Ventoy / loopback boots
+# (the operator's catalog lives somewhere else; phase 5
+# auto-discovery will handle those).
+ConditionPathExists=/dev/disk/by-label/PIXIE_IMGS
+
+# Mount before ``pixie`` starts so the catalog is in place when it
+# scans /var/lib/pixie/images. (pixie-flash-on-boot.service was
+# retired in v0.22.10; pixie-on-tty1.service now handles both
+# auto-flash and interactive paths via /pxe/<mac>/plan.)
+Before=pixie-on-tty1.service
+
+[Mount]
+What=/dev/disk/by-label/PIXIE_IMGS
+Where=/var/lib/pixie/images
+Type=exfat
+# - ``ro,noatime``: read-only on purpose. The pixie flash flow only
+#   ever reads images; mounting RW would let a buggy run trash the
+#   operator's catalog. To add or remove images the operator
+#   unmounts and edits from a host OS (the typical workflow) - the
+#   partition is exFAT so any host can read+write it.
+# - ``nofail``: downgrades systemd's auto-generated ``Requires=`` on
+#   ``dev-disk-by\x2dlabel-PIXIE_IMGS.device`` to a ``Wants=``.
+#   Without it, the netboot live env (which has no PIXIE_IMGS
+#   partition) wastes 90s of every boot waiting for a device that
+#   will never appear, then prints a confusing FAILED line for the
+#   mount unit even though ``ConditionPathExists`` already skips
+#   the execution path. With ``nofail`` the device timeout is
+#   non-fatal and the mount unit just stays inactive on netboot.
+Options=ro,noatime,nofail
+
+[Install]
+WantedBy=multi-user.target

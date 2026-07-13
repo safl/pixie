@@ -1,0 +1,44 @@
+#!/bin/sh
+# initramfs-tools hook -- include the ramboot driver's binaries +
+# kernel modules in the initramfs.
+#
+# initramfs-tools runs every executable under
+# ``/etc/initramfs-tools/hooks/`` during ``update-initramfs``. This
+# hook's job is to populate the initramfs's filesystem with:
+#
+#   * ``nbd-client``         -- connect to the nbdmux daemon
+#   * ``busybox`` (static)   -- shell + utilities for /init
+#   * ``nbd``  kernel module -- exposes /dev/nbdN
+#   * ``overlay`` module     -- overlayfs for the tmpfs-over-NBD root
+#   * ``ext4`` / ``xfs`` modules -- mount the image's root partition
+#
+# The ``copy_exec`` + ``manual_add_modules`` helpers come from
+# ``/usr/share/initramfs-tools/hook-functions``; they handle library
+# resolution + cross-arch corner cases.
+
+set -e
+
+# initramfs-tools sources its boilerplate (PREREQS handling + the
+# copy_exec / manual_add_modules helpers) via this magic preamble.
+PREREQ=""
+prereqs() { echo "$PREREQ"; }
+case "${1:-}" in
+    prereqs) prereqs; exit 0 ;;
+esac
+# shellcheck disable=SC1091
+. /usr/share/initramfs-tools/hook-functions
+
+# Userland binaries. ``busybox`` ships as ``/usr/bin/busybox`` (or
+# ``/bin/busybox`` on older distros); copy_exec finds it via PATH.
+copy_exec /usr/sbin/nbd-client /sbin
+copy_exec /usr/bin/busybox /bin
+
+# Kernel modules. ``nbd`` is the block device; ``overlay`` is the
+# write-aside filesystem; the rest are the FS drivers the target
+# image's root partition might use (image-builder typically lands
+# on ext4; xfs + btrfs cover the common alternatives).
+manual_add_modules nbd
+manual_add_modules overlay
+manual_add_modules ext4
+manual_add_modules xfs
+manual_add_modules btrfs

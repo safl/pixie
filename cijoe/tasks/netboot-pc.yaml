@@ -1,0 +1,39 @@
+doc: |
+  pixie network-boot live env build
+  ===============================
+
+  Builds the kernel + initrd + squashfs trio that PXE clients chain
+  into via the pixie server's HTTP boot stack. The chroot carries the
+  pixie runtime + ``pixie-on-tty1.service`` (unconditional; runs on
+  every boot). The kernel command line carries just ``pixie.server=``
+  + ``pixie.mac=``; ``pixie`` then GETs ``<server>/pxe/<mac>/plan`` and
+  dispatches on the JSON response (auto-flash, interactive wizard,
+  or local-boot exit -- whatever the server's machine record says).
+
+  Renamed from ``tasks/live.yaml`` to ``tasks/netboot-pc.yaml``: the
+  variant moved from ``live-x86`` to ``netboot-pc`` to disambiguate
+  from ``usbboot-pc`` (which is also a live image).
+
+  Steps:
+
+  1. ``pixie_wheel_stage`` - builds the pixie-lab wheel from the parent
+     repo and stages it under
+     ``live-build/config/includes.chroot/opt/pixie/``. live-build's
+     chroot hook installs it (with the ``[tui]`` extra) into
+     ``/opt/pixie/venv``.
+  2. ``live_build`` - copies ``live-build/`` into a working dir,
+     runs ``lb clean --all && lb build`` (debootstrap, mksquashfs,
+     mkinitramfs), and publishes
+     ``pixie-netboot-pc-x86_64.{vmlinuz,initrd,squashfs}`` plus a sha256
+     manifest under ``publish.dir``.
+
+  Requires: live-build on the build host (``apt install live-build``)
+  plus passwordless sudo (live-build's chroot operations are
+  privileged). CI runners have NOPASSWD; local devs run with sudo.
+
+steps:
+- name: pixie_wheel_stage
+  uses: pixie_wheel_stage
+
+- name: live_build
+  uses: live_build

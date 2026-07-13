@@ -1,0 +1,37 @@
+#!/bin/sh
+# 0500-pixie-install.hook.chroot - install pixie-lab into the live env.
+#
+# live-build runs hooks under config/hooks/normal/ inside the chroot
+# during the build. Filenames are sorted; the 0500 prefix puts this
+# after package install (default 0000-*) but before tweaks (0900-*).
+#
+# Inputs: ``config/includes.chroot/opt/pixie/pixie_lab-*-py3-none-any.whl``
+# was staged by ``scripts/pixie_wheel_stage.py`` and copied into the
+# chroot's ``/opt/pixie/`` by live-build's includes pipeline.
+#
+# Output: pixie on the live env's ``$PATH`` via ``/usr/local/bin/pixie``
+# pointing into a venv at ``/opt/pixie/venv``. The ``[tui]`` extra is
+# required because every PXE flow (auto-flash, interactive, local)
+# lands at ``pixie --server URL --mac MAC`` on tty1 via
+# pixie-on-tty1.service. The ``[web]`` extra is intentionally NOT
+# installed -- the live env is never an HTTP server.
+
+set -eu
+
+if ! ls /opt/pixie/pixie_lab-*-py3-none-any.whl >/dev/null 2>&1; then
+    echo "0500-pixie-install: no wheel staged at /opt/pixie/pixie_lab-*.whl" >&2
+    echo "  Did scripts/pixie_wheel_stage.py run before live_build?" >&2
+    exit 1
+fi
+
+python3 -m venv /opt/pixie/venv
+/opt/pixie/venv/bin/pip install --no-cache-dir --upgrade pip
+for whl in /opt/pixie/pixie_lab-*-py3-none-any.whl; do
+    /opt/pixie/venv/bin/pip install --no-cache-dir "${whl}[tui]"
+done
+
+ln -sf /opt/pixie/venv/bin/pixie /usr/local/bin/pixie
+
+# Trim pip caches and the build wheel - the appliance only needs the
+# installed package.
+rm -rf /root/.cache /opt/pixie/pixie_lab-*-py3-none-any.whl

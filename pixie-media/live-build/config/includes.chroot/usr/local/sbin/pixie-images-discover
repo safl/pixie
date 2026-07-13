@@ -1,0 +1,159 @@
+#!/bin/sh
+# pixie-images-discover: locate the operator's image catalog.
+#
+# Primary case (NOT handled here):
+#   The pixie-usb stick was dd'd directly to the device; its trailing
+#   exFAT partition is labelled ``PIXIE_IMGS`` and gets mounted at
+#   ``/var/lib/pixie/images`` by the path-existence-conditional
+#   ``var-lib-pixie-images.mount`` unit. This script exits early when
+#   that mount already happened.
+#
+# Secondary case (this script):
+#   The pixie-usb.iso was loaded via Ventoy (or another loop-mount
+#   shim like piKVM / JetKVM). The kernel sees the .iso as a single
+#   CD-ROM device; the internal partitions including PIXIE_IMGS are
+#   not enumerated. The operator's image catalog instead lives on
+#   the surrounding shim's data partition.
+#
+# Discovery contract:
+#   We look at every attached vfat / exfat partition in two places,
+#   in order:
+#     1. ``<partition>/pixie-images/`` -- the preferred operator-
+#        managed convention (clean separation from whatever else
+#        the surrounding Ventoy / IP-KVM stick carries),
+#     2. ``<partition>/`` (the partition root) -- the quick-drop
+#        layout for an operator who just wants to put a few image
+#        files next to the pixie-usb.iso on a Ventoy stick without
+#        making a subfolder.
+#   First match with at least one usable file (``*.img*`` /
+#   ``*.img.*`` / ``*.qcow2``) wins, and that directory gets bind-
+#   mounted at ``/var/lib/pixie/images``.
+#
+# Best-effort: no candidate partition is fine, the live env just
+# starts with an empty catalog and the operator can use ``pixie``'s
+# SELECT_CATALOG prompt to pick ``[d] default`` (pixie's GitHub-
+# release catalog) or ``[c] custom`` (an existing pixie-web URL).
+# NTFS isn't probed; Ventoy's default data partition is exFAT
+# and that covers the common case.
+#
+# Diagnostics: every candidate partition + the reason it was kept
+# or skipped is logged to journalctl. ``Alt+F2`` then
+# ``journalctl -u pixie-images-discover`` is the recipe for figuring
+# out why a catalog stick wasn't picked up.
+
+set -eu
+
+TARGET=/var/lib/pixie/images
+SOURCE=/run/pixie-images-source
+
+mkdir -p "$TARGET"
+mkdir -p "$SOURCE"
+
+# If the PIXIE_IMGS mount already happened (dd'd-direct USB) we're
+# done; don't step on it.
+if mountpoint -q "$TARGET"; then
+    echo "pixie-images-discover: $TARGET already mounted (dd'd-direct USB path); nothing to do."
+    exit 0
+fi
+
+# Build the candidate list up-front so the inner read-loop runs in
+# the current shell (not a piped subshell) and ``exit`` propagates.
+list=$(lsblk -lnpo NAME,TYPE,FSTYPE 2>/dev/null || true)
+
+# Also enumerate dm-mapper passthroughs. ``lsblk`` hides dm devices
+# whose underlying disk is already listed (treated as children of
+# the parent block device), so it never reports them as part of
+# the flat listing. Ventoy 1.1.05 chainload creates two dm-linear
+# devices over the data partition:
+#
+#   - ``ventoy`` (dm-0): the chunk of the data partition that
+#     contains the chained .iso, mounted by live-config as
+#     ``/run/live/medium``. Holds /dev/sda1 open exclusively, so
+#     a direct ``mount /dev/sda1 ...`` returns
+#     ``Can't open blockdev``.
+#   - ``sda1`` (dm-1): a linear passthrough of the WHOLE data
+#     partition, present so the booted live env can still read
+#     the operator's files (catalog.toml + pixie-images/) that sit
+#     on the data partition outside the .iso.
+#
+# ``blkid`` enumerates dm devices directly. We append any
+# ``/dev/dm-*`` that has a filesystem to the candidate list so the
+# loop below probes them with the same vfat/exfat + pixie-images/
+# content checks as the lsblk-sourced entries.
+for _dev in $(blkid -o device 2>/dev/null); do
+    case "$_dev" in
+        /dev/dm-*) ;;
+        *) continue ;;
+    esac
+    _ft=$(blkid -o value -s TYPE "$_dev" 2>/dev/null || true)
+    list="$list
+$_dev part $_ft"
+done
+
+echo "pixie-images-discover: enumerating block devices..."
+echo "$list" | sed 's/^/  /'
+
+found=0
+
+while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    name=$(printf '%s\n' "$line" | awk '{print $1}')
+    type=$(printf '%s\n' "$line" | awk '{print $2}')
+    fstype=$(printf '%s\n' "$line" | awk '{print $3}')
+
+    if [ "$type" != "part" ]; then
+        continue
+    fi
+    case "$fstype" in
+        vfat|exfat) ;;
+        *)
+            echo "pixie-images-discover: skip $name (fstype=$fstype, only vfat/exfat probed)"
+            continue
+            ;;
+    esac
+    case "$name" in
+        /dev/sr*|/dev/loop*)
+            echo "pixie-images-discover: skip $name (CD-ROM or loop device)"
+            continue
+            ;;
+    esac
+
+    if mountpoint -q "$SOURCE"; then
+        umount "$SOURCE" || true
+    fi
+    if ! mount -o ro "$name" "$SOURCE" 2>/dev/null; then
+        echo "pixie-images-discover: skip $name ($fstype, mount failed)"
+        continue
+    fi
+
+    # Try ``pixie-images/`` subfolder first, then the partition root.
+    bound=0
+    for sub in "$SOURCE/pixie-images" "$SOURCE"; do
+        [ -d "$sub" ] || continue
+        if ! find "$sub" -maxdepth 1 -type f \
+            \( -name '*.img' -o -name '*.img.*' \
+            -o -name '*.qcow2' -o -name '*.iso' -o -name '*.iso.gz' \) \
+            -print -quit 2>/dev/null | grep -q .; then
+            continue
+        fi
+        mount --bind "$sub" "$TARGET"
+        echo "pixie-images-discover: bound $sub (on $name, $fstype) -> $TARGET"
+        bound=1
+        found=1
+        break
+    done
+    if [ "$bound" -eq 0 ]; then
+        echo "pixie-images-discover: skip $name ($fstype, no usable files at root or pixie-images/)"
+        umount "$SOURCE" || true
+        continue
+    fi
+    break
+done <<EOF
+$list
+EOF
+
+if [ "$found" -eq 0 ]; then
+    echo "pixie-images-discover: no image catalog found; pixie will offer the default catalog at the SELECT_CATALOG prompt."
+fi
+
+exit 0

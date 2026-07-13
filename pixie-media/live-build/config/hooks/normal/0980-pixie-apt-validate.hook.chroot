@@ -1,0 +1,98 @@
+#!/bin/sh
+# 0980-pixie-apt-validate.hook.chroot - fail the bake if apt-get
+# update can't refresh the chroot's apt metadata against ALL
+# configured sources.
+#
+# Why this hook exists: a previously-shipped USB stick had a
+# working ``apt-get install`` (cache populated at bake time) but
+# a broken ``apt-get update`` at runtime, because one of the
+# configured apt sources (the trixie-backports add we layered in
+# v0.12.0) wasn't reachable / GPG-verifiable in the operator's
+# network at boot. Running ``apt-get update`` here forces the
+# same code path the operator's first apt-get update will hit:
+# fetch Release + Release.gpg from each source, verify the
+# signatures against the chroot's trusted keyring, parse the
+# Packages indices. Anything broken at the source / keyring /
+# signing layer fails LOUD during CI rather than silently
+# producing a stick where ``apt-get update`` can't refresh.
+#
+# Sources of failure this catches:
+#
+# - Unreachable apt source (typoed URL, DNS-unresolvable host,
+#   archive moved). ``apt-get update`` exits non-zero.
+# - Missing signing key (the source line is fine but the chroot's
+#   keyring doesn't have the key that signs its Release).
+# - Expired signing key.
+# - apt-secure-strict tightening that errors on a source missing
+#   ``Signed-By=`` (trixie's apt is tolerant but future tightenings
+#   would surface here first).
+#
+# Sources of failure this does NOT catch:
+#
+# - Network failures on the operator's side at runtime. We can
+#   only assert "bake had connectivity"; the runtime is on the
+#   operator's network. Surface as a sticky error in the ``pixie``
+#   wizard's ``--catalog`` flow instead.
+# - Per-Architecture mirror skew (we only build amd64, so any
+#   mirror that's missing amd64 indices is a hard fail anyway).
+#
+# Logs the apt source view + ``apt-cache policy`` output to the
+# build log so a CI failure here lands with enough breadcrumbs
+# to diagnose without re-running the bake locally.
+
+set -eu
+
+echo "0980-pixie-apt-validate: apt source files in the chroot:"
+ls -la /etc/apt/sources.list /etc/apt/sources.list.d/ 2>/dev/null || true
+for f in /etc/apt/sources.list /etc/apt/sources.list.d/*.list; do
+    [ -f "$f" ] || continue
+    echo "  --- $f ---"
+    cat "$f"
+done
+
+echo "0980-pixie-apt-validate: apt preferences in the chroot:"
+ls -la /etc/apt/preferences.d/ 2>/dev/null || true
+for f in /etc/apt/preferences.d/*.pref /etc/apt/preferences; do
+    [ -f "$f" ] || continue
+    echo "  --- $f ---"
+    cat "$f"
+done
+
+echo "0980-pixie-apt-validate: running apt-get update against ALL sources..."
+if ! apt-get update; then
+    echo "0980-pixie-apt-validate: apt-get update FAILED."
+    echo "  One or more sources rejected -- see lines above for the"
+    echo "  offending source. Fix the source file under"
+    echo "  pixie-media/live-build/config/archives/ and re-bake."
+    exit 1
+fi
+
+echo "0980-pixie-apt-validate: apt-get update OK."
+echo "0980-pixie-apt-validate: apt-cache policy (top of source rankings):"
+apt-cache policy | head -40 || true
+
+# Validate the CA bundle: parse the concatenated PEM file with
+# openssl and assert at least a few dozen certs are present.
+# Catches the case where ``update-ca-certificates`` failed silently
+# during ca-certificates' postinst, leaving the bundle empty (which
+# would let HTTP work but break every HTTPS handshake in the live
+# env -- the exact symptom the operator describes when ``pixie``'s
+# oras catalog fetch errors with "[SSL: CERTIFICATE_VERIFY_FAILED]"
+# even though lynx accesses github.com fine).
+BUNDLE=/etc/ssl/certs/ca-certificates.crt
+if [ ! -s "$BUNDLE" ]; then
+    echo "0980-pixie-apt-validate: CA bundle missing or empty: $BUNDLE"
+    exit 1
+fi
+echo "0980-pixie-apt-validate: CA bundle parse check ($BUNDLE):"
+N=$(grep -c '^-----BEGIN CERTIFICATE-----' "$BUNDLE" || echo 0)
+echo "  $N PEM certificates"
+# A healthy Debian trixie ca-certificates ships ~140 root CAs.
+# Anything below 50 means something went wrong (partial install,
+# user-removed certs, etc.) -- fail loud rather than ship a stick
+# whose HTTPS will mysteriously break.
+if [ "$N" -lt 50 ]; then
+    echo "0980-pixie-apt-validate: CA bundle suspiciously small ($N certs); refusing to ship"
+    exit 1
+fi
+echo "0980-pixie-apt-validate: CA bundle OK ($N certs)."

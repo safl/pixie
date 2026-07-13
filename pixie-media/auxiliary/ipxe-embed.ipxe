@@ -1,0 +1,42 @@
+#!ipxe
+# Embedded boot script for pixie-server's TFTP-served ipxe.efi.
+#
+# The firmware loads this iPXE binary via TFTP and hands control
+# to it. iPXE then runs this script automatically (compiled in
+# via ``make EMBED=ipxe-embed.ipxe``). Without the embedded
+# script, iPXE's autoboot procedure would re-DHCP and try to
+# ``chain ipxe.efi`` (itself) into an infinite loop -- the
+# operator's LAN DHCP server always returns ``bootfile=ipxe.efi``
+# regardless of who's asking.
+#
+# Flow:
+#   1. ``dhcp`` -- iPXE requests its own lease (the firmware
+#      already DHCPed for the TFTP fetch, but iPXE needs its own
+#      so ``${next-server}`` is populated in iPXE's environment).
+#   2. ``chain http://${next-server}:8080/pxe-bootstrap.ipxe`` --
+#      iPXE fetches the per-MAC bootstrap script pixie-web renders
+#      and executes it; that script chains the kernel + initrd +
+#      squashfs HTTP fetches that bring up the live env.
+#
+# ``${next-server}`` is iPXE's expansion of the DHCP siaddr field
+# (the operator's router sets it to pixie-server's IP via the
+# Network Boot config -- option 66 / siaddr / both).
+#
+# Hand-back: when the chained script EXITS rather than booting a
+# kernel -- the sanboot path on UEFI does exactly this, since iPXE
+# can't boot a local disk via BIOS ``--drive`` numbering there -- we
+# must exit to the firmware boot order so it boots the installed OS
+# (the next entry after network boot). Likewise if DHCP or the chain
+# fetch fails: ``exit`` lets the firmware fall through to the local
+# disk (or re-attempt netboot on the next cycle). We deliberately do
+# NOT drop to an iPXE ``shell`` here: these are headless appliances,
+# a shell strands the box, and on UEFI it was masking the sanboot
+# hand-back so the disk never booted.
+
+echo pixie: requesting DHCP lease
+dhcp || goto handoff
+echo pixie: chaining to http://${next-server}:8080/pxe-bootstrap.ipxe
+chain http://${next-server}:8080/pxe-bootstrap.ipxe || echo pixie: could not reach pixie-web at ${next-server}:8080
+:handoff
+echo pixie: handing control to firmware boot order (boots the local disk)
+exit

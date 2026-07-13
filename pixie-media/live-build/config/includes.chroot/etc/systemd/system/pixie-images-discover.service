@@ -1,0 +1,34 @@
+[Unit]
+Description=Discover pixie image catalog on attached block devices
+Documentation=https://github.com/safl/pixie
+# Best-effort discovery for the case where the live env is loaded
+# via Ventoy / piKVM / JetKVM and the pixie.iso's internal
+# PIXIE_IMGS partition isn't enumerated by the booted kernel. The
+# script scans all attached vfat / exfat partitions for image
+# content and bind-mounts the first hit at /var/lib/pixie/images.
+#
+# ``var-lib-pixie-images.mount`` handles the directly-dd'd-USB case
+# via a path-existence condition on /dev/disk/by-label/PIXIE_IMGS;
+# we explicitly run AFTER that unit so its mount wins when both
+# fire (the script exits early when the target is already a
+# mountpoint).
+After=local-fs.target var-lib-pixie-images.mount
+# Block pixie (on tty1) until discovery is done so it sees the populated
+# catalog on its first scan. (pixie-flash-on-boot.service was retired
+# in v0.22.10; pixie-on-tty1.service handles both auto + interactive.)
+Before=pixie-on-tty1.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# pixie-trace hooks: see pixie-usb-grow.service for the rationale.
+ExecStartPre=/usr/local/sbin/pixie-trace pixie-images-discover starting
+ExecStart=/usr/local/sbin/pixie-images-discover
+ExecStartPost=/usr/local/sbin/pixie-trace pixie-images-discover ready
+# A scan that fails to mount or finds nothing is not an error -- the
+# operator may have launched the live env without a catalog stick
+# attached.
+SuccessExitStatus=0
+
+[Install]
+WantedBy=multi-user.target

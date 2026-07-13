@@ -1,0 +1,38 @@
+#!/bin/sh
+# pixie-trace: one-line phase marker for boot-time observability.
+#
+# Hooked into pixie-prefixed systemd units (pixie-usb-grow,
+# pixie-clock-from-http, pixie-images-discover, ...) as ExecStartPre /
+# ExecStartPost so the live env's serial console + journalctl
+# shows ``[ T ] pixie-trace: <unit> starting`` and ``<unit> ready``
+# around each one. The kernel timestamp on the printk line gives
+# wall-clock-since-boot in seconds; subtracting consecutive
+# markers tells the operator where the boot is actually slow.
+#
+# Identical fanout to pixie.tui._app._emit_console_marker: write
+# to /dev/kmsg (so the message broadcasts to every registered
+# console regardless of how Linux's /dev/console resolves) and
+# also to stderr (which under pixie-on-tty1.service routes to
+# tty1; under any other unit it goes wherever StandardError= is
+# pinned, typically the journal).
+#
+# The ``<6>`` prefix is the syslog priority LOG_INFO; without it
+# /dev/kmsg defaults to LOG_NOTICE which is fine but slightly
+# louder in dmesg filtering.
+
+set -eu
+
+msg="${*:-(no-message)}"
+
+# Best-effort kmsg write: a non-root caller, a missing /dev/kmsg
+# (workstation containers), or a kernel that disabled kmsg writes
+# (CAP_SYSLOG drop) shouldn't crash the ExecStartPre hook. The
+# subshell + outer ``2>/dev/null`` swallows the shell's own
+# ``Permission denied`` redirect-failure message (which would
+# otherwise leak to fd 2 BEFORE the inner ``2>/dev/null`` got a
+# chance to apply, because bash processes redirections left-to-
+# right and prints redirect-open errors to its current fd 2).
+( printf '<6>pixie-trace: %s\n' "${msg}" > /dev/kmsg ) 2>/dev/null || true
+# Mirror to stderr so the journal captures the same line even if
+# /dev/kmsg writes are blocked.
+printf 'pixie-trace: %s\n' "${msg}" >&2

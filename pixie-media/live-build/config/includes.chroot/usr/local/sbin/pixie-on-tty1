@@ -1,0 +1,87 @@
+#!/bin/sh
+# pixie-on-tty1: launch ``pixie`` on tty1.
+#
+# Driven by ``pixie-on-tty1.service``. We own tty1 in this mode
+# (the unit conflicts with ``getty@tty1.service``); systemd hands
+# us /dev/tty1 as stdio.
+#
+# Two boot scenarios put us on tty1:
+#
+# 1. PXE (server's ``ipxe_tui.j2`` / ``ipxe_flash.j2``): cmdline
+#    carries ``pixie.server=`` and ``pixie.mac=``. We pass both through
+#    to ``pixie --server <X> --mac <Y>``; pixie then GETs
+#    ``<server>/pxe/<mac>/plan`` and dispatches on the JSON
+#    response (auto-flash without prompts, interactive wizard, or
+#    no-op-and-exit).
+#
+# 2. USB-local: the live-build iso-hybrid bake fires the same
+#    service when the operator boots the USB stick on bare metal
+#    with no PXE involvement. No ``pixie.server`` / ``pixie.mac`` is
+#    set; we launch ``pixie`` bare and it falls back to scanning
+#    the local image-root directory.
+#
+# Cmdline parsing is intentionally simple (tr+sed): pixie.* tokens
+# never contain spaces, so word-splitting is safe.
+
+set -eu
+
+CMDLINE=$(cat /proc/cmdline)
+
+# shellcheck disable=SC2086 # word-split is intended for cmdline tokens
+SERVER=$(printf '%s\n' $CMDLINE | tr ' ' '\n' | sed -n 's/^pixie\.server=//p' | head -1)
+# shellcheck disable=SC2086
+MAC=$(printf '%s\n' $CMDLINE | tr ' ' '\n' | sed -n 's/^pixie\.mac=//p' | head -1)
+
+ARGS=""
+if [ -n "$SERVER" ]; then
+    ARGS="$ARGS --server ${SERVER%/}"
+fi
+if [ -n "$MAC" ]; then
+    ARGS="$ARGS --mac $MAC"
+fi
+
+# Print a "starting" banner before exec'ing pixie. The Rich-based
+# wizard typically renders its first frame within 1-5s; cold-cache
+# Python imports on slow USB media can stretch that. When a
+# ``--mac`` is set, the synchronous plan fetch adds DNS + TCP-
+# connect + HTTP round-trip on top (15s timeout). On a stuck
+# network this whole sequence can stretch to ~30-60s before pixie
+# gives up and paints. Without something on the screen during that
+# window, an operator looking at a blank-ish tty1 thinks the box is
+# hung and rules it out. pixie itself prints lifecycle messages
+# from its main entry point, so this banner only needs to bridge
+# the Python-import gap.
+#
+# We print to /dev/tty1 directly (rather than stdout) because
+# pixie is about to claim stdio and our exec replaces this
+# process; a stdout write here would race Rich's init. Direct
+# tty write lands before Rich takes over and survives until
+# Rich issues its own clear.
+{
+    printf '\033c'  # ESC c -> full terminal reset, clears any
+                    # plymouth / agetty leftover that didn't clean up.
+    printf '\n'
+    printf '  pixie is starting...\n'
+    printf '\n'
+    if [ -n "${SERVER}" ]; then
+        printf '    server  : %s\n' "${SERVER%/}"
+    else
+        printf '    server  : (none -- local image-root only)\n'
+    fi
+    if [ -n "${MAC}" ]; then
+        printf '    MAC     : %s\n' "${MAC}"
+    fi
+    printf '\n'
+    printf '  Python imports + plan fetch (when ``--mac`` is set)\n'
+    printf '  typically take 1-5s + a few seconds respectively. pixie\n'
+    printf '  will print its own lifecycle messages once it starts.\n'
+    printf '  If THIS banner stays > ~60s with no further output, check:\n'
+    printf '    journalctl -u pixie-on-tty1.service -b --no-pager\n'
+    printf '\n'
+} > /dev/tty1 2>/dev/null || true
+
+# We're already root in the live env (auto-login + systemd service);
+# no sudo needed. ``exec`` so signals from systemd reach pixie
+# directly.
+# shellcheck disable=SC2086 # ARGS is intentionally word-split
+exec /usr/local/bin/pixie $ARGS

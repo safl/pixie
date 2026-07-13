@@ -1,0 +1,78 @@
+#!/bin/sh
+# pixie-skip-usb-only-units-on-netboot: mask units that only make
+# sense when the live env is booted from a USB stick (where
+# /dev/disk/by-label/PIXIE_IMGS exists). On a netboot the
+# PIXIE_IMGS partition never appears; the device unit systemd
+# auto-generates for it sits at "expected" until the global
+# ``DefaultDeviceTimeoutSec`` (90s) ticks down, holding up every
+# unit ordered after it.
+#
+# 0.55.8 capped ``pixie-usb-grow.service``'s wait at 20s with
+# ``JobTimeoutSec=20s`` -- a 67s saving but still 20s of dead air
+# every netboot. This generator goes the rest of the way: by
+# masking the USB-only units BEFORE unit instantiation, the
+# device unit is never Wanted by anyone, never activated, never
+# timed out. Net 0s instead of 20s.
+#
+# Units masked:
+#   * pixie-usb-grow.service  -- extends PIXIE_IMGS on first boot;
+#     irrelevant when the partition doesn't exist
+#   * var-lib-pixie-images.mount -- mounts PIXIE_IMGS at
+#     /var/lib/pixie/images; systemd auto-generates a Wants= on the
+#     device for every mount unit, even with the ``nofail`` option
+#     (nofail downgrades Requires->Wants but keeps the Wants=, so
+#     the device is still pulled in and the timeout still fires)
+#
+# NOT masked:
+#   * pixie-images-discover.service -- scans EVERY attached block
+#     device for catalog content (Ventoy / piKVM / JetKVM
+#     loop-mount paths included), still useful on netboot if the
+#     operator has attached a separate catalog stick
+#
+# Systemd generators are tiny executables run before unit
+# resolution. They receive three positional args (early, normal,
+# late dirs); a ``<unit>`` symlink to /dev/null in the early dir
+# masks the unit.
+#
+# The ``fetch=`` cmdline token is reliably present on netboot
+# (set by both ``ipxe_flash.j2`` and ``ipxe_tui.j2`` for
+# live-boot's squashfs URL) and absent on USB (the squashfs is
+# found via live-boot's local-label discovery). Clean
+# netboot-vs-USB discriminator.
+
+set -eu
+
+# Per systemd.generator(7): generators are invoked with three
+# arguments -- $1 normal dir (/run/systemd/generator), $2 EARLY
+# dir (/run/systemd/generator.early), $3 late dir
+# (/run/systemd/generator.late). systemd searches the unit-lookup
+# paths in this order (excerpt, see systemd.unit(5)):
+#
+#   /run/systemd/generator.early/    <-- HIGHEST priority "dynamic"
+#   /etc/systemd/system/             <-- where pixie-usb-grow.service lives
+#   /run/systemd/generator/          <-- LOWER priority than /etc
+#
+# To mask a unit that already exists under /etc/systemd/system/,
+# the override MUST land in the EARLY dir ($2). A symlink to
+# /dev/null in the NORMAL dir is shadowed by the real unit file
+# and silently does nothing.
+early_dir="${2:?pixie-skip-usb-only-units-on-netboot: missing early dir arg}"
+
+# Self-trace: every generator invocation drops a one-line marker
+# via /dev/kmsg so an operator can see in dmesg whether the
+# generator (a) ran at all, (b) saw fetch= on the cmdline, and
+# (c) actually wrote the mask symlinks.
+_trace() {
+    ( printf '<6>pixie-trace: generator/pixie-skip-usb-only-units: %s\n' "$*" > /dev/kmsg ) 2>/dev/null || true
+}
+
+if ! grep -q 'fetch=' /proc/cmdline 2>/dev/null; then
+    _trace "no fetch= on cmdline; not a netboot, nothing to mask"
+    exit 0
+fi
+
+mkdir -p "$early_dir"
+for unit in pixie-usb-grow.service var-lib-pixie-images.mount; do
+    ln -sf /dev/null "$early_dir/$unit"
+done
+_trace "fetch= detected, masked: pixie-usb-grow.service var-lib-pixie-images.mount (early_dir=$early_dir)"

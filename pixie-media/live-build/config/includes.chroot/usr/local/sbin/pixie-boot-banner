@@ -1,0 +1,92 @@
+#!/bin/sh
+# pixie-boot-banner: print pixie identity markers at three points
+# during the boot, so an operator watching the screen sees:
+#
+#   1. **early**  -- just after the kernel hands off to systemd
+#                    (Before=sysinit.target). "yes, this is pixie
+#                    and it's booting."
+#   2. **mid**    -- once network-online.target has fired.
+#                    "pixie's reached network; next is the pixie
+#                    service that drives this boot."
+#   3. **late**   -- after multi-user.target. "pixie's about to
+#                    hand off to pixie-on-tty1. If you see this
+#                    banner but no further action, the service
+#                    crashed."
+#
+# Three visible checkpoints means a wedge between them is
+# immediately diagnostic. With plymouth retired in v0.22.1
+# there's no graphical splash; these three textual banners
+# are the replacement -- mixed in with systemd's own
+# ``[ OK ] / [ INFO ]`` progress lines so they blend.
+#
+# Called from three systemd units (pixie-banner-{early,mid,late}.
+# service) with the phase as $1. ``__PIXIE_VERSION__`` is
+# substituted at bake time by the variant-specific bake script
+# (cijoe/scripts/usb_iso_build.py or cijoe/scripts/live_build.py).
+#
+# Routes:
+#
+#   * stdout (which the systemd unit pipes via
+#     ``StandardOutput=journal+console`` to /dev/console).
+#   * /dev/tty1 directly. Belt-and-braces for the framebuffer-
+#     only target case (``/dev/console`` would be an unattached
+#     serial port).
+
+PHASE="${1:-mid}"
+VERSION='__PIXIE_VERSION__'
+
+CMDLINE=$(cat /proc/cmdline 2>/dev/null || echo "")
+
+# Variant + mode resolution order:
+#
+#   1. ``/etc/pixie/variant`` + ``/etc/pixie/mode`` (explicit marker
+#      files). The pixie-server appliance bake writes these
+#      during cloud-init -- it boots from disk, not from a
+#      live-env squashfs, so /proc/cmdline doesn't carry the
+#      distinguishing tokens. Same for any future appliance
+#      variant.
+#   2. /proc/cmdline-based detection for the live env where
+#      these marker files don't exist:
+#        - netboot vs usb-iso: ``fetch=`` only appears on
+#          PXE-netboot (live-boot's HTTP fetch).
+#        - server-driven vs USB-local: ``pixie.mac=`` only appears
+#          on the PXE chain (rendered by the server's iPXE
+#          template). v0.22.10+ retired the cmdline-level
+#          auto-vs-interactive split; the run-time plan endpoint
+#          decides that, so the banner can't predict here.
+if [ -r /etc/pixie/variant ]; then
+    VARIANT=$(cat /etc/pixie/variant 2>/dev/null | head -1 | tr -d '\r\n[:space:]')
+else
+    case "${CMDLINE}" in
+        *fetch=*) VARIANT="Netboot" ;;
+        *)        VARIANT="USB" ;;
+    esac
+fi
+
+if [ -r /etc/pixie/mode ]; then
+    MODE=$(cat /etc/pixie/mode 2>/dev/null | head -1 | tr -d '\r\n[:space:]')
+else
+    case "${CMDLINE}" in
+        *"pixie.mac="*) MODE="Plan-driven" ;;
+        *)            MODE="Local" ;;
+    esac
+fi
+
+case "${PHASE}" in
+    early) PHASE_NUM=1 ; PHASE_NOTE="kernel handed off -- starting init" ;;
+    mid)   PHASE_NUM=2 ; PHASE_NOTE="network online" ;;
+    late)  PHASE_NUM=3 ; PHASE_NOTE="multi-user reached -- handing off to ${MODE}" ;;
+    *)     PHASE_NUM='?' ; PHASE_NOTE="${PHASE}" ;;
+esac
+
+BANNER="[ INFO ] PIXIE ${VERSION} | ${VARIANT} / ${MODE} | step ${PHASE_NUM} of 3 -- ${PHASE_NOTE}"
+
+# 1) stdout -> systemd routes to journal+console.
+printf '\n%s\n\n' "${BANNER}"
+
+# 2) /dev/tty1 -> always-visible local-console mirror.
+if [ -w /dev/tty1 ]; then
+    {
+        printf '\n%s\n\n' "${BANNER}"
+    } > /dev/tty1 2>/dev/null || true
+fi

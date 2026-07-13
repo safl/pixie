@@ -1,12 +1,15 @@
 name: ci
 
-# Three jobs:
+# Jobs:
 #   * ``test``: fast unit tests on the Python matrix.
 #   * ``integration``: builds the container, starts it under podman,
 #     runs ``pytest -m integration`` against the running container
 #     (real nbdkit, real HTTP, real NBD wire).
 #   * ``build-container``: separate smoke build kept for the "does
 #     the Containerfile parse on a fresh runner" signal.
+#   * ``build-media``: build the live-env media (netboot-pc + usbboot-pc
+#     variants) via the cijoe pipelines under cijoe/tasks/. Requires
+#     live-build + passwordless sudo; the runner has both.
 #
 # Publish jobs to PyPI + ghcr.io land in a follow-up PR once the
 # first operator-usable release is ready.
@@ -70,3 +73,92 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - run: podman build -t pixie:ci -f Containerfile .
+
+  build-media:
+    name: Build ${{ matrix.variant }} image
+    needs: test
+    runs-on: ubuntu-latest
+    # A cold live-build (netboot-pc / usbboot-pc) finishes in
+    # 25-40 min on a warm GHA runner. The dominant failure mode is
+    # a HANG (in-chroot apt / debootstrap has no timeout), so a 60
+    # min cap fails a stuck build fast; the cijoe-output artifact
+    # uploaded below (if: always()) carries the captured console +
+    # report.html for the post-mortem.
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        variant: [netboot-pc, usbboot-pc]
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install build dependencies
+        # Ubuntu's ``live-build`` package (20230502 on Noble) still
+        # fetches ``dists/<release>/Contents-<arch>.gz`` to resolve
+        # which package provides the kernel image; Debian moved
+        # Contents-*.gz under ``main/`` (per-component) for every
+        # active release, so the top-level URL 404s and the build
+        # aborts. Debian's pool ships a newer live-build (20240208+)
+        # with the fixed URL handling. Grab the latest .deb straight
+        # from the pool via wget + dpkg; live-build is Architecture:
+        # all (shell + perl, no libc dep) so a one-shot cross-distro
+        # install is safe.
+        run: |
+          set -eu
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            debootstrap squashfs-tools xorriso debian-archive-keyring \
+            exfatprogs exfat-fuse
+          POOL=http://ftp.debian.org/debian/pool/main/l/live-build
+          LB_DEB=$(curl -s "$POOL/" \
+              | grep -oE 'live-build_[0-9][^"<]*\.deb' \
+              | sort -V | tail -1)
+          if [ -z "$LB_DEB" ]; then
+              echo "could not find live-build .deb in $POOL/" >&2
+              exit 1
+          fi
+          echo "Fetching $LB_DEB"
+          wget -q "$POOL/$LB_DEB"
+          sudo dpkg -i "$LB_DEB"
+          lb --version
+
+      - name: Install cijoe
+        run: pipx install --force cijoe
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v8.1.0
+
+      - name: Build image
+        run: make build VARIANT=${{ matrix.variant }}
+
+      # cijoe captures the full run (per-command output incl. the
+      # in-chroot log + a rendered report.html) under
+      # cijoe/cijoe-output/. Upload it ALWAYS; on a hang/timeout
+      # this is the only window into what the bake was stuck on.
+      - name: Upload cijoe output
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: cijoe-output-${{ matrix.variant }}
+          path: cijoe/cijoe-output
+          if-no-files-found: warn
+
+      - name: Upload artifact (netboot-pc)
+        if: matrix.variant == 'netboot-pc'
+        uses: actions/upload-artifact@v7
+        with:
+          name: pixie-netboot-pc-x86_64
+          path: |
+            ~/system_imaging/disk/pixie-netboot-pc-x86_64-v*.vmlinuz
+            ~/system_imaging/disk/pixie-netboot-pc-x86_64-v*.initrd
+            ~/system_imaging/disk/pixie-netboot-pc-x86_64-v*.squashfs
+            ~/system_imaging/disk/pixie-netboot-pc-x86_64-v*.sha256
+
+      - name: Upload artifact (usbboot-pc)
+        if: matrix.variant == 'usbboot-pc'
+        uses: actions/upload-artifact@v7
+        with:
+          name: pixie-usbboot-pc-x86_64
+          path: |
+            ~/system_imaging/disk/pixie-usbboot-pc-x86_64-v*.iso.gz
+            ~/system_imaging/disk/pixie-usbboot-pc-x86_64-v*.sha256

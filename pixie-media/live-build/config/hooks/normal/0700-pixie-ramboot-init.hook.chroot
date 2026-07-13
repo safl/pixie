@@ -1,0 +1,34 @@
+#!/bin/sh
+# 0700-pixie-ramboot-init.hook.chroot -- finalise the ramboot-init
+# initramfs.
+#
+# The boot driver script (``/etc/initramfs-tools/scripts/ramboot``)
+# and the initramfs-tools include hook
+# (``/etc/initramfs-tools/hooks/pixie-ramboot``) are placed in the
+# chroot via the includes.chroot tree. live-build doesn't preserve
+# +x on those files, so this hook chmods them. With nbd-client +
+# busybox-static + the kernel modules in place from
+# pixie-ramboot.list.chroot, the next ``update-initramfs`` (which
+# live-build calls at the end of the chroot stage) picks them up.
+#
+# Idempotent: the second run of live-build (after lb clean) does
+# the same chmod and the same update-initramfs.
+#
+# The netboot-pc and usbboot-pc variants ship the same chroot, so
+# this hook runs for them too. That's fine: the resulting initramfs
+# has nbd-client + busybox + the boot driver baked in but the
+# kernel cmdline never carries ``boot=ramboot``, so the driver
+# script is never sourced.
+
+set -eu
+
+chmod 0755 /etc/initramfs-tools/hooks/pixie-ramboot
+chmod 0644 /etc/initramfs-tools/scripts/ramboot
+
+# Regenerate the initramfs so our hook + script land in the
+# initrd.img live-build will ship as the variant's initrd. Without
+# this, live-build's own initramfs-build step at the end of the
+# chroot stage will still pick them up (the files are present);
+# explicit ``update-initramfs -u`` here is belt-and-braces against
+# build-order quirks in older live-build releases.
+update-initramfs -u

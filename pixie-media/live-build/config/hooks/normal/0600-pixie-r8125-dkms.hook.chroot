@@ -1,0 +1,193 @@
+#!/bin/sh
+# 0600-pixie-r8125-dkms.hook.chroot - bake Realtek r8125 out-of-tree
+# driver into the live env.
+#
+# The in-tree ``r8169`` driver in kernel 6.13+ nominally covers
+# the RTL8125 / RTL8125B / RTL8126 2.5GbE chipset, but on some
+# consumer mini-PCs the upstream Realtek ``r8125`` driver has
+# device-init quirks the in-tree variant hasn't picked up yet.
+# Symptoms: NIC enumerates, link comes up briefly, then drops /
+# TX timeouts / failed firmware load. The boxes we see this on
+# include the GMKTec NUCBOX G10 (Ryzen 5) -- the live env can't
+# fetch its squashfs over HTTP if the NIC isn't usable, so PXE-
+# netboot fails before ``pixie`` ever appears.
+#
+# Source: https://github.com/awesometic/realtek-r8125-dkms
+# Packaging of the Realtek upstream source as a Debian DKMS
+# project.
+#
+# Safety invariant: the bake must NOT degrade hardware that
+# doesn't have an RTL8125-family NIC, AND must not silently lose
+# the NIC on a Secure-Boot target where the unsigned DKMS module
+# is rejected by kernel lockdown. The mechanism used here is a
+# softdep (see the heredoc lower down), NOT a modalias rewrite.
+# Specifically:
+#
+# * Machines with RTL8168 / RTL8169 (older Realtek 1GbE): r8125
+#   doesn't register for those device IDs even when loaded, so
+#   r8169 still binds them. No impact.
+# * Machines with Intel / Broadcom / Mellanox / etc.: neither
+#   r8125 nor r8169 would auto-load. No impact.
+# * Machines with the RTL8125 family on a Secure-Boot-DISABLED
+#   kernel: r8125 loads as a soft pre-dep of r8169, claims the
+#   RTL8125 device, r8169 has nothing left to bind. r8125 wins.
+# * Machines with the RTL8125 family on a Secure-Boot-ENABLED
+#   kernel (e.g. ASUS PN51-E1 stock firmware): r8125 is rejected
+#   by ``[integrity]`` lockdown with EKEYREJECTED, the softdep
+#   failure is logged and non-fatal, r8169 loads and binds the
+#   RTL8125 device. NIC works; some Realtek-2.5GbE-specific perf
+#   knobs in r8125 are lost but PXE/HTTP throughput is fine.
+#
+# Operator override to force r8169 even where r8125 would load:
+#       ln -s /dev/null /etc/modprobe.d/zz-pixie-r8125-prefer.conf
+#       update-initramfs -u && reboot
+#
+# The awesometic DKMS install script ships a flat
+# ``blacklist r8169`` modprobe entry that would impact non-2.5GbE
+# Realtek hardware. The end-of-hook ``rm -f`` removes that file;
+# our zz-pixie-r8125-prefer.conf takes its place.
+
+set -eu
+
+# arch guard: the r8125 driver targets Realtek 2.5GbE chipsets on
+# x86 mini-PCs (GMKTec NUCBOX G10 et al.); arm64 boards don't ship
+# those NICs (the Pi family uses Broadcom WiFi or Realtek 1GbE
+# RTL8211, neither of which speak this driver). On a non-amd64
+# build the chroot has no linux-headers-amd64 + no dkms either
+# (see ``pixie-base.list.chroot_amd64``), so attempting the build
+# would fail. Skip cleanly.
+if [ "$(dpkg --print-architecture)" != "amd64" ]; then
+    echo "0600-pixie-r8125-dkms: skipping on $(dpkg --print-architecture)"
+    exit 0
+fi
+
+# Source repo. ``master`` is the only branch the repo maintains;
+# the repo's HEAD is kept in lockstep with Realtek's latest
+# published driver source. If a specific upstream Realtek version
+# is wanted, swap for the matching commit hash.
+R8125_REPO="https://github.com/awesometic/realtek-r8125-dkms.git"
+R8125_REV="master"
+
+# Build against the kernel whose headers are actually installed,
+# selected by the presence of a ``build`` symlink rather than a blind
+# ``ls | head -1``. In this chroot that is normally the single
+# linux-image-amd64 (trixie-backports) kernel, but picking by headers
+# keeps the bake correct if a second kernel ever lands here -- the same
+# desync that broke the server cloud-init bake, where the build VM ran
+# a stock kernel while only the backports kernel's headers were present
+# and ``head -1`` selected the header-less one.
+KVER=""
+for moddir in /lib/modules/*/; do
+    [ -e "${moddir}build" ] || continue
+    KVER=$(basename "${moddir}")
+done
+if [ -z "${KVER}" ]; then
+    echo "0600-pixie-r8125-dkms: no installed kernel headers under /lib/modules; chroot package install must run first" >&2
+    exit 1
+fi
+
+# Build deps. linux-headers-amd64 came in via the package list
+# (pinned to trixie-backports so the headers match the kernel
+# image); installing again is a no-op. dkms + build-essential
+# are installed here rather than in the package list because the
+# *.list.chroot files don't have a clean way to mark a package as
+# build-time-only -- we want to purge build-essential after the
+# bake to keep the squashfs slim.
+apt-get install -y --no-install-recommends dkms build-essential
+
+WORK=/usr/src/r8125-build
+rm -rf "${WORK}"
+git clone --depth 1 --branch "${R8125_REV}" "${R8125_REPO}" "${WORK}"
+
+# Parse the upstream version string from dkms.conf so ``dkms add``
+# / ``build`` / ``install`` reference the same identifier the repo
+# was packaged with.
+R8125_VERSION=$(awk -F'"' '/^PACKAGE_VERSION=/ {print $2}' "${WORK}/dkms.conf")
+if [ -z "${R8125_VERSION}" ]; then
+    echo "0600-pixie-r8125-dkms: could not parse PACKAGE_VERSION from dkms.conf" >&2
+    exit 1
+fi
+
+# Stage the source where DKMS expects it.
+SRC_DIR="/usr/src/r8125-${R8125_VERSION}"
+rm -rf "${SRC_DIR}"
+mv "${WORK}" "${SRC_DIR}"
+
+dkms add -m r8125 -v "${R8125_VERSION}"
+dkms build -m r8125 -v "${R8125_VERSION}" -k "${KVER}"
+dkms install -m r8125 -v "${R8125_VERSION}" -k "${KVER}"
+depmod -a "${KVER}"
+
+# Remove the awesometic DKMS install's modprobe entry if it
+# blacklists r8169 wholesale (varies by upstream version): we
+# replace it with a narrower device-id-scoped alias so non-2.5GbE
+# Realtek hardware (RTL8168 / RTL8169) keeps using r8169.
+rm -f /etc/modprobe.d/r8125-dkms.conf /etc/modprobe.d/blacklist-r8169.conf
+
+# Prefer r8125 for RTL8125-family devices via a softdep, NOT a
+# modalias rewrite. softdep is the right tool here because:
+#
+# 1. A ``/etc/modprobe.d`` alias REPLACES the kmod ``modules.alias``
+#    matches for that modalias; it doesn't union with them. So an
+#    alias-based override leaves no fallback if the named module
+#    fails to load.
+# 2. The DKMS-built r8125.ko.xz is UNSIGNED. On a target with UEFI
+#    Secure Boot enabled the kernel runs in ``[integrity]``
+#    lockdown and rejects unsigned modules with EKEYREJECTED
+#    (``modprobe: Key was rejected by service``). udev's
+#    auto-load then has nothing to bind -- NIC dark, PXE flash
+#    fails before pixie ever appears. Observed on ASUS PN51-E1
+#    (RTL8125B + Secure Boot on by default in firmware).
+#
+# ``softdep r8169 pre: r8125`` keeps the kmod modalias resolution
+# pointed at r8169 (so udev still picks an in-tree, signed module)
+# and asks modprobe to load r8125 first as a *soft* pre-dep. Soft
+# dep failures are non-fatal: on a Secure-Boot box r8125 is
+# rejected, the failure is logged, and r8169 still loads and binds
+# the RTL8125 device. On a non-Secure-Boot G10 r8125 loads first,
+# claims the RTL8125B device, and r8169 has nothing to bind.
+# Other Realtek device IDs (RTL8168 / RTL8169 1GbE family) are
+# unaffected -- r8169 still wins outright since r8125 doesn't
+# register for those device IDs even when loaded.
+#
+# Operator override to force r8169-only (e.g. when r8125 misbehaves
+# on a specific board):
+#   ln -s /dev/null /etc/modprobe.d/zz-pixie-r8125-prefer.conf
+#   update-initramfs -u && reboot
+cat > /etc/modprobe.d/zz-pixie-r8125-prefer.conf <<'EOF'
+# pixie: prefer the out-of-tree r8125 driver for the RTL8125 / B and
+# RTL8126 2.5GbE family by loading it before r8169. If r8125 can't
+# load (Secure-Boot kernel rejects the unsigned DKMS module), the
+# softdep failure is non-fatal and r8169 binds as fallback.
+softdep r8169 pre: r8125
+
+# Disable Energy-Efficient Ethernet on r8125. EEE can cause
+# auto-negotiate flapping with some switches; safer to leave it
+# off on a PXE-boot path where one dropped link delays the
+# entire flash.
+#
+# Disable PCIe ASPM (Active State Power Management). The G10's
+# Realtek RTL8125 brings the link up but drops TCP packets mid-
+# transfer when the PCIe link transitions to a lower power state
+# under load; ``apt-get update`` and image fetches stall. ASPM
+# saves single-digit milliwatts; the appliance is line-powered
+# and the per-packet cost dwarfs the saving.
+options r8125 enable_eee=0 aspm=0
+EOF
+
+# Rebuild the initramfs so the r8125 module is available during
+# early boot (the live env's first action is to fetch the squashfs
+# over HTTP via the kernel cmdline ``fetch=`` param; the NIC must
+# be alive before pivot-root). live-build's binary stage
+# regenerates the initrd anyway; ``update-initramfs -u -k all`` is
+# defence in depth.
+update-initramfs -u -k all
+
+# Drop the build deps. We keep ``dkms`` itself + the staged source
+# under /usr/src so an operator at runtime can rebuild against a
+# different kernel without re-cloning. build-essential weighs
+# ~250 MiB compressed (gcc + libc-dev + headers); the live env
+# squashfs survives without it.
+apt-get purge -y --autoremove build-essential
+apt-get clean
+rm -rf /var/lib/apt/lists/*

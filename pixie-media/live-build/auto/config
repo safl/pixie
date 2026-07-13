@@ -1,0 +1,201 @@
+#!/bin/sh
+# auto/config - live-build configuration for the pixie live env.
+#
+# live-build invokes this script when (re)configuring the build dir
+# (typically the first ``lb build`` run, and again whenever ``lb build``
+# itself calls ``lb config``). Encodes our lb config args: Debian
+# trixie, no debian-installer, no memtest, no apt recommends, no
+# security. Architecture + binary-image-shape + bootloader options
+# are derived from the ``PIXIE_VARIANT`` environment variable.
+#
+# Variants:
+#
+#   - ``netboot-pc`` (default): amd64 kernel + initrd + squashfs
+#     trio for the PXE flow. Server hosts these three files over
+#     HTTP and clients chain into them via iPXE.
+#   - ``usbboot-pc``: amd64 hybrid ISO image bootable from CD or USB
+#     (BIOS + UEFI). Adds ``--bootloaders syslinux,grub-efi`` for
+#     dual-firmware boot. No ``pixie.*`` cmdline params: USB-local
+#     boot has no pixie-server URL or self-MAC to pin, and
+#     ``pixie-on-tty1.service`` fires unconditionally
+#     (v0.22.10+ retired the ConditionKernelCommandLine gating).
+# The arm64 ``usbboot-rpi`` flasher is NOT a live-build variant. It
+# customizes Raspberry Pi OS Lite in place (loop-mount + chroot; see
+# ``cijoe/scripts/rpios_image_build.py``) so it never reaches this
+# config -- RPiOS already ships every Pi kernel + dtb + firmware,
+# which a live image cannot supply cleanly across the split per-SoC
+# vendor kernels. live-build here builds only the amd64 x86 variants.
+#
+# Both x86 variants share the same chroot package set + hooks; the
+# amd64 kernel + microcode + r8125 DKMS build env live in the
+# generated ``pixie-arch.list.chroot``.
+#
+# ``lb build`` re-runs this script during its internal ``lb config``
+# step, so ``PIXIE_VARIANT`` must be set in the build invocation's
+# environment, not just at the initial config call (sudo strips env
+# by default; ``cijoe/scripts/usb_iso_build.py`` uses
+# ``sudo env PIXIE_VARIANT=...``).
+#
+# Requires live-build 20240208+ (Debian trixie or newer) which
+# fetches ``dists/<release>/main/Contents-<arch>.gz`` from the
+# per-component layout Debian now publishes. Ubuntu's stock
+# live-build 20230502 still uses the obsolete top-level URL and
+# 404s on every active Debian release; ci-cd.yml's media build jobs
+# pull the trixie .deb explicitly to work around that.
+set -e
+
+# Plymouth was retired in v0.22.1: the kernel-stage graphical splash
+# wedged plymouth-quit-wait on several Intel iGPUs (MS-01, EPYC
+# bring-up box) and the mascot-splash value didn't justify the
+# multi-layer workaround stack (cmdline disable + package purge +
+# variant split). The live env now boots to plain kernel + systemd
+# init messages; ``/etc/issue`` (rendered by agetty on tty1) carries
+# the pixie identity. ``plymouth.enable=0`` stays on the cmdline as
+# belt-and-braces in case plymouth ever gets pulled in transitively
+# by a future package change: with no package installed it's a
+# no-op.
+
+# Transparency: NO ``quiet``, NO ``splash``. pixie wants the full
+# kernel + systemd boot stream visible on tty1/serial; a wedge
+# between ``[ OK ] Started X`` and ``[ OK ] Started Y`` is
+# immediately diagnostic. Same reason plymouth was retired (v0.22.1):
+# hiding init output makes operator debugging harder, polish is not
+# worth the opacity.
+
+PIXIE_VARIANT="${PIXIE_VARIANT:-netboot-pc}"
+
+case "${PIXIE_VARIANT}" in
+    netboot-pc)
+        ARCH=amd64
+        BINARY_IMAGES=netboot
+        BOOTLOADERS_OPTS=""
+        # The PXE-flash chain (server's ipxe_flash.j2 / ipxe_tui.j2)
+        # appends ``pixie.server=...`` + ``pixie.mac=...`` per-client at
+        # render time, so the chroot's static bootappend doesn't carry
+        # them. ``modprobe.blacklist=...`` mirrors the iPXE chain
+        # rationale (see ipxe_flash.j2 for the full story): nouveau
+        # for iGPU wedges, rndis_host for Aspeed BMC USB Virtual NICs.
+        BOOTAPPEND="boot=live components plymouth.enable=0 modprobe.blacklist=nouveau,rndis_host nouveau.modeset=0 systemd.gpt_auto=0 pixie.version=__PIXIE_VERSION__"
+        ;;
+    usbboot-pc)
+        ARCH=amd64
+        BINARY_IMAGES=iso-hybrid
+        BOOTLOADERS_OPTS="--bootloaders syslinux,grub-efi"
+        # ``console=tty0 console=ttyS0,115200``: kernel + systemd boot
+        # messages go to BOTH the framebuffer (tty0, for real hardware
+        # operators) and the serial port (ttyS0, for QEMU/IP-KVM/anything
+        # capturing the serial). The LAST ``console=`` is the systemd
+        # default-stdout sink; we list ttyS0 last so the auto-grow test
+        # sees ``[ OK ] Started pixie-usb-grow.service`` on its captured
+        # serial log. Harmless on real USB sticks without a serial port:
+        # writes are dropped.
+        # ``modprobe.blacklist=nouveau,rndis_host`` keeps the USB-boot
+        # path's behavior identical to the PXE chain: nouveau for iGPU
+        # wedges, rndis_host so Supermicro / Aspeed BMC USB Virtual NICs
+        # don't get claimed and confuse live-boot's NIC autoselect.
+        BOOTAPPEND="boot=live components noeject plymouth.enable=0 modprobe.blacklist=nouveau,rndis_host nouveau.modeset=0 systemd.gpt_auto=0 console=tty0 console=ttyS0,115200 pixie.version=__PIXIE_VERSION__"
+        ;;
+    ramboot-init)
+        # The slim live-init for pixie's ``ramboot`` boot mode (v0.62+).
+        # Same live-build dispatch shape as ``netboot-pc`` (amd64,
+        # binary=netboot) so we reuse the existing kernel package,
+        # microcode, firmware-chroot, and initramfs assembly machinery.
+        # Publishes only vmlinuz + initrd (the squashfs lb still
+        # builds is dropped by cijoe/scripts/live_build.py because
+        # the ramboot init never reaches the live-boot squashfs-mount
+        # stage). See pixie-media/live-build/config/hooks/normal/
+        # 0700-pixie-ramboot-init.hook.chroot for the in-initrd
+        # nbd-client + overlayfs + pivot_root logic this variant
+        # ships.
+        #
+        # pixie.* cmdline params: pixie-web's ipxe_ramboot.j2 template
+        # appends ``pixie.nbd=tcp://<host>:<port> pixie.image=<ref>
+        # pixie.overlay_size=<size> pixie.server=<...> pixie.mac=<...>``
+        # per-client at render time; the bootappend below only
+        # carries the chroot-static ``boot=ramboot`` selector and
+        # the console + kernel hardening tokens.
+        ARCH=amd64
+        BINARY_IMAGES=netboot
+        BOOTLOADERS_OPTS=""
+        BOOTAPPEND="boot=ramboot plymouth.enable=0 modprobe.blacklist=nouveau,rndis_host nouveau.modeset=0 systemd.gpt_auto=0 console=tty0 console=ttyS0,115200 pixie.version=__PIXIE_VERSION__"
+        ;;
+    *)
+        echo "auto/config: unknown PIXIE_VARIANT=${PIXIE_VARIANT}" >&2
+        echo "  valid: netboot-pc | usbboot-pc | ramboot-init" >&2
+        exit 2
+        ;;
+esac
+
+# Per-architecture package list, written here rather than in a
+# ``.list.chroot_<arch>``-suffixed file under ``config/package-lists/``
+# because Debian live-build 3.0~a57 (Ubuntu trixie/jammy runners) does
+# NOT consume the underscore-suffix form; the docs imply it should
+# but the runner build that ships with the GHA image does not. To
+# avoid version-specific guesswork, generate a plain
+# ``pixie-arch.list.chroot`` based on the resolved ``${ARCH}``. live-
+# build always consumes unsuffixed ``*.list.chroot`` files.
+mkdir -p config/package-lists
+case "${ARCH}" in
+    amd64)
+        # amd64 kernel + Intel/AMD microcode + r8125 DKMS build env.
+        # Why microcode: PXE-booted bare metal has no host-loaded
+        # ucode, and modern Ryzen + recent Intel cores ship factory
+        # microcode missing Spectre/SRBDS/Reptar/Inception mitigations.
+        # Pinned to trixie-backports via
+        # ``config/preferences/backports.pref.chroot``.
+        cat >config/package-lists/pixie-arch.list.chroot <<'PKGS'
+linux-image-amd64
+intel-microcode
+amd64-microcode
+dkms
+build-essential
+linux-headers-amd64
+PKGS
+        ;;
+    *)
+        echo "auto/config: no per-arch package list for ARCH=${ARCH}" >&2
+        exit 2
+        ;;
+esac
+
+# shellcheck disable=SC2086 # BOOTLOADERS_OPTS is intentionally word-split
+lb config noauto \
+    --mode debian \
+    --distribution trixie \
+    --architectures "${ARCH}" \
+    --archive-areas "main non-free-firmware" \
+    --firmware-chroot true \
+    --binary-images "${BINARY_IMAGES}" \
+    --debian-installer none \
+    --memtest none \
+    --apt-recommends false \
+    --security false \
+    ${BOOTLOADERS_OPTS} \
+    --bootappend-live "${BOOTAPPEND}" \
+    "${@}"
+# ``--archive-areas "main non-free-firmware"`` unlocks the
+# ``firmware-*`` packages. Default areas are just ``main``, which
+# silently drops every firmware blob and produces a live env where
+# i915 wedges the GPU on probe and certain NIC / WiFi chipsets fail
+# to load. Debian split ``non-free-firmware`` out of ``non-free``
+# in bookworm precisely so this archive can be enabled on its own.
+#
+# ``--firmware-chroot true`` pulls ``firmware-linux-nonfree`` (a
+# metapackage that Depends on EVERY individual nonfree ``firmware-*``
+# package: realtek, iwlwifi, atheros, brcm80211, mediatek, ath11k,
+# bnx2/bnx2x, netronome, nvidia-graphics, amd-graphics, and a long
+# tail of server-NIC + old-WiFi blobs). The size cost (~300 MiB
+# compressed) buys "boots on whatever bare-metal box the operator
+# points it at"; the alternative is the operator hits a missing
+# firmware -> driver init failure -> dead NIC and can't proceed.
+# A curated list is too narrow: Realtek WiFi/BT chipsets alone
+# span half a dozen firmware packages and consumer mini-PCs cycle
+# them quickly.
+# The trixie-backports archive layered via
+# ``config/archives/backports.list.chroot`` plus the pin in
+# ``config/preferences/backports.pref.chroot`` makes apt pull the
+# newest kernel + firmware Debian ships, not just trixie's.
+# Bootloader-menu suppression: see
+# ``hooks/binary/0500-pixie-skip-bootloader-menu.hook.binary``. Don't
+# add ``--syslinux-timeout`` here; live-build trixie doesn't
+# recognise that flag and ``lb config`` errors out.

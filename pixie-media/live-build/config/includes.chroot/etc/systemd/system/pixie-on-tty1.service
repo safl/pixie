@@ -1,0 +1,78 @@
+[Unit]
+Description=pixie on tty1 -- server-driven dispatcher (auto-flash / wizard / no-op)
+Documentation=https://github.com/safl/pixie
+# Fires unconditionally on every live env boot. ``pixie`` reads
+# ``pixie.server`` + ``pixie.mac`` from /proc/cmdline (via the
+# /usr/local/sbin/pixie-on-tty1 wrapper), GETs
+# ``<server>/pxe/<mac>/plan``, and dispatches on the JSON response:
+#
+#   mode=auto        -> flash without prompts, then reboot.
+#   mode=interactive -> drop the operator into the wizard.
+#   mode=local       -> print a notice and exit cleanly.
+#
+# No ConditionKernelCommandLine gating: the v0.22.10 design replaced
+# the cmdline-mode dispatch (``pixie.mode=interactive`` vs an implicit
+# ``flash`` form via ``pixie.image_url=``) with the server-side
+# /pxe/<mac>/plan endpoint. The cmdline now carries just
+# ``pixie.server`` + ``pixie.mac``; ``pixie`` itself decides what to do.
+# This means USB-local (no ``pixie.server`` set) also runs the same
+# service path -- ``pixie`` falls back to local image-root scanning
+# when there's no server to ask.
+#
+# Renamed from ``pixie-tui-on-tty1.service`` in v0.22.10 alongside the
+# pixie-cli + pixie-tui merge: the binary is just ``pixie`` now.
+After=network-online.target
+Wants=network-online.target
+# Take over tty1: the live env's auto-login agetty is the default
+# session there; we want to BE the session, not run inside it.
+# ``Before=getty@tty1.service`` (combined with ``Conflicts=``) means
+# ``pixie`` starts BEFORE getty has a chance to render its login
+# prompt -- otherwise the operator sees the agetty login flash on
+# screen for the seconds it takes us to take over, which they read
+# as "boot didn't go directly to pixie". With Before+Conflicts,
+# getty never gets a chance to start in the first place.
+Conflicts=getty@tty1.service
+Before=getty@tty1.service
+# Bound the respawn loop. If pixie crashes on the first frame (e.g.
+# a corrupted state.db or a malformed catalog stick), without a
+# limit systemd would respawn the splash every 5s forever and the
+# operator would see the pixie banner repaint with no way to break
+# out short of switching ttys and ``systemctl stop``. After 5
+# failures in 60s, give up so the actual error surfaces on the
+# tty + in journalctl. StartLimit* live in [Unit], NOT [Service];
+# systemd 257+ logs ``Unknown key 'StartLimitIntervalSec' in
+# section [Service], ignoring`` and the cap silently does nothing.
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+# Type=simple (not idle): with Type=idle systemd delays ExecStart
+# until the job queue drains, which on slower targets and on
+# unattended PXE boots can wedge pixie's appearance for 30-60s
+# while the operator watches systemd init messages scroll past.
+# We do not need idle's output-interleaving guarantee here -- the
+# Conflicts=getty@tty1 + TTYVHangup combo already takes the tty
+# cleanly.
+Type=simple
+# pixie-trace hook: emits ``pixie-on-tty1 starting`` via /dev/kmsg
+# right before the Python launch, so the gap between this marker
+# and the existing ``pixie: entered v<X>`` marker (emitted by
+# ``pixie.tui:main`` once Rich + Textual have loaded) shows the
+# Python-cold-start cost. No "ready" hook because Type=simple
+# units' ExecStartPost runs as soon as ExecStart starts -- not
+# after the wizard exits -- so it wouldn't time anything useful.
+ExecStartPre=/usr/local/sbin/pixie-trace pixie-on-tty1 starting
+ExecStart=/usr/local/sbin/pixie-on-tty1
+Restart=on-failure
+RestartSec=5
+# Plumb tty1 in as the controlling terminal so pixie's Rich
+# Prompt.ask reads from the right tty.
+StandardInput=tty
+StandardOutput=tty
+StandardError=tty
+TTYPath=/dev/tty1
+TTYReset=yes
+TTYVHangup=yes
+
+[Install]
+WantedBy=multi-user.target

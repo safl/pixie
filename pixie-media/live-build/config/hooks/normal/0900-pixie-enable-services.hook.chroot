@@ -1,0 +1,84 @@
+#!/bin/sh
+# 0900-pixie-enable-services.hook.chroot - enable pixie live-env services.
+#
+# Runs after 0500-pixie-install (CLI present) and after live-build's
+# default hooks. Creates the multi-user.target.wants symlinks so the
+# services start automatically on every boot of the live env. Each
+# unit decides at runtime whether it actually has work to do:
+#
+# - ``pixie-on-tty1.service`` runs unconditionally on tty1 (the
+#   live env's only operator-facing surface). The wrapper script
+#   ``/usr/local/sbin/pixie-on-tty1`` reads ``pixie.server`` +
+#   ``pixie.mac`` from /proc/cmdline and exec's ``pixie --server X
+#   --mac Y``; ``pixie`` then GETs ``<server>/pxe/<mac>/plan`` and
+#   dispatches (auto-flash / interactive / no-op). The legacy
+#   ``pixie-flash-on-boot.service`` + ``pixie.mode=interactive``
+#   ConditionKernelCommandLine gating was retired in v0.22.10 --
+#   the server-side plan endpoint is now the single dispatch
+#   point.
+# - ``var-lib-pixie-images.mount`` mounts the PIXIE_IMGS partition
+#   at /var/lib/pixie/images (RO) so ``pixie`` sees it as the local
+#   image catalog. Gated on
+#   ``ConditionPathExists=/dev/disk/by-label/PIXIE_IMGS`` so it
+#   no-ops cleanly when the operator booted from a stick that
+#   doesn't have a PIXIE_IMGS partition (e.g. netboot env, or
+#   the same .iso loaded via Ventoy where the internal partitions
+#   aren't enumerated).
+# - ``pixie-images-discover.service`` handles the case the previous
+#   line just described: it runs AFTER var-lib-pixie-images.mount,
+#   exits early if that mount succeeded, otherwise scans every
+#   attached vfat / exfat partition for image content and bind-
+#   mounts the first match at /var/lib/pixie/images. Covers Ventoy,
+#   piKVM, JetKVM, and any other loop-mount shim that hides the
+#   pixie.iso's internal partitions from the booted kernel.
+#
+# pixie-usb-grow: on the first boot from a dedicated USB stick,
+# extend PIXIE_IMGS to fill the disk so the operator gets the
+# full capacity for their image catalog. Skipped on Ventoy /
+# BMC-virtual-media boots (no separate partition exists in those
+# shims). Content is preserved via tar archive -> tmpfs ->
+# restore-after-reformat (exFAT doesn't support online resize).
+# Sentinel files on the partition prevent re-runs.
+
+set -eu
+systemctl enable pixie-on-tty1.service
+systemctl enable pixie-images-discover.service
+systemctl enable var-lib-pixie-images.mount
+systemctl enable pixie-usb-grow.service
+# Three-banner boot progress (post-plymouth-retirement
+# replacement; v0.22.1). Each fires at a stable boot
+# checkpoint so an operator watching the screen sees "PIXIE
+# step 1 of 3", "PIXIE step 2 of 3", "PIXIE step 3 of 3" mixed
+# in with the systemd init log -- "this is pixie + how far".
+systemctl enable pixie-banner-early.service
+systemctl enable pixie-banner-mid.service
+systemctl enable pixie-banner-late.service
+
+# Make sure the banner script is executable -- live-build
+# does not preserve +x on files coming from includes.chroot/
+# by default.
+chmod 0755 /usr/local/sbin/pixie-boot-banner
+
+# Belt-and-braces explicit symlinks. ``systemctl enable`` in a
+# live-build chroot occasionally produces a no-op (silent on
+# stdout, no .wants/ symlink) when the dbus / systemd-tmpfiles
+# state of the chroot is in an awkward shape -- we've seen unit
+# files baked into the squashfs without their multi-user.target
+# wants link, and a unit not enabled = unit not run. Adding
+# explicit ``ln -sf`` here is idempotent (``systemctl enable``
+# already created the link in the happy path; we overwrite
+# with the same target) and survives any future regression in
+# systemctl's chroot-mode behaviour.
+mkdir -p /etc/systemd/system/multi-user.target.wants
+mkdir -p /etc/systemd/system/sysinit.target.wants
+for svc in pixie-on-tty1.service \
+           pixie-images-discover.service var-lib-pixie-images.mount \
+           pixie-usb-grow.service \
+           pixie-banner-mid.service pixie-banner-late.service; do
+    ln -sf "/etc/systemd/system/${svc}" \
+           "/etc/systemd/system/multi-user.target.wants/${svc}"
+done
+# pixie-banner-early lands in sysinit.target.wants (it's WantedBy
+# sysinit.target so it fires before the multi-user wave).
+ln -sf "/etc/systemd/system/pixie-banner-early.service" \
+       "/etc/systemd/system/sysinit.target.wants/pixie-banner-early.service"

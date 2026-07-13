@@ -1,0 +1,23 @@
+# Pin linux-image-amd64 + firmware-* to trixie-backports so apt
+# resolves the chroot package install to the newer versions when
+# both trixie and trixie-backports have a candidate.
+#
+# Default apt priority for trixie-backports (a NotAutomatic suite)
+# is 100, which means apt never picks it over trixie. Bumping these
+# specific packages to 990 -- the same priority apt gives the target
+# release -- makes the newer version win without globally enabling
+# backports.
+#
+# Why constrained to kernel + firmware: pulling random userspace
+# from backports risks ABI drift against trixie's libc / systemd /
+# etc. Kernel + firmware are self-contained and the whole reason we
+# enabled the archive in the first place (broader bare-metal HW
+# coverage, e.g. Realtek RTL8125/8126 + newer rtw89 WiFi chipsets).
+#
+# linux-headers-* must match linux-image-* exactly -- the r8125
+# DKMS build (see hooks/normal/0600-pixie-r8125-dkms.hook.chroot)
+# fails to compile if the chroot resolves headers to trixie main
+# while the kernel itself came from backports.
+Package: linux-image-amd64 linux-image-*-amd64 linux-headers-amd64 linux-headers-*-amd64 firmware-* intel-microcode amd64-microcode
+Pin: release a=trixie-backports
+Pin-Priority: 990
