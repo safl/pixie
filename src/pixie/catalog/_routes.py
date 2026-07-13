@@ -99,6 +99,29 @@ def _decode_sha(seg: str) -> str:
     return seg
 
 
+def _emit_event(
+    request: Request,
+    kind: str,
+    *,
+    subject_kind: str = "",
+    subject_id: str = "",
+    summary: str = "",
+    details: dict[str, Any] | None = None,
+) -> None:
+    """Fire-and-forget event emit. Skips silently when the events log
+    isn't attached (e.g. lightweight unit-test app construction)."""
+    log = getattr(request.app.state, "events_log", None)
+    if log is None:
+        return
+    log.emit(
+        kind,
+        subject_kind=subject_kind,
+        subject_id=subject_id,
+        summary=summary,
+        details=details or {},
+    )
+
+
 router = APIRouter()
 
 
@@ -144,6 +167,13 @@ def add_entry(
         )
     entry = entry_from_dict(body.model_dump())
     store.upsert(entry)
+    _emit_event(
+        request,
+        "catalog.entry.added",
+        subject_kind="entry",
+        subject_id=entry.name,
+        summary=f"{entry.name} ({entry.format})",
+    )
     return {"entry": entry.to_dict()}
 
 
@@ -163,6 +193,13 @@ def delete_entry(
             detail=f"no entry with name={name!r}",
         )
     _fetch_states(request).pop(name, None)
+    _emit_event(
+        request,
+        "catalog.entry.deleted",
+        subject_kind="entry",
+        subject_id=name,
+        summary=name,
+    )
     return Response(status_code=204)
 
 
@@ -192,23 +229,58 @@ async def start_fetch(
     states[name] = {"state": "fetching", "started_at": now_iso(), "error": None}
     pool = _get_fetch_pool(request)
     loop = asyncio.get_event_loop()
+    log = getattr(request.app.state, "events_log", None)
+    log_emit = log.emit if log is not None else None
+
+    if log_emit is not None:
+        log_emit(
+            "catalog.fetch.started",
+            subject_kind="entry",
+            subject_id=name,
+            summary=f"{name} <- {entry.src}",
+        )
 
     def _run() -> None:
         try:
-            fetch(entry, store)
+            result = fetch(entry, store)
             states[name] = {"state": "done", "started_at": states[name].get("started_at")}
+            if log_emit is not None:
+                log_emit(
+                    "catalog.fetch.done",
+                    subject_kind="entry",
+                    subject_id=name,
+                    summary=f"{name}: {result.size_bytes} bytes, sha {result.content_sha256[:12]}",
+                    details={
+                        "content_sha256": result.content_sha256,
+                        "size_bytes": result.size_bytes,
+                    },
+                )
         except FetchError as exc:
             states[name] = {
                 "state": "error",
                 "started_at": states[name].get("started_at"),
                 "error": str(exc),
             }
+            if log_emit is not None:
+                log_emit(
+                    "catalog.fetch.failed",
+                    subject_kind="entry",
+                    subject_id=name,
+                    summary=str(exc),
+                )
         except Exception as exc:
             states[name] = {
                 "state": "error",
                 "started_at": states[name].get("started_at"),
                 "error": f"internal: {exc}",
             }
+            if log_emit is not None:
+                log_emit(
+                    "catalog.fetch.failed",
+                    subject_kind="entry",
+                    subject_id=name,
+                    summary=f"internal: {exc}",
+                )
 
     loop.run_in_executor(pool, _run)
     return {"state": "fetching", "started_at": states[name].get("started_at")}

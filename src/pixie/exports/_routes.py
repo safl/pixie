@@ -147,6 +147,15 @@ def register_export(
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
     exports.update_runtime(body.name, nbd_port=port, status="running", error="")
+    log = getattr(request.app.state, "events_log", None)
+    if log is not None:
+        log.emit(
+            "export.registered",
+            subject_kind="export",
+            subject_id=body.name,
+            summary=f"{body.name} on port {port}",
+            details={"content_sha256": body.content_sha256, "nbd_port": port},
+        )
     row = exports.get(body.name)
     assert row is not None
     return row.to_dict()
@@ -164,4 +173,7 @@ def delete_export(
         raise HTTPException(status_code=404, detail=f"no export named {name!r}")
     nbd.terminate(name)
     exports.delete(name)
+    log = getattr(request.app.state, "events_log", None)
+    if log is not None:
+        log.emit("export.deleted", subject_kind="export", subject_id=name, summary=name)
     return Response(status_code=204)

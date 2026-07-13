@@ -1,0 +1,50 @@
+{% extends "layout.html" %}
+{% block title %}pixie events{% endblock %}
+{% block content %}
+<div class="card">
+    <h1>Events</h1>
+    <p class="muted">
+        Every write path pixie takes lands one row here: catalog
+        fetches, machine binds, export registrations, TFTP starts.
+        Newest first. Append-only.
+    </p>
+
+    {% if events %}
+    <table>
+        <thead>
+            <tr>
+                <th>When</th>
+                <th>Kind</th>
+                <th>Subject</th>
+                <th>Summary</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for e in events %}
+            <tr>
+                <td class="small muted">{{ e.ts }}</td>
+                <td><code>{{ e.kind }}</code></td>
+                <td>
+                    {% if e.subject_kind %}
+                    <code>{{ e.subject_kind }}</code>
+                    <br><span class="muted small">{{ e.subject_id }}</span>
+                    {% else %}
+                    <span class="muted">-</span>
+                    {% endif %}
+                </td>
+                <td>{{ e.summary or "" }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <p class="muted">No events yet.</p>
+    {% endif %}
+</div>
+<style>
+    table { width: 100%; border-collapse: collapse; margin-top: 1rem; }
+    th, td { padding: 0.5rem; text-align: left; border-bottom: 1px solid #334155; vertical-align: top; }
+    th { color: #94a3b8; font-weight: 500; font-size: 0.875rem; }
+    .small { font-size: 0.75rem; }
+</style>
+{% endblock %}

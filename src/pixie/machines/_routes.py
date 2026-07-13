@@ -77,6 +77,18 @@ def upsert_machine(
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    log = getattr(request.app.state, "events_log", None)
+    if log is not None:
+        details: dict[str, Any] = {"boot_mode": row.boot_mode}
+        if row.image_content_sha256:
+            details["image_content_sha256"] = row.image_content_sha256
+        log.emit(
+            "machine.bound",
+            subject_kind="machine",
+            subject_id=row.mac,
+            summary=f"{row.mac} -> {row.boot_mode}",
+            details=details,
+        )
     return row.to_dict()
 
 
@@ -92,4 +104,7 @@ def delete_machine(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     if not _get_machines(request).delete(canon):
         raise HTTPException(status_code=404, detail=f"no machine {canon}")
+    log = getattr(request.app.state, "events_log", None)
+    if log is not None:
+        log.emit("machine.deleted", subject_kind="machine", subject_id=canon, summary=canon)
     return Response(status_code=204)
