@@ -1,0 +1,21 @@
+{% extends "layout.html" %}
+{% block title %}pixie login{% endblock %}
+{% block content %}
+<div class="card">
+    <h1>pixie</h1>
+    <p class="muted">Bare-metal netboot appliance.</p>
+    {% if error %}
+    <p class="error">{{ error }}</p>
+    {% endif %}
+    <form method="post" action="/ui/login">
+        <p>
+            <label for="password">Admin password</label><br>
+            <input type="password" id="password" name="password"
+                   autocomplete="current-password" autofocus required>
+        </p>
+        <p>
+            <button type="submit">Sign in</button>
+        </p>
+    </form>
+</div>
+{% endblock %}

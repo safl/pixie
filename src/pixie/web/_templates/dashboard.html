@@ -1,0 +1,15 @@
+{% extends "layout.html" %}
+{% block title %}pixie dashboard{% endblock %}
+{% block content %}
+<div class="card">
+    <h1>pixie</h1>
+    <p class="muted">
+        Skeleton at v{{ version }}. No catalog, no fetch, no exports,
+        no PXE plan renderer, no TFTP. Feature routers land in later
+        PRs; see <code>PLAN.md</code>.
+    </p>
+    <form method="post" action="/ui/logout">
+        <button type="submit">Sign out</button>
+    </form>
+</div>
+{% endblock %}
