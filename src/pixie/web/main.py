@@ -37,6 +37,8 @@ from starlette.middleware.sessions import SessionMiddleware
 import pixie
 from pixie.catalog._routes import router as catalog_router
 from pixie.catalog._store import CatalogStore
+from pixie.events import EventsLog
+from pixie.events._routes import router as events_router
 from pixie.exports._routes import router as exports_router
 from pixie.exports._store import ExportsStore
 from pixie.exports._supervisor import DEFAULT_PORT_BASE, NbdServer
@@ -204,6 +206,7 @@ def create_app() -> FastAPI:
     app.state.catalog_store = CatalogStore(state_dir)
     app.state.exports_store = ExportsStore(app.state.catalog_store.db_path)
     app.state.machines_store = MachinesStore(app.state.catalog_store.db_path)
+    app.state.events_log = EventsLog(app.state.catalog_store.db_path)
     app.state.nbd_server = NbdServer(
         port_base=_resolve_nbd_port_base(),
         bind=_resolve_nbd_bind(),
@@ -398,6 +401,23 @@ def create_app() -> FastAPI:
         request.app.state.machines_store.delete(mac)
         return RedirectResponse(url="/ui/machines", status_code=status.HTTP_303_SEE_OTHER)
 
+    @app.get("/ui/events", response_class=HTMLResponse)
+    def ui_events(
+        request: Request,
+        _auth: None = Depends(_require_ui_auth),
+    ) -> HTMLResponse:
+        events = request.app.state.events_log.list(limit=200)
+        return templates.TemplateResponse(
+            request,
+            "events.html",
+            {
+                "version": pixie.__version__,
+                "events": events,
+                "authed": True,
+                "page": "events",
+            },
+        )
+
     # ---------- ping under session-auth ------------------------------
 
     @app.get("/api/ping")
@@ -503,6 +523,7 @@ def create_app() -> FastAPI:
     app.include_router(exports_router)
     app.include_router(machines_router)
     app.include_router(pxe_router)
+    app.include_router(events_router)
 
     return app
 

@@ -11,6 +11,34 @@ operator-facing summary.
 
 ## [Unreleased]
 
+## [0.8.0] - TBD
+
+### Added
+
+**Events log.** Every write path in pixie now emits a row into the
+shared `state.db`'s `events` table. Operators grep the timeline
+from the operator UI (`/ui/events`) or the JSON API (`GET /events`).
+
+- `src/pixie/events/_log.py` -- `EventsLog` repository. Append-only,
+  reverse-chronological `list()` with `kind` / `subject_kind` /
+  `subject_id` / `since_id` filters. `KNOWN_EVENT_KINDS` frozenset
+  doubles as the operator's grep menu.
+- Emit sites: `catalog.entry.added`, `catalog.entry.deleted`,
+  `catalog.fetch.started`, `catalog.fetch.done`,
+  `catalog.fetch.failed`, `machine.bound`, `machine.deleted`,
+  `export.registered`, `export.deleted`.
+- `GET /events` (open read: on-call operators grep from a workstation
+  curl; the events carry only already-visible fields, no secrets).
+- `/ui/events` operator page with a scrolling table. Nav strip gained
+  an Events tab.
+
+### Tests
+
+12 new unit tests over `EventsLog` (append + list + filter +
+since-id + limit-clamp) and the emit-from-route path (add / delete
+catalog entry, machine bind, JSON filter, UI page render + auth
+gate). **Total 72 unit + 12 integration all green locally.**
+
 ## [0.7.0] - TBD
 
 ### Added
