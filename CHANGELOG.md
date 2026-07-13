@@ -11,6 +11,33 @@ operator-facing summary.
 
 ## [Unreleased]
 
+## [0.3.0] - TBD
+
+### Added
+
+**Exports + NBD supervisor.** Hard-forked from nbdmux 0.9.2's
+`NbdServer` and adapted to pixie's content-addressed model:
+
+- `POST /exports {name, content_sha256}` -> spawn nbdkit for that
+  export against `<state_dir>/blobs/<sha>/blob`. Ports allocated
+  from a base + scan (`10809+` by default) and persisted on the
+  export row.
+- `GET /exports` + `GET /exports/{name}` (open reads): live view of
+  each export's port + status. `DELETE /exports/{name}` (session
+  auth) kills the subprocess and removes the row.
+- Filter chain per export: `--filter=cow` always; `--filter=partition`
+  when the blob has an MBR/GPT sig. cow gives ramboot targets a
+  writable overlay without mutating the shared backing blob.
+- Subprocess supervision: idempotent spawn, safe termination
+  (SIGTERM + wait + SIGKILL escalation), diff-sync `reload()`.
+- Env knobs: `PIXIE_NBD_PORT_BASE`, `PIXIE_NBD_BIND`, `PIXIE_NBDKIT_BIN`.
+
+### Changed
+
+Requires `nbdkit` >= 1.44 on the runtime path (per audit
+`docs/audit.md#nbdmux`); the base container image already pins
+`ubuntu:26.04` for this reason.
+
 ## [0.2.0] - TBD
 
 ### Added

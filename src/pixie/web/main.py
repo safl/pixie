@@ -20,7 +20,10 @@ from __future__ import annotations
 import os
 import secrets
 import tempfile
+from collections.abc import AsyncIterator
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import asynccontextmanager
+from contextlib import suppress as contextlib_suppress
 from pathlib import Path
 from typing import Any
 
@@ -34,6 +37,9 @@ from starlette.middleware.sessions import SessionMiddleware
 import pixie
 from pixie.catalog._routes import router as catalog_router
 from pixie.catalog._store import CatalogStore
+from pixie.exports._routes import router as exports_router
+from pixie.exports._store import ExportsStore
+from pixie.exports._supervisor import DEFAULT_PORT_BASE, NbdServer
 from pixie.web._auth import (
     SESSION_AUTHED_KEY,
     SESSION_COOKIE,
@@ -49,6 +55,32 @@ DEFAULT_STATE_DIR = Path("/var/lib/pixie")
 STATE_DIR_ENV = "PIXIE_DATA_DIR"
 FETCH_POOL_SIZE_ENV = "PIXIE_FETCH_POOL_SIZE"
 DEFAULT_FETCH_POOL_SIZE = 4
+
+# NBD supervisor knobs. In production ``--network=host`` covers the
+# bind + port range; in dev / tests operators tweak.
+NBD_PORT_BASE_ENV = "PIXIE_NBD_PORT_BASE"
+NBD_BIND_ENV = "PIXIE_NBD_BIND"
+DEFAULT_NBD_BIND = "0.0.0.0"
+NBDKIT_BIN_ENV = "PIXIE_NBDKIT_BIN"
+DEFAULT_NBDKIT_BIN = "nbdkit"
+
+
+def _resolve_nbd_port_base() -> int:
+    raw = (os.environ.get(NBD_PORT_BASE_ENV) or "").strip()
+    if not raw:
+        return DEFAULT_PORT_BASE
+    try:
+        return max(1, int(raw))
+    except ValueError:
+        return DEFAULT_PORT_BASE
+
+
+def _resolve_nbd_bind() -> str:
+    return (os.environ.get(NBD_BIND_ENV) or "").strip() or DEFAULT_NBD_BIND
+
+
+def _resolve_nbdkit_bin() -> str:
+    return (os.environ.get(NBDKIT_BIN_ENV) or "").strip() or DEFAULT_NBDKIT_BIN
 
 
 def _resolve_state_dir() -> Path:
@@ -91,15 +123,36 @@ def _require_ui_auth(request: Request) -> None:
 def create_app() -> FastAPI:
     """Build the FastAPI app. Factory shape so tests can construct a
     fresh app per fixture without global state."""
+
+    @asynccontextmanager
+    async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
+        # startup: state already attached below; nothing async to do.
+        try:
+            yield
+        finally:
+            # Stop nbdkit children on graceful shutdown so a Ctrl-C
+            # + restart doesn't leave orphan processes clinging to
+            # NBD ports.
+            with contextlib_suppress(Exception):
+                app.state.nbd_server.stop()
+
     app = FastAPI(
         title="pixie",
         version=pixie.__version__,
         description="Bare-metal netboot appliance.",
+        lifespan=_lifespan,
     )
 
-    # State + fetch pool on app.state. Route handlers read them
-    # request-scoped via ``request.app.state.catalog_store`` etc.
-    app.state.catalog_store = CatalogStore(_resolve_state_dir())
+    # State on app.state. Route handlers read via
+    # ``request.app.state.<name>``.
+    state_dir = _resolve_state_dir()
+    app.state.catalog_store = CatalogStore(state_dir)
+    app.state.exports_store = ExportsStore(app.state.catalog_store.db_path)
+    app.state.nbd_server = NbdServer(
+        port_base=_resolve_nbd_port_base(),
+        bind=_resolve_nbd_bind(),
+        nbdkit_bin=_resolve_nbdkit_bin(),
+    )
     app.state.fetch_pool = ThreadPoolExecutor(
         max_workers=_resolve_fetch_pool_size(),
         thread_name_prefix="pixie-fetch",
@@ -288,6 +341,7 @@ def create_app() -> FastAPI:
     # had in the trio (``/catalog``, ``/b/``, ``/artifacts/``) so
     # operator muscle memory + iPXE templates keep working.
     app.include_router(catalog_router)
+    app.include_router(exports_router)
 
     return app
 
