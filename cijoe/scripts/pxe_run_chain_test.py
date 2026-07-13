@@ -100,6 +100,17 @@ def main(args, cijoe) -> int:
         missing = [k for k, ok in seen.items() if not ok]
         if missing:
             log.error(f"PXE chain incomplete; missing markers: {', '.join(missing)}")
+            # Client process state: an early QEMU exit points at
+            # firmware / KVM / tap problems that swallowed the boot
+            # before serial output could happen.
+            rc = client.poll() if client is not None else None
+            if rc is not None:
+                log.error(f"client QEMU exited early with rc={rc}")
+            else:
+                log.error("client QEMU still running at timeout (booted but no marker match)")
+            qemu_log = client_log.with_suffix(".qemu.log")
+            _dump_tail(qemu_log, 60)
+            _dump_tail(workspace / "dnsmasq.log", 60)
             _dump_tail(client_log, 200)
             _dump_container_logs()
             return errno.EPROTO
@@ -243,6 +254,14 @@ def _run_container(image: str, admin_password: str):
             "--network=host",
             "-e",
             f"PIXIE_ADMIN_PASSWORD={admin_password}",
+            # Suppress pixie's in-container in.tftpd: the test's host-
+            # side dnsmasq owns udp/69 on this bridge, and the container
+            # is on --network=host so binding :69 inside would collide
+            # (in.tftpd already exits rc=71 on the runner because
+            # rootless podman can't bind privileged ports). The bootstrap
+            # chain here doesn't need pixie's TFTP surface at all.
+            "-e",
+            "PIXIE_TFTP_ENABLED=0",
             image,
         ],
         check=True,
@@ -343,8 +362,17 @@ def _start_client_vm(workspace: Path, cfg, log_path: Path, firmware: str = "bios
         "-device",
         f"virtio-net,netdev=pxe,mac={cfg['client_mac']},bootindex=1",
     ]
+    # Capture QEMU's stdout+stderr so a startup failure (missing
+    # /dev/kvm access, tap open EBUSY, invalid firmware path, ...)
+    # leaves a diagnosable trail. DEVNULL here has burned us once
+    # already: the client silently failed to spawn on the runner and
+    # every marker was "missing" without any actionable log.
+    qemu_log = log_path.with_suffix(".qemu.log")
     return subprocess.Popen(
-        cmd, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+        cmd,
+        stdin=subprocess.DEVNULL,
+        stdout=open(qemu_log, "wb"),
+        stderr=subprocess.STDOUT,
     )
 
 
