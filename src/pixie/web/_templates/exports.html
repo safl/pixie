@@ -1,0 +1,69 @@
+{% extends "layout.html" %}
+{% block title %}pixie exports{% endblock %}
+{% block content %}
+<div class="card">
+    <h1>Exports</h1>
+    <p class="muted">
+        NBD exports pixie is currently serving. Each row is one
+        <code>nbdkit</code> subprocess against a fetched catalog blob,
+        keyed by <code>content_sha256</code>. Ports assigned from
+        the base scan and reported here.
+    </p>
+
+    {% if exports %}
+    <table>
+        <thead>
+            <tr>
+                <th>Name</th>
+                <th>Content sha</th>
+                <th>NBD port</th>
+                <th>Status</th>
+                <th>Actions</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for e in exports %}
+            <tr>
+                <td><code>{{ e.name }}</code></td>
+                <td>
+                    <code title="{{ e.content_sha256 }}">
+                        {{ e.content_sha256[:12] }}
+                    </code>
+                </td>
+                <td>{{ e.nbd_port or "-" }}</td>
+                <td>
+                    <span class="pill pill-{{ e.status }}">{{ e.status }}</span>
+                    {% if e.error %}<br><span class="error small">{{ e.error }}</span>{% endif %}
+                </td>
+                <td>
+                    <form method="post" action="/ui/exports/delete" style="display:inline">
+                        <input type="hidden" name="name" value="{{ e.name }}">
+                        <button type="submit" class="danger">Delete</button>
+                    </form>
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <p class="muted">
+        No exports yet. Exports are spawned automatically when a
+        machine is bound to <code>boot_mode=ramboot</code>, or by
+        <code>POST /exports</code> against a fetched catalog entry.
+    </p>
+    {% endif %}
+</div>
+<style>
+    table { width: 100%; border-collapse: collapse; margin-top: 1rem; }
+    th, td { padding: 0.5rem; text-align: left; border-bottom: 1px solid #334155; }
+    th { color: #94a3b8; font-weight: 500; font-size: 0.875rem; }
+    button.danger { background: #7f1d1d; }
+    button.danger:hover { background: #991b1b; }
+    button { padding: 0.35rem 0.75rem; font-size: 0.875rem; }
+    .error.small { font-size: 0.75rem; }
+    .pill { padding: 0.15rem 0.5rem; border-radius: 12px; font-size: 0.75rem; }
+    .pill-running { background: #14532d; color: #86efac; }
+    .pill-idle    { background: #1e293b; color: #94a3b8; }
+    .pill-error   { background: #7f1d1d; color: #fca5a5; }
+</style>
+{% endblock %}

@@ -11,6 +11,28 @@ operator-facing summary.
 
 ## [Unreleased]
 
+## [0.7.0] - TBD
+
+### Added
+
+**Operator UI: exports + machines pages.** The dashboard is no
+longer catalog-only; a nav strip at the top surfaces three tabs
+(Catalog / Exports / Machines) and a sign-out button.
+
+- `/ui/exports` -- table of registered NBD exports with content sha,
+  port, status pill, and per-row Delete. Runtime state refreshed on
+  read.
+- `/ui/machines` -- table of every MAC pixie has seen or bound, plus
+  an operator form for binding a MAC to a boot mode + optional
+  image content sha.
+
+### Changed
+
+- `layout.html` gained a nav strip (rendered when `authed` is set on
+  the template context). The two other pages (login, dashboard)
+  pass `authed` + `page` explicitly so the nav highlights the
+  current tab.
+
 ## [0.6.0] - TBD
 
 ### Added
