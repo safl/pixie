@@ -1,0 +1,35 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+build/
+dist/
+*.egg-info/
+.eggs/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+htmlcov/
+.coverage
+.coverage.*
+coverage.xml
+*.cover
+
+# uv
+uv.lock.new
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*~
+.DS_Store
+
+# pixie
+/data/
+/state.db
+/session-secret
