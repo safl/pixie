@@ -77,8 +77,19 @@
                 <td>{{ e.format }}</td>
                 <td>{{ e.arch or "-" }}</td>
                 <td>{{ e.size_bytes if e.size_bytes else "-" }}</td>
+                {% set st = fetch_states.get(e.name) or {} %}
                 <td>
-                    {% if e.content_sha256 %}
+                    {% if st.state == "fetching" %}
+                    <span class="pill pill-fetching">fetching&hellip;</span>
+                    {% if st.started_at %}
+                    <br><span class="small muted">since {{ st.started_at }}</span>
+                    {% endif %}
+                    {% elif st.state == "error" %}
+                    <span class="pill pill-error" title="{{ st.error or '' }}">error</span>
+                    {% if st.error %}
+                    <br><span class="small muted">{{ st.error }}</span>
+                    {% endif %}
+                    {% elif e.content_sha256 %}
                     <code title="{{ e.content_sha256 }}">{{ e.content_sha256[:12] }}</code>
                     {% else %}
                     <span class="muted">not fetched</span>
@@ -87,7 +98,11 @@
                 <td>
                     <form method="post" action="/ui/catalog/fetch" style="display:inline">
                         <input type="hidden" name="name" value="{{ e.name }}">
-                        <button type="submit">Fetch</button>
+                        {% if st.state == "fetching" %}
+                        <button type="submit" disabled title="fetch already in flight">Fetching</button>
+                        {% else %}
+                        <button type="submit">{% if st.state == "error" %}Retry{% else %}Fetch{% endif %}</button>
+                        {% endif %}
                     </form>
                     <form method="post" action="/ui/catalog/delete" style="display:inline">
                         <input type="hidden" name="name" value="{{ e.name }}">
@@ -120,5 +135,11 @@
     button.danger { background: #7f1d1d; }
     button.danger:hover { background: #991b1b; }
     button { padding: 0.35rem 0.75rem; font-size: 0.875rem; }
+    button:disabled { opacity: 0.6; cursor: not-allowed; }
+    .pill { display: inline-block; padding: 0.15rem 0.5rem; border-radius: 4px;
+            font-size: 0.75rem; font-weight: 500; }
+    .pill-fetching { background: #1e3a8a; color: #dbeafe; }
+    .pill-error { background: #7f1d1d; color: #fee2e2; }
+    .small { font-size: 0.75rem; }
 </style>
 {% endblock %}

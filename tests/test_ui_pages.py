@@ -192,6 +192,60 @@ def test_ui_machines_list_shows_inventory_summary(client: TestClient) -> None:
     assert "2 disks" in body
 
 
+def test_ui_dashboard_shows_fetching_pill_when_fetch_state_is_fetching(
+    client: TestClient,
+) -> None:
+    """After ``POST /ui/catalog/fetch`` (or an equivalent
+    /catalog/entries/<name>/fetch) the entry's fetch_state is
+    'fetching'; the dashboard should render a pill + a disabled
+    'Fetching' button so operators don't spam the fetch verb."""
+    c = _authed(client)
+    c.post(
+        "/catalog/entries",
+        json={
+            "name": "tiny",
+            "src": "https://example.invalid/tiny.img.gz",
+            "format": "img.gz",
+        },
+    )
+    # Directly poke fetch_states so we don't have to wait for a real
+    # HTTP fetch to reach the 'fetching' state.
+    c.app.state.fetch_states["tiny"] = {  # type: ignore[attr-defined]
+        "state": "fetching",
+        "started_at": "2026-07-14T00:00:00Z",
+        "error": None,
+    }
+    body = c.get("/ui/").text
+    assert "fetching" in body
+    assert "pill pill-fetching" in body
+    assert "disabled" in body
+
+
+def test_ui_dashboard_shows_error_pill_with_retry_when_fetch_failed(
+    client: TestClient,
+) -> None:
+    """A prior fetch that hit an error surfaces as a pill + the
+    button flips to 'Retry' so the operator can try again."""
+    c = _authed(client)
+    c.post(
+        "/catalog/entries",
+        json={
+            "name": "broken",
+            "src": "https://example.invalid/broken.img.gz",
+            "format": "img.gz",
+        },
+    )
+    c.app.state.fetch_states["broken"] = {  # type: ignore[attr-defined]
+        "state": "error",
+        "started_at": "2026-07-14T00:00:00Z",
+        "error": "download failed: connect timed out",
+    }
+    body = c.get("/ui/").text
+    assert "pill pill-error" in body
+    assert "connect timed out" in body
+    assert ">Retry<" in body
+
+
 def test_ui_exports_delete_removes_missing_export_silently(client: TestClient) -> None:
     """A DELETE for an unknown export is 303 (not 500). The catalog
     tab does the same for missing entries; consistent shape."""
