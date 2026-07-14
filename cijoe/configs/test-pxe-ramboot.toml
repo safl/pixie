@@ -1,0 +1,75 @@
+# pixie PXE ramboot chain test: containerized pixie + a bridged QEMU
+# client that reaches the initramfs's ramboot script.
+#
+# Usage:
+#   cijoe tasks/test-pxe-ramboot.yaml --monitor -c configs/test-pxe-ramboot.toml
+#
+# Pre-conditions:
+# - podman, qemu-system-x86_64, dnsmasq, ipxe (NBPs under /usr/lib/ipxe),
+#   iproute2 on PATH.
+# - passwordless sudo (bridge/tap/dnsmasq).
+# - KVM accessible.
+# - ``pixie-netboot-pc-x86_64`` bake artifacts staged under
+#   ``~/system_imaging/disk/`` (or override
+#   ``PIXIE_NETBOOT_ARTIFACT_DIR``).
+
+[pixie]
+variant = "test-pxe-ramboot"
+
+[cijoe.workflow]
+fail_fast = true
+
+[test.pxe]
+mode = "ramboot"
+
+# pixie container image tag (built by pxe_prepare from this checkout).
+pixie_image = "pixie:pxetest"
+
+# Admin password set on the container; the test uses it to POST the
+# catalog seed + machine bind.
+admin_password = "test-admin-pw"
+
+# Client VM firmware: "bios" (SeaBIOS + NIC option ROM) or "uefi" (OVMF).
+client_firmware = "bios"
+client_mac = "52:54:00:11:22:44"
+
+# Host bridge for the synthetic PXE segment. server_pxe_ip is where
+# pixie is reachable AND where the test-side HTTP server (hosting the
+# bundle + disk image) binds.
+bridge = "br-rpxe"
+tap_iface = "tap-rpxe"
+server_pxe_ip = "192.168.99.1"
+pxe_netmask = "255.255.255.0"
+dhcp_range_lo = "192.168.99.50"
+dhcp_range_hi = "192.168.99.150"
+
+# Ramboot markers. iPXE's own boot chain markers (loaded /
+# fetch-bootstrap / fetch-permac) are inherited from the bootstrap
+# mode; add ones specific to the ramboot plan being served + the
+# initramfs script executing.
+[[test.pxe.chain_markers]]
+key = "ipxe-loaded"
+needle = "iPXE"
+
+[[test.pxe.chain_markers]]
+key = "ipxe-fetch-bootstrap"
+needle = "pxe-bootstrap.ipxe"
+
+# Kernel + initrd fetch from pixie's content-addressed artifacts path.
+# ``/artifacts/`` is only served for ramboot (bootstrap mode never
+# renders that path).
+[[test.pxe.chain_markers]]
+key = "kernel-fetch"
+needle = "/artifacts/"
+
+# Initramfs starts. Linux prints this from the kernel decompressor.
+[[test.pxe.chain_markers]]
+key = "kernel-boot"
+needle = "Linux version"
+
+# Ramboot script is sourced by initramfs-tools' /init. The trace
+# helper writes to /dev/kmsg + /dev/console, so it lands in the
+# QEMU serial log.
+[[test.pxe.chain_markers]]
+key = "ramboot-script-sourced"
+needle = "ramboot: script sourced"

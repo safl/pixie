@@ -220,3 +220,61 @@ jobs:
           name: test-pxe-workspace
           path: cijoe/_build/test-pxe
           if-no-files-found: warn
+
+  test-pxe-ramboot:
+    name: PXE ramboot chain test (containerized pixie + client QEMU VM)
+    # Depends on the netboot-pc bake because the ramboot payload
+    # is assembled from that variant's vmlinuz + initrd. The
+    # ``build-media`` matrix job produces both variants; ``needs``
+    # waits for the whole matrix but that's fine (both finish in
+    # 25-40 min side by side).
+    needs: build-media
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install host tools (qemu, dnsmasq, ipxe, bridge)
+        run: |
+          set -eu
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            qemu-system-x86 \
+            qemu-utils \
+            dnsmasq \
+            ipxe \
+            bridge-utils \
+            iproute2
+          sudo chmod a+rw /dev/kvm
+          ls -la /dev/kvm
+
+      - name: Install cijoe
+        run: pipx install --force cijoe
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v8.1.0
+
+      - name: Download netboot-pc bake artifacts
+        uses: actions/download-artifact@v7
+        with:
+          name: pixie-netboot-pc-x86_64
+          path: ~/system_imaging/disk/
+
+      - name: Run PXE ramboot chain test
+        run: make test-pxe-ramboot
+
+      - name: Upload cijoe output
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: cijoe-output-test-pxe-ramboot
+          path: cijoe/cijoe-output
+          if-no-files-found: warn
+
+      - name: Upload PXE workspace (serial logs, dnsmasq.log)
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: test-pxe-ramboot-workspace
+          path: cijoe/_build/test-pxe
+          if-no-files-found: warn
