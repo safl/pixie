@@ -85,6 +85,24 @@ RUN mkdir -p /usr/share/pixie/tftp && \
     cp /usr/lib/ipxe/ipxe.efi      /usr/share/pixie/tftp/ 2>/dev/null || true && \
     cp /usr/lib/ipxe/snponly.efi   /usr/share/pixie/tftp/ 2>/dev/null || true
 
+# Debian's stock iPXE binary is not built with an embedded chain
+# script, so on load it falls back to fetching ``autoexec.ipxe`` from
+# the TFTP root. Bake one that re-DHCPs and chains to pixie's HTTP
+# bootstrap endpoint. Without this the ``ipxe.efi -> autoexec.ipxe``
+# hop 404s and the target sits at "Could not open autoexec" until it
+# times out. Verified live 2026-07-14 on 10.20.30.10 booting a real
+# UEFI target: the target's UEFI TFTP-fetches ipxe.efi, iPXE loads,
+# then requests /autoexec.ipxe -- this file is what unblocks that
+# fetch and continues the chain to pixie's per-MAC plan.
+RUN printf '%s\n' \
+    '#!ipxe' \
+    '# pixie autoexec: re-DHCP + chain to pixie s HTTP bootstrap.' \
+    'dhcp || goto handoff' \
+    'chain http://${next-server}:8080/pxe-bootstrap.ipxe || echo pixie: could not reach ${next-server}:8080' \
+    ':handoff' \
+    'exit' \
+    > /usr/share/pixie/tftp/autoexec.ipxe
+
 # Persistent state under /var/lib/pixie: state.db, session-secret,
 # blobs/, artifacts/, images/. The Quadlet/compose bind-mounts an
 # operator-owned host directory here so a container rebuild keeps

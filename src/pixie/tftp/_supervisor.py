@@ -2,11 +2,14 @@
 
 Argv shape:
 
-    in.tftpd --listen --address <bind>:<port> --secure <root>
+    in.tftpd --foreground --listen --address <bind>:<port> --secure <root>
 
-``--listen`` runs in daemon-listener mode (not inetd); ``--secure``
-chroots into ``<root>`` so a malformed RRQ can't wander outside the
-served directory.
+``--listen`` runs in daemon-listener mode (not inetd); ``--foreground``
+keeps it as a supervised child so our poll() sees it live (without it,
+tftpd-hpa double-forks and the parent exits rc=0, which our start()
+grace period would mis-flag as a startup failure); ``--secure`` chroots
+into ``<root>`` so a malformed RRQ can't wander outside the served
+directory.
 
 The wrapper is deliberately narrow -- no reload, no diff-sync, no
 multi-server. TFTP is boot-time-critical + operator-visible; a single
@@ -78,6 +81,14 @@ class TftpServer:
 
             argv = [
                 self.bin,
+                # ``--foreground`` is essential -- without it,
+                # tftpd-hpa's ``--listen`` mode daemonises (double-forks
+                # + parent exits rc=0) and our supervisor mis-detects
+                # the immediate parent-exit as a startup failure even
+                # though the grandchild is happily bound to udp/69.
+                # Verified live 2026-07-14 on 10.20.30.10 booting a
+                # real UEFI target.
+                "--foreground",
                 "--listen",
                 "--address",
                 f"{self.bind}:{self.port}",
