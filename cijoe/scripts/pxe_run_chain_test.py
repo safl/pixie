@@ -533,11 +533,21 @@ def _start_ramboot_http_server(workspace: Path, bind_ip: str):
     IP so pixie's catalog fetch can reach them (they're not on any
     real HTTP source; the ``pxe_ramboot_stage`` step assembled them
     locally). Returns None if either file is missing."""
-    if not (workspace / "bundle.tar.gz").is_file() or not (workspace / "disk.img").is_file():
+    bundle = workspace / "bundle.tar.gz"
+    disk = workspace / "disk.img"
+    # Dump the workspace contents so a missing payload is immediately
+    # diagnosable without a second CI iteration.
+    log.error(f"ramboot http server: workspace={workspace}")
+    if workspace.is_dir():
+        for p in sorted(workspace.iterdir()):
+            log.error(f"  {p.name} ({p.stat().st_size} bytes)")
+    if not bundle.is_file() or not disk.is_file():
         log.error(
-            "ramboot payload missing: expected %s and %s (did pxe_ramboot_stage run?)",
-            workspace / "bundle.tar.gz",
-            workspace / "disk.img",
+            "ramboot payload missing: bundle=%s (exists=%s), disk=%s (exists=%s)",
+            bundle,
+            bundle.exists(),
+            disk,
+            disk.exists(),
         )
         return None
     # SimpleHTTPRequestHandler serves files rooted at cwd; bind it

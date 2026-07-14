@@ -125,13 +125,16 @@ def main(args, cijoe) -> int:
     disk_out = workspace / "disk.img"
 
     vmlinuz, initrd = _pick_artifacts(root)
-    log.info(f"Building bundle.tar.gz from {vmlinuz.name} + {initrd.name}")
+    # log.error() instead of log.info() so cijoe's --monitor renderer
+    # surfaces the progress lines on CI (info-level output is buffered
+    # into the per-step report.html and not streamed to stdout).
+    log.error(f"pxe_ramboot_stage: cwd={Path.cwd()}")
+    log.error(f"pxe_ramboot_stage: workspace={workspace}")
+    log.error(f"pxe_ramboot_stage: building {bundle_out} from {vmlinuz.name} + {initrd.name}")
     _build_bundle(vmlinuz, initrd, bundle_out)
-    log.info(f"Bundle -> {bundle_out} ({bundle_out.stat().st_size} bytes)")
+    log.error(f"pxe_ramboot_stage: bundle staged ({bundle_out.stat().st_size} bytes)")
 
-    log.info(f"Creating disk.img at {disk_out} (64 MiB sparse)")
+    log.error(f"pxe_ramboot_stage: creating {disk_out} (64 MiB sparse)")
     _make_disk_image(disk_out)
-    log.info(f"Disk -> {disk_out}")
-
-    log.info("Ramboot payload staged")
+    log.error(f"pxe_ramboot_stage: disk staged ({disk_out.stat().st_size} bytes)")
     return 0
