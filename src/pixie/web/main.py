@@ -370,6 +370,36 @@ def create_app() -> FastAPI:
             },
         )
 
+    @app.get("/ui/machines/{mac}", response_model=None)
+    def ui_machine_detail(
+        request: Request,
+        mac: str,
+        _auth: None = Depends(_require_ui_auth),
+    ) -> HTMLResponse | RedirectResponse:
+        """Per-machine detail: telemetry + boot-mode binding form +
+        the inventory blob pixie stored on the row (from
+        ``POST /pxe/<mac>/inventory``, driven by the live env's
+        pixie CLI). Falls through to /ui/machines on a bad MAC or a
+        row that doesn't exist yet."""
+        from pixie.machines._store import BadMac
+
+        try:
+            machine = request.app.state.machines_store.get(mac)
+        except BadMac:
+            return RedirectResponse(url="/ui/machines", status_code=status.HTTP_303_SEE_OTHER)
+        if machine is None:
+            return RedirectResponse(url="/ui/machines", status_code=status.HTTP_303_SEE_OTHER)
+        return templates.TemplateResponse(
+            request,
+            "machine_detail.html",
+            {
+                "version": pixie.__version__,
+                "machine": machine,
+                "authed": True,
+                "page": "machines",
+            },
+        )
+
     @app.post("/ui/machines/bind")
     def ui_machines_bind(
         request: Request,
