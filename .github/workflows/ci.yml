@@ -238,10 +238,13 @@ jobs:
         run: |
           set -eu
           sudo apt-get update
-          # busybox-static, e2fsprogs (mkfs.ext4), util-linux (sfdisk +
-          # losetup + mount + umount) are needed by pxe_ramboot_stage
-          # to build the tiny bootable disk image that lets ramboot
-          # complete pivot_root and land in userspace.
+          # e2fsprogs (mkfs.ext4) + util-linux (sfdisk + losetup +
+          # mount + umount) + rsync + squashfs-tools (unsquashfs) are
+          # needed by pxe_ramboot_stage to convert the netboot-pc
+          # squashfs into a bootable ext4 disk image. Ramboot then
+          # pivots into the real pixie live env (systemd + pixie-on-
+          # tty1 + the ported pixie CLI), which POSTs inventory back
+          # via its own code path -- no busybox/wget shim.
           sudo apt-get install -y --no-install-recommends \
             qemu-system-x86 \
             qemu-utils \
@@ -249,9 +252,10 @@ jobs:
             ipxe \
             bridge-utils \
             iproute2 \
-            busybox-static \
             e2fsprogs \
-            util-linux
+            util-linux \
+            rsync \
+            squashfs-tools
           sudo chmod a+rw /dev/kvm
           ls -la /dev/kvm
 

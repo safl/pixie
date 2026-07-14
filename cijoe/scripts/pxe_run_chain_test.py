@@ -712,33 +712,57 @@ def _wait_content_sha(base: str, name: str, timeout: float = FETCH_TIMEOUT) -> s
     )
 
 
-def _verify_server_inventory(base: str, mac: str) -> int:
-    """After the client's rootfs /init runs, pixie should hold the
-    POSTed inventory on the machine row. Fetch it back and assert
-    the disks[] shape we sent survived the roundtrip. The path is
-    open-read so no cookie is needed."""
-    url = f"{base}/machines/{mac}/inventory"
-    log.info(f"Verifying server-side inventory: GET {url}")
-    try:
-        with urllib.request.urlopen(url, timeout=10) as resp:
-            body = json.loads(resp.read())
-    except urllib.error.HTTPError as exc:
-        log.error(f"GET /machines/{mac}/inventory -> HTTP {exc.code}: {exc.reason}")
-        return errno.EPROTO
-    except (urllib.error.URLError, OSError) as exc:
-        log.error(f"GET /machines/{mac}/inventory -> transport error: {exc}")
-        return errno.ECONNREFUSED
+_INVENTORY_TIMEOUT_S = 120
 
-    inv = body.get("inventory") or {}
-    disks = inv.get("disks") or []
-    if not disks:
-        log.error(f"inventory has empty disks list: {body!r}")
-        return errno.EPROTO
-    if disks[0].get("vendor") != "pixie-test":
-        log.error(f"inventory disks[0].vendor={disks[0].get('vendor')!r}; expected pixie-test")
-        return errno.EPROTO
-    log.info(f"Server-side inventory ok: mac={body.get('mac')} disks_count={len(disks)}")
-    return 0
+
+def _verify_server_inventory(base: str, mac: str) -> int:
+    """After the client boots into the pixie live env and
+    ``pixie-on-tty1.service`` runs the real pixie CLI, its
+    ``_auto_post_inventory`` background thread POSTs an inventory
+    blob to ``/pxe/<mac>/inventory``. That happens some seconds
+    after ``systemd`` finishes early boot (Rich imports + cmdline
+    parse + wizard startup can take 1-5s on a warm VM), so poll
+    for a bounded window rather than one-shot the GET.
+
+    The blob's shape comes from ``pixie.disks.list_disks()`` +
+    ``pixie.tui._app.collect_lshw()``. The only field the test
+    can be sure exists in a QEMU-virt boot is ``disks`` with at
+    least one entry (``/dev/nbd0``); assert on that + that lshw
+    is present-or-null (empty on runners without lshw)."""
+    url = f"{base}/machines/{mac}/inventory"
+    log.info(f"Polling server-side inventory: GET {url}")
+    deadline = time.monotonic() + _INVENTORY_TIMEOUT_S
+    last_err: str | None = None
+    while time.monotonic() < deadline:
+        try:
+            with urllib.request.urlopen(url, timeout=5) as resp:
+                body = json.loads(resp.read())
+        except urllib.error.HTTPError as exc:
+            last_err = f"HTTP {exc.code}: {exc.reason}"
+            if exc.code != 404:
+                log.error(f"GET {url} -> {last_err}")
+                return errno.EPROTO
+            time.sleep(3.0)
+            continue
+        except (urllib.error.URLError, OSError) as exc:
+            last_err = f"transport: {exc}"
+            time.sleep(3.0)
+            continue
+
+        inv = body.get("inventory") or {}
+        disks = inv.get("disks") or []
+        if not disks:
+            last_err = "inventory has empty disks list"
+            time.sleep(3.0)
+            continue
+        log.info(
+            f"Server-side inventory ok: mac={body.get('mac')} "
+            f"disks_count={len(disks)} has_lshw={inv.get('lshw') is not None}"
+        )
+        return 0
+
+    log.error(f"inventory did not arrive within {_INVENTORY_TIMEOUT_S}s (last: {last_err})")
+    return errno.ETIMEDOUT
 
 
 def _bind_machine(base: str, cookie: str, mac: str, image_sha: str) -> None:

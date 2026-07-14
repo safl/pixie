@@ -96,18 +96,29 @@ needle = "ramboot: nbd-client -persist"
 key = "ramboot-nbd0-capacity"
 needle = "ramboot: nbd0 capacity ready"
 
-# Post-pivot: the rootfs's /init has executed. This is the
-# smallest thing that proves ramboot -> partition scan -> mount
-# -> overlay -> pivot_root -> exec /init all worked end-to-end.
-[[test.pxe.chain_markers]]
-key = "pivot-userspace-reached"
-needle = "pixie-init: hello from rootfs"
+# Post-pivot markers assert that ramboot successfully mounted +
+# pivoted into the netboot-pc squashfs's real pixie live env
+# (unpacked verbatim onto the ramboot disk). systemd starts,
+# pixie-on-tty1.service fires, and the actual ported pixie CLI
+# runs with --server + --mac from the kernel cmdline. Its
+# ``_auto_post_inventory`` background thread POSTs an inventory
+# blob back to pixie's /pxe/<mac>/inventory -- no test-side
+# shim; this is the same code path a real hardware boot exercises.
 
-# The rootfs init POSTs a minimal inventory blob to pixie's
-# /pxe/<mac>/inventory endpoint via busybox wget; a 2xx response
-# is what "inventory posted ok" signals. Downstream, the test
-# also GETs /machines/<mac>/inventory to prove the JSON round-
-# tripped into state.db.
+# systemd started in the pivoted userspace. Its startup banner is
+# printed to /dev/console by default.
 [[test.pxe.chain_markers]]
-key = "inventory-posted-ok"
-needle = "pixie-init: inventory posted ok"
+key = "systemd-started"
+needle = "systemd["
+
+# pixie-on-tty1.service ran the pixie CLI. The wrapper script
+# emits "pixie: " lines on tty1 which surface on the serial
+# console via consoleblank + agetty-less tty1 ownership.
+[[test.pxe.chain_markers]]
+key = "pixie-on-tty1"
+needle = "pixie:"
+
+# Downstream, pxe_run_chain_test does a server-side GET
+# /machines/<mac>/inventory to prove the pixie CLI's inventory
+# POST landed. Marker on the client side is a nice-to-have; the
+# GET is the load-bearing assertion.
