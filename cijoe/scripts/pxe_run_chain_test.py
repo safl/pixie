@@ -34,9 +34,14 @@ Retargetable: False
 from __future__ import annotations
 
 import errno
+import functools
+import http.server
+import json
 import logging as log
 import shutil
+import socketserver
 import subprocess
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -48,6 +53,8 @@ CONTAINER_NAME = "pixie-pxe-test"
 CONTAINER_TAG = "pixie:pxetest"
 HEALTHZ_TIMEOUT = 120
 CHAIN_TIMEOUT = 300
+FETCH_TIMEOUT = 120  # ramboot mode: catalog fetch of the netboot bundle + disk image
+RAMBOOT_HTTP_PORT = 8000  # test-side http server hosting bundle + disk on the bridge
 
 
 def add_args(parser: ArgumentParser) -> None:
@@ -72,8 +79,14 @@ def main(args, cijoe) -> int:
     if client_log.exists():
         client_log.unlink()
 
+    mode = str(cfg.get("mode", "bootstrap")).lower()
+    if mode not in ("bootstrap", "ramboot"):
+        log.error(f"unknown [test.pxe] mode={mode!r}; expected 'bootstrap' or 'ramboot'")
+        return errno.EINVAL
+
     container = None
     dnsmasq = None
+    ramboot_http = None
     client = None
     net_up = False
     try:
@@ -87,6 +100,17 @@ def main(args, cijoe) -> int:
             log.error("pixie container did not become healthy; logs:")
             _dump_container_logs()
             return errno.ETIMEDOUT
+
+        if mode == "ramboot":
+            ramboot_http = _start_ramboot_http_server(workspace, cfg["server_pxe_ip"])
+            if ramboot_http is None:
+                return errno.ENOENT  # error already logged
+            log.info("Seeding pixie catalog + binding machine to ramboot")
+            seed_err = _seed_ramboot_and_bind(seed_base, admin_password, cfg)
+            if seed_err:
+                log.error(f"ramboot seed failed: rc={seed_err}")
+                _dump_container_logs()
+                return seed_err
 
         firmware = str(cfg.get("client_firmware", "bios")).lower()
         if firmware == "uefi" and _find_ovmf() is None:
@@ -115,7 +139,7 @@ def main(args, cijoe) -> int:
             _dump_container_logs()
             return errno.EPROTO
 
-        log.info("PXE bootstrap chain test PASSED (all markers seen on client serial console)")
+        log.info(f"PXE {mode} chain test PASSED (all markers seen)")
         return 0
     finally:
         if client is not None:
@@ -123,6 +147,9 @@ def main(args, cijoe) -> int:
         _stop_container(container)
         if dnsmasq is not None:
             _terminate(dnsmasq, "dnsmasq", sudo=True)
+        if ramboot_http is not None:
+            ramboot_http.shutdown()
+            ramboot_http.server_close()
         if net_up:
             _teardown_network(cfg)
 
@@ -482,3 +509,208 @@ def _terminate(proc, what: str, sudo: bool = False) -> None:
         proc.wait(timeout=10)
     except subprocess.TimeoutExpired:
         proc.kill()
+
+
+# ---------- ramboot mode: HTTP server + catalog seeding + machine bind -----
+
+
+class _RambootFilesHandler(http.server.SimpleHTTPRequestHandler):
+    """Serves ``bundle.tar.gz`` + ``disk.img`` from the workspace's
+    ``_build/test-pxe/`` directory. Both files must exist by the time
+    pixie POSTs a fetch, or the fetch returns error and the test
+    fails fast."""
+
+    def log_message(self, format: str, *args: object) -> None:
+        del format, args
+
+
+class _ReusableThreadingHTTPServer(socketserver.ThreadingTCPServer):
+    allow_reuse_address = True
+    daemon_threads = True
+
+
+def _start_ramboot_http_server(workspace: Path, bind_ip: str):
+    """Serve ``_build/test-pxe/{bundle.tar.gz,disk.img}`` on the bridge
+    IP so pixie's catalog fetch can reach them (they're not on any
+    real HTTP source; the ``pxe_ramboot_stage`` step assembled them
+    locally). Returns None if either file is missing."""
+    bundle = workspace / "bundle.tar.gz"
+    disk = workspace / "disk.img"
+    # Dump the workspace contents so a missing payload is immediately
+    # diagnosable without a second CI iteration.
+    log.error(f"ramboot http server: workspace={workspace}")
+    if workspace.is_dir():
+        for p in sorted(workspace.iterdir()):
+            log.error(f"  {p.name} ({p.stat().st_size} bytes)")
+    if not bundle.is_file() or not disk.is_file():
+        log.error(
+            "ramboot payload missing: bundle=%s (exists=%s), disk=%s (exists=%s)",
+            bundle,
+            bundle.exists(),
+            disk,
+            disk.exists(),
+        )
+        return None
+    # SimpleHTTPRequestHandler reads ``directory`` from ``__init__``
+    # kwargs, not from a class attribute -- bind via functools.partial
+    # so ThreadingTCPServer's ``handler(*args, **kwargs)`` construction
+    # supplies it. (Setting ``directory`` on the class silently falls
+    # back to os.getcwd(), which is why the first run returned 404
+    # for every URL: cwd was cijoe/, not cijoe/_build/test-pxe/.)
+    handler = functools.partial(_RambootFilesHandler, directory=str(workspace))
+    server = _ReusableThreadingHTTPServer((bind_ip, RAMBOOT_HTTP_PORT), handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    log.info(f"Ramboot HTTP server listening on http://{bind_ip}:{RAMBOOT_HTTP_PORT}")
+    return server
+
+
+def _seed_ramboot_and_bind(seed_base: str, admin_password: str, cfg) -> int:
+    """Login, POST + fetch two catalog entries (netboot bundle + disk
+    image), wait for content_sha256, then PUT /machines/<mac> with
+    boot_mode=ramboot bound to the disk sha. Returns 0 on success,
+    an errno on any failure (already logged)."""
+    server_ip = cfg["server_pxe_ip"]
+    bundle_url = f"http://{server_ip}:{RAMBOOT_HTTP_PORT}/bundle.tar.gz"
+    disk_url = f"http://{server_ip}:{RAMBOOT_HTTP_PORT}/disk.img"
+
+    try:
+        cookie = _login(seed_base, admin_password)
+    except Exception as exc:
+        log.error(f"login failed: {exc}")
+        return errno.EACCES
+
+    if err := _add_and_fetch(seed_base, cookie, "test-bundle", bundle_url, "tar.gz"):
+        return err
+    if err := _add_and_fetch(
+        seed_base, cookie, "test-disk", disk_url, "img", netboot_src=bundle_url
+    ):
+        return err
+
+    try:
+        bundle_sha = _wait_content_sha(seed_base, "test-bundle")
+        disk_sha = _wait_content_sha(seed_base, "test-disk")
+    except TimeoutError as exc:
+        log.error(str(exc))
+        return errno.ETIMEDOUT
+
+    log.info(f"Bundle sha={bundle_sha[:12]}...; disk sha={disk_sha[:12]}...")
+    try:
+        _bind_machine(seed_base, cookie, cfg["client_mac"], disk_sha)
+    except Exception as exc:
+        log.error(f"machine bind failed: {exc}")
+        return errno.EPROTO
+    log.info(f"Machine {cfg['client_mac']} bound to boot_mode=ramboot")
+    return 0
+
+
+def _login(base: str, password: str) -> str:
+    """POST /ui/login, capture the pixie-token Set-Cookie off the 303
+    redirect. urllib follows redirects and drops Set-Cookie by
+    default; intercept the 303 to grab it."""
+
+    class _CaptureRedirect(urllib.request.HTTPRedirectHandler):
+        def http_error_303(self, req, fp, code, msg, headers):  # type: ignore[override]
+            raise urllib.error.HTTPError(req.full_url, code, msg, headers, fp)
+
+    body = f"password={password}".encode()
+    req = urllib.request.Request(
+        f"{base}/ui/login",
+        data=body,
+        method="POST",
+        headers={"Content-Type": "application/x-www-form-urlencoded"},
+    )
+    opener = urllib.request.build_opener(_CaptureRedirect())
+    try:
+        opener.open(req, timeout=10)
+    except urllib.error.HTTPError as exc:
+        for raw in exc.headers.get_all("Set-Cookie") or []:
+            head = raw.split(";", 1)[0].strip()
+            if head.startswith("pixie-token="):
+                return head
+    raise RuntimeError("no pixie-token cookie in login response")
+
+
+def _add_and_fetch(
+    base: str, cookie: str, name: str, src: str, fmt: str, *, netboot_src: str = ""
+) -> int:
+    body: dict[str, object] = {"name": name, "src": src, "format": fmt}
+    if netboot_src:
+        body["netboot_src"] = netboot_src
+    data = json.dumps(body).encode("utf-8")
+    req = urllib.request.Request(
+        f"{base}/catalog/entries",
+        data=data,
+        method="POST",
+        headers={"Content-Type": "application/json", "Cookie": cookie},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            if resp.status != 201:
+                log.error(f"POST /catalog/entries returned {resp.status}")
+                return errno.EPROTO
+    except urllib.error.HTTPError as exc:
+        log.error(f"POST /catalog/entries {name}: HTTP {exc.code}")
+        return errno.EPROTO
+    fetch_req = urllib.request.Request(
+        f"{base}/catalog/entries/{name}/fetch",
+        data=b"",
+        method="POST",
+        headers={"Content-Type": "application/json", "Cookie": cookie},
+    )
+    try:
+        with urllib.request.urlopen(fetch_req, timeout=15) as resp:
+            if resp.status != 202:
+                log.error(f"POST /catalog/entries/{name}/fetch returned {resp.status}")
+                return errno.EPROTO
+    except urllib.error.HTTPError as exc:
+        log.error(f"POST /catalog/entries/{name}/fetch: HTTP {exc.code}")
+        return errno.EPROTO
+    log.info(f"Fetch triggered for {name}")
+    return 0
+
+
+def _wait_content_sha(base: str, name: str, timeout: float = FETCH_TIMEOUT) -> str:
+    """Poll ``GET /catalog`` until ``name`` has a populated
+    ``content_sha256``. Raises ``TimeoutError`` on fetch failure or
+    deadline miss."""
+    deadline = time.monotonic() + timeout
+    last_state = "?"
+    while time.monotonic() < deadline:
+        req = urllib.request.Request(f"{base}/catalog")
+        try:
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                entries = json.loads(resp.read()).get("entries", [])
+        except (urllib.error.URLError, OSError):
+            time.sleep(1.0)
+            continue
+        for entry in entries:
+            if entry.get("name") != name:
+                continue
+            state = entry.get("fetch_state") or "?"
+            last_state = state
+            if state == "error":
+                err = entry.get("fetch_error") or "unknown"
+                raise TimeoutError(f"fetch failed for {name!r}: {err}")
+            sha = entry.get("content_sha256")
+            if sha:
+                return str(sha)
+        time.sleep(1.0)
+    raise TimeoutError(
+        f"fetch never populated content_sha256 for {name!r} within {timeout}s "
+        f"(last state: {last_state})"
+    )
+
+
+def _bind_machine(base: str, cookie: str, mac: str, image_sha: str) -> None:
+    body = {"boot_mode": "ramboot", "image_content_sha256": image_sha}
+    data = json.dumps(body).encode("utf-8")
+    req = urllib.request.Request(
+        f"{base}/machines/{mac}",
+        data=data,
+        method="PUT",
+        headers={"Content-Type": "application/json", "Cookie": cookie},
+    )
+    with urllib.request.urlopen(req, timeout=15) as resp:
+        if resp.status != 200:
+            raise RuntimeError(f"PUT /machines/{mac} returned {resp.status}")

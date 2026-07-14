@@ -46,6 +46,8 @@ help:
 	@echo "  ipxe          build pixie's custom iPXE -> IPXE_OUT/ipxe.efi (default dist/ipxe/)"
 	@echo "  test-pxe      end-to-end PXE bootstrap chain test"
 	@echo "                  (needs podman + QEMU + KVM + dnsmasq; a few min wall clock)"
+	@echo "  test-pxe-ramboot  end-to-end PXE ramboot chain test"
+	@echo "                  (same deps as test-pxe + a prior VARIANT=netboot-pc bake)"
 	@echo ""
 	@echo "Variant: $(VARIANT)  (override with VARIANT=netboot-pc, ...)"
 	@echo "  usbboot-pc    - bootable USB live ISO via live-build (.iso, x86_64)"
@@ -111,6 +113,16 @@ ipxe:
 # follow-up. Wall clock: a few minutes per run.
 test-pxe:
 	cd cijoe && cijoe tasks/test-pxe.yaml --monitor -c configs/test-pxe.toml
+
+# Ramboot chain test: bring up pixie, seed the catalog with a bundle
+# assembled from the netboot-pc bake artifacts + a synthetic disk
+# image, bind the client MAC to boot_mode=ramboot, PXE-boot QEMU, and
+# assert every marker in cijoe/configs/test-pxe-ramboot.toml shows up
+# through the initramfs's ramboot script. Depends on a prior
+# ``pixie-netboot-pc-x86_64`` bake staged under
+# ``~/system_imaging/disk/`` (or PIXIE_NETBOOT_ARTIFACT_DIR).
+test-pxe-ramboot:
+	cd cijoe && cijoe tasks/test-pxe-ramboot.yaml --monitor -c configs/test-pxe-ramboot.toml
 
 # ---------- Cleanup ------------------------------------------------------
 
