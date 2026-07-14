@@ -309,12 +309,17 @@ def create_app() -> FastAPI:
         request: Request,
         _auth: None = Depends(_require_ui_auth),
     ) -> HTMLResponse:
+        # Per-entry fetch state so the operator sees "fetching..." /
+        # "error" pills instead of a bare "not fetched" while an
+        # async fetch is in-flight. Mirrors the JSON /catalog shape.
+        fetch_states = request.app.state.fetch_states
         return templates.TemplateResponse(
             request,
             "dashboard.html",
             {
                 "version": pixie.__version__,
                 "entries": request.app.state.catalog_store.list_entries(),
+                "fetch_states": fetch_states,
                 "authed": True,
                 "page": "dashboard",
             },
