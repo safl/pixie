@@ -234,17 +234,28 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - name: Install host tools (qemu, dnsmasq, ipxe, bridge)
+      - name: Install host tools (qemu, dnsmasq, ipxe, bridge, rootfs)
         run: |
           set -eu
           sudo apt-get update
+          # e2fsprogs (mkfs.ext4) + util-linux (sfdisk + losetup +
+          # mount + umount) + rsync + squashfs-tools (unsquashfs) are
+          # needed by pxe_ramboot_stage to convert the netboot-pc
+          # squashfs into a bootable ext4 disk image. Ramboot then
+          # pivots into the real pixie live env (systemd + pixie-on-
+          # tty1 + the ported pixie CLI), which POSTs inventory back
+          # via its own code path -- no busybox/wget shim.
           sudo apt-get install -y --no-install-recommends \
             qemu-system-x86 \
             qemu-utils \
             dnsmasq \
             ipxe \
             bridge-utils \
-            iproute2
+            iproute2 \
+            e2fsprogs \
+            util-linux \
+            rsync \
+            squashfs-tools
           sudo chmod a+rw /dev/kvm
           ls -la /dev/kvm
 
