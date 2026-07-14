@@ -149,28 +149,33 @@ def _make_disk_image(out: Path, squashfs: Path) -> None:
     ).strip()
     log.error(f"pxe_ramboot_stage: attached loop device {loop}")
     part_dev = f"{loop}p1"
+    # Manual tmpdir management: ``unsquashfs`` runs under sudo and
+    # writes root-owned files, so Python's ``TemporaryDirectory``
+    # cleanup fails with PermissionError. Clean up with sudo at
+    # the end instead.
+    tmp = Path(tempfile.mkdtemp(prefix="pixie-ramboot-"))
     try:
         subprocess.run(
             ["sudo", "-n", "mkfs.ext4", "-q", "-L", "pixie-root", part_dev],
             check=True,
         )
-        with tempfile.TemporaryDirectory() as tmp:
-            mnt = Path(tmp) / "mnt"
-            unsq = Path(tmp) / "squashfs"
-            mnt.mkdir()
-            log.error(f"pxe_ramboot_stage: unpacking {squashfs.name} -> {unsq}")
-            subprocess.run(
-                ["sudo", "-n", "unsquashfs", "-d", str(unsq), "-no-progress", str(squashfs)],
-                check=True,
-            )
-            log.error(f"pxe_ramboot_stage: mounting {part_dev} -> {mnt}")
-            subprocess.run(["sudo", "-n", "mount", part_dev, str(mnt)], check=True)
-            try:
-                _rsync_into_rootfs(unsq, mnt)
-            finally:
-                subprocess.run(["sudo", "-n", "umount", str(mnt)], check=True)
+        mnt = tmp / "mnt"
+        unsq = tmp / "squashfs"
+        mnt.mkdir()
+        log.error(f"pxe_ramboot_stage: unpacking {squashfs.name} -> {unsq}")
+        subprocess.run(
+            ["sudo", "-n", "unsquashfs", "-d", str(unsq), "-no-progress", str(squashfs)],
+            check=True,
+        )
+        log.error(f"pxe_ramboot_stage: mounting {part_dev} -> {mnt}")
+        subprocess.run(["sudo", "-n", "mount", part_dev, str(mnt)], check=True)
+        try:
+            _rsync_into_rootfs(unsq, mnt)
+        finally:
+            subprocess.run(["sudo", "-n", "umount", str(mnt)], check=True)
     finally:
         subprocess.run(["sudo", "-n", "losetup", "-d", loop], check=False)
+        subprocess.run(["sudo", "-n", "rm", "-rf", str(tmp)], check=False)
 
     log.error(
         f"pxe_ramboot_stage: rootfs disk ready at {out} "
