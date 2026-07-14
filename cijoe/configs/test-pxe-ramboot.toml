@@ -95,3 +95,19 @@ needle = "ramboot: nbd-client -persist"
 [[test.pxe.chain_markers]]
 key = "ramboot-nbd0-capacity"
 needle = "ramboot: nbd0 capacity ready"
+
+# Post-pivot: the rootfs's /init has executed. This is the
+# smallest thing that proves ramboot -> partition scan -> mount
+# -> overlay -> pivot_root -> exec /init all worked end-to-end.
+[[test.pxe.chain_markers]]
+key = "pivot-userspace-reached"
+needle = "pixie-init: hello from rootfs"
+
+# The rootfs init POSTs a minimal inventory blob to pixie's
+# /pxe/<mac>/inventory endpoint via busybox wget; a 2xx response
+# is what "inventory posted ok" signals. Downstream, the test
+# also GETs /machines/<mac>/inventory to prove the JSON round-
+# tripped into state.db.
+[[test.pxe.chain_markers]]
+key = "inventory-posted-ok"
+needle = "pixie-init: inventory posted ok"

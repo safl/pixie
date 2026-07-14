@@ -234,17 +234,24 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - name: Install host tools (qemu, dnsmasq, ipxe, bridge)
+      - name: Install host tools (qemu, dnsmasq, ipxe, bridge, rootfs)
         run: |
           set -eu
           sudo apt-get update
+          # busybox-static, e2fsprogs (mkfs.ext4), util-linux (sfdisk +
+          # losetup + mount + umount) are needed by pxe_ramboot_stage
+          # to build the tiny bootable disk image that lets ramboot
+          # complete pivot_root and land in userspace.
           sudo apt-get install -y --no-install-recommends \
             qemu-system-x86 \
             qemu-utils \
             dnsmasq \
             ipxe \
             bridge-utils \
-            iproute2
+            iproute2 \
+            busybox-static \
+            e2fsprogs \
+            util-linux
           sudo chmod a+rw /dev/kvm
           ls -la /dev/kvm
 

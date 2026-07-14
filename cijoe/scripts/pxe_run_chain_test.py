@@ -139,6 +139,16 @@ def main(args, cijoe) -> int:
             _dump_container_logs()
             return errno.EPROTO
 
+        # Ramboot mode also validates the server-side inventory
+        # roundtrip: the client's rootfs /init POSTed a blob via
+        # busybox wget; here we GET it back from pixie's state.db and
+        # assert it holds the marker fields we sent.
+        if mode == "ramboot":
+            inv_err = _verify_server_inventory(seed_base, cfg["client_mac"])
+            if inv_err:
+                _dump_container_logs()
+                return inv_err
+
         log.info(f"PXE {mode} chain test PASSED (all markers seen)")
         return 0
     finally:
@@ -700,6 +710,35 @@ def _wait_content_sha(base: str, name: str, timeout: float = FETCH_TIMEOUT) -> s
         f"fetch never populated content_sha256 for {name!r} within {timeout}s "
         f"(last state: {last_state})"
     )
+
+
+def _verify_server_inventory(base: str, mac: str) -> int:
+    """After the client's rootfs /init runs, pixie should hold the
+    POSTed inventory on the machine row. Fetch it back and assert
+    the disks[] shape we sent survived the roundtrip. The path is
+    open-read so no cookie is needed."""
+    url = f"{base}/machines/{mac}/inventory"
+    log.info(f"Verifying server-side inventory: GET {url}")
+    try:
+        with urllib.request.urlopen(url, timeout=10) as resp:
+            body = json.loads(resp.read())
+    except urllib.error.HTTPError as exc:
+        log.error(f"GET /machines/{mac}/inventory -> HTTP {exc.code}: {exc.reason}")
+        return errno.EPROTO
+    except (urllib.error.URLError, OSError) as exc:
+        log.error(f"GET /machines/{mac}/inventory -> transport error: {exc}")
+        return errno.ECONNREFUSED
+
+    inv = body.get("inventory") or {}
+    disks = inv.get("disks") or []
+    if not disks:
+        log.error(f"inventory has empty disks list: {body!r}")
+        return errno.EPROTO
+    if disks[0].get("vendor") != "pixie-test":
+        log.error(f"inventory disks[0].vendor={disks[0].get('vendor')!r}; expected pixie-test")
+        return errno.EPROTO
+    log.info(f"Server-side inventory ok: mac={body.get('mac')} disks_count={len(disks)}")
+    return 0
 
 
 def _bind_machine(base: str, cookie: str, mac: str, image_sha: str) -> None:
