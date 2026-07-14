@@ -34,6 +34,7 @@ Retargetable: False
 from __future__ import annotations
 
 import errno
+import functools
 import http.server
 import json
 import logging as log
@@ -550,13 +551,13 @@ def _start_ramboot_http_server(workspace: Path, bind_ip: str):
             disk.exists(),
         )
         return None
-    # SimpleHTTPRequestHandler serves files rooted at cwd; bind it
-    # to the workspace so ``/bundle.tar.gz`` resolves.
-    handler = type(
-        "_ScopedRambootHandler",
-        (_RambootFilesHandler,),
-        {"directory": str(workspace)},
-    )
+    # SimpleHTTPRequestHandler reads ``directory`` from ``__init__``
+    # kwargs, not from a class attribute -- bind via functools.partial
+    # so ThreadingTCPServer's ``handler(*args, **kwargs)`` construction
+    # supplies it. (Setting ``directory`` on the class silently falls
+    # back to os.getcwd(), which is why the first run returned 404
+    # for every URL: cwd was cijoe/, not cijoe/_build/test-pxe/.)
+    handler = functools.partial(_RambootFilesHandler, directory=str(workspace))
     server = _ReusableThreadingHTTPServer((bind_ip, RAMBOOT_HTTP_PORT), handler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
