@@ -68,8 +68,30 @@ key = "kernel-boot"
 needle = "Linux version"
 
 # Ramboot script is sourced by initramfs-tools' /init. The trace
-# helper writes to /dev/kmsg + /dev/console, so it lands in the
-# QEMU serial log.
+# helper writes to /dev/kmsg + /dev/console, so every line lands
+# in the QEMU serial log. The four markers below cover the
+# initrd's boot-time NBD chain end-to-end: script loaded ->
+# mountroot() entered -> kernel modules loaded -> nbd-client
+# actually invoked against pixie -> pixie's NBD served real bytes.
+# The chain stops (via _ramboot_die) at partition scan because
+# the test disk is a zero-filled 64 MiB file with no partition
+# table; adding a real rootfs stub lands in a follow-up.
 [[test.pxe.chain_markers]]
 key = "ramboot-script-sourced"
 needle = "ramboot: script sourced"
+
+[[test.pxe.chain_markers]]
+key = "ramboot-mountroot-entered"
+needle = "ramboot: mountroot() entered"
+
+[[test.pxe.chain_markers]]
+key = "ramboot-modprobe-nbd"
+needle = "ramboot: modprobe nbd"
+
+[[test.pxe.chain_markers]]
+key = "ramboot-nbd-client"
+needle = "ramboot: nbd-client -persist"
+
+[[test.pxe.chain_markers]]
+key = "ramboot-nbd0-capacity"
+needle = "ramboot: nbd0 capacity ready"
