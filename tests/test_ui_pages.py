@@ -148,6 +148,38 @@ def test_ui_machine_detail_renders_stored_inventory(client: TestClient) -> None:
     assert "test-model" in body
 
 
+def test_ui_machine_detail_bind_form_prefills_current_binding(client: TestClient) -> None:
+    """The detail page carries an edit form pre-populated with the
+    machine's current boot_mode + image_content_sha256."""
+    c = _authed(client)
+    sha = "a" * 64
+    c.put(
+        "/machines/aa:bb:cc:dd:ee:04",
+        json={"boot_mode": "ramboot", "image_content_sha256": sha},
+    )
+    body = c.get("/ui/machines/aa:bb:cc:dd:ee:04").text
+    # boot_mode select is pre-selected to ramboot
+    assert 'value="ramboot" selected' in body
+    # image sha input has the current value
+    assert f'value="{sha}"' in body
+    # form action posts to the same /ui/machines/bind route the list
+    # page uses; the hidden MAC field is included so operators can't
+    # accidentally bind a different one
+    assert 'action="/ui/machines/bind"' in body
+    assert 'name="mac" value="aa:bb:cc:dd:ee:04"' in body
+
+
+def test_ui_machine_detail_lists_recent_events(client: TestClient) -> None:
+    """Detail page shows a filtered event history for the machine
+    (subject_kind=machine, subject_id=<mac>)."""
+    c = _authed(client)
+    r = c.put("/machines/aa:bb:cc:dd:ee:05", json={"boot_mode": "ipxe-exit"})
+    assert r.status_code == 200
+    body = c.get("/ui/machines/aa:bb:cc:dd:ee:05").text
+    assert "Recent events" in body
+    assert "machine.bound" in body
+
+
 def test_ui_machines_list_shows_inventory_summary(client: TestClient) -> None:
     """Per-row summary column indicates disk count + whether lshw
     was included."""

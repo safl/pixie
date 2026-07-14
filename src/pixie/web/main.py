@@ -389,12 +389,18 @@ def create_app() -> FastAPI:
             return RedirectResponse(url="/ui/machines", status_code=status.HTTP_303_SEE_OTHER)
         if machine is None:
             return RedirectResponse(url="/ui/machines", status_code=status.HTTP_303_SEE_OTHER)
+        events = request.app.state.events_log.list(
+            subject_kind="machine",
+            subject_id=machine.mac,
+            limit=25,
+        )
         return templates.TemplateResponse(
             request,
             "machine_detail.html",
             {
                 "version": pixie.__version__,
                 "machine": machine,
+                "events": events,
                 "authed": True,
                 "page": "machines",
             },
