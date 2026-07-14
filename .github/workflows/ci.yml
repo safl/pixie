@@ -260,6 +260,17 @@ jobs:
           name: pixie-netboot-pc-x86_64
           path: ~/system_imaging/disk/
 
+      - name: Show downloaded artifact contents
+        run: |
+          set -eu
+          # GHA download-artifact preserves paths from the upload;
+          # bty's precedent uses absolute-shape upload globs so files
+          # land flat under ~/system_imaging/disk/, but if the upload
+          # kept the parent tree we want to see it here rather than
+          # discovering it downstream via a 404.
+          echo "--- ~/system_imaging/disk (recursive) ---"
+          find ~/system_imaging/disk -maxdepth 5 -print
+
       - name: Run PXE ramboot chain test
         run: make test-pxe-ramboot
 

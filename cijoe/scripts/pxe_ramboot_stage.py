@@ -105,12 +105,19 @@ def main(args, cijoe) -> int:
     del args, cijoe
     root = _find_artifact_root()
     if root is None:
-        log.warning(
-            "no netboot-pc artifacts found under %s or PIXIE_NETBOOT_ARTIFACT_DIR; "
-            "skipping ramboot staging (test will fail catalog fetch)",
-            _DEFAULT_ARTIFACT_ROOT,
-        )
-        return 0
+        # Dump what we can see so an operator (or CI) can tell whether
+        # the artifact download step ran and where files ended up.
+        candidates = [c for c in (_ARTIFACT_ROOT, _DEFAULT_ARTIFACT_ROOT) if c]
+        log.error("no netboot-pc vmlinuz/initrd found under %s", " or ".join(map(str, candidates)))
+        for c in candidates:
+            if c.is_dir():
+                entries = sorted(p.name for p in c.iterdir())
+                log.error(f"listing {c} ({len(entries)} entries):")
+                for name in entries[:40]:
+                    log.error(f"  {name}")
+            else:
+                log.error(f"{c}: does not exist or is not a directory")
+        return 1
 
     workspace = Path.cwd() / "_build" / "test-pxe"
     workspace.mkdir(parents=True, exist_ok=True)
