@@ -1,0 +1,102 @@
+{% extends "layout.html" %}
+{% block title %}pixie machine {{ machine.mac }}{% endblock %}
+{% block content %}
+<div class="card">
+    <p><a href="/ui/machines" class="muted">&larr; back to machines</a></p>
+    <h1><code>{{ machine.mac }}</code></h1>
+
+    <table class="props">
+        <tr><th>Boot mode</th><td>{{ machine.boot_mode }}</td></tr>
+        <tr>
+            <th>Image content sha</th>
+            <td>
+                {% if machine.image_content_sha256 %}
+                <code>{{ machine.image_content_sha256 }}</code>
+                {% else %}
+                <span class="muted">(unbound)</span>
+                {% endif %}
+            </td>
+        </tr>
+        <tr><th>Discovered at</th><td class="small muted">{{ machine.discovered_at }}</td></tr>
+        <tr><th>Last seen</th><td class="small muted">{{ machine.last_seen_at }}</td></tr>
+        <tr><th>Last seen IP</th><td class="small muted">
+            {% if machine.last_seen_ip %}{{ machine.last_seen_ip }}
+            {% else %}<span class="muted">-</span>{% endif %}
+        </td></tr>
+    </table>
+
+    <h2>Inventory</h2>
+    <p class="muted">
+        Posted by the live env's <code>pixie</code> CLI on boot
+        via <code>POST /pxe/{{ machine.mac }}/inventory</code>.
+        The blob is stored verbatim; fields shown below are pixie's
+        best-effort render of a subset of the shape emitted by
+        <code>lsblk</code> + <code>lshw</code>.
+    </p>
+    {% if machine.inventory %}
+    <p class="muted small">Recorded at {{ machine.inventory_at }}</p>
+
+    {% set disks = machine.inventory.get("disks") or [] %}
+    {% if disks %}
+    <h3>Disks ({{ disks|length }})</h3>
+    <table>
+        <thead>
+            <tr>
+                <th>Path</th>
+                <th>Size</th>
+                <th>Vendor / Model</th>
+                <th>Serial</th>
+                <th>Transport</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for d in disks %}
+            <tr>
+                <td><code>{{ d.get("path") or "-" }}</code></td>
+                <td>{{ d.get("size") or "-" }}</td>
+                <td>
+                    {{ d.get("vendor") or "-" }}
+                    {% if d.get("model") %}<br><span class="small muted">{{ d.get("model") }}</span>{% endif %}
+                </td>
+                <td class="small muted"><code>{{ d.get("serial") or "-" }}</code></td>
+                <td class="small">{{ d.get("tran") or "-" }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <p class="muted small">No disks in the posted inventory.</p>
+    {% endif %}
+
+    {% if machine.inventory.get("lshw") %}
+    <h3>Raw <code>lshw</code></h3>
+    <details>
+        <summary class="muted small">Show full JSON</summary>
+        <pre>{{ machine.inventory.get("lshw") | tojson(indent=2) }}</pre>
+    </details>
+    {% else %}
+    <p class="muted small">No <code>lshw</code> in the posted inventory.</p>
+    {% endif %}
+    {% else %}
+    <p class="muted">
+        No inventory has been posted for this machine yet. The live env's
+        <code>pixie</code> CLI posts one on boot; check that the target has
+        completed a PXE boot with a working network reach to pixie.
+    </p>
+    {% endif %}
+</div>
+<style>
+    .props { width: auto; margin-top: 1rem; }
+    .props th { text-align: left; color: #94a3b8; font-weight: 500;
+                padding-right: 1.5rem; vertical-align: top; }
+    .props td { padding: 0.25rem 0; vertical-align: top; }
+    table { width: 100%; border-collapse: collapse; margin: 0.5rem 0 1rem 0; }
+    th, td { padding: 0.5rem; text-align: left; border-bottom: 1px solid #334155;
+             vertical-align: top; }
+    th { color: #94a3b8; font-weight: 500; font-size: 0.875rem; }
+    .small { font-size: 0.75rem; }
+    pre { background: #0f172a; padding: 0.75rem; border-radius: 4px;
+          overflow-x: auto; font-size: 0.8rem; max-height: 30rem; }
+    details summary { cursor: pointer; user-select: none; margin: 0.5rem 0; }
+</style>
+{% endblock %}

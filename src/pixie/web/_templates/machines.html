@@ -41,6 +41,7 @@
                 <th>MAC</th>
                 <th>Boot mode</th>
                 <th>Image</th>
+                <th>Inventory</th>
                 <th>Last seen</th>
                 <th>Actions</th>
             </tr>
@@ -48,13 +49,22 @@
         <tbody>
             {% for m in machines %}
             <tr>
-                <td><code>{{ m.mac }}</code></td>
+                <td><a href="/ui/machines/{{ m.mac }}"><code>{{ m.mac }}</code></a></td>
                 <td>{{ m.boot_mode }}</td>
                 <td>
                     {% if m.image_content_sha256 %}
                     <code title="{{ m.image_content_sha256 }}">
                         {{ m.image_content_sha256[:12] }}
                     </code>
+                    {% else %}
+                    <span class="muted">-</span>
+                    {% endif %}
+                </td>
+                <td>
+                    {% if m.inventory %}
+                    {% set d = m.inventory.get("disks") or [] %}
+                    <span class="small">{{ d|length }} disk{% if d|length != 1 %}s{% endif %}</span>
+                    {% if m.inventory.get("lshw") %}<span class="small muted"> + lshw</span>{% endif %}
                     {% else %}
                     <span class="muted">-</span>
                     {% endif %}
