@@ -16,12 +16,15 @@ returns 202 immediately while the download proceeds; see
 
 from __future__ import annotations
 
+import gzip
 import hashlib
 import io
 import json
 import logging
+import lzma
 import os
 import shutil
+import subprocess
 import tarfile
 import tempfile
 import urllib.error
@@ -177,6 +180,32 @@ def fetch(entry: CatalogEntry, store: CatalogStore) -> FetchResult:
             _log.info(
                 "fetch %r: extracted %d artifacts to %s", entry.name, len(artifacts), artifact_dir
             )
+        elif entry.format in _COMPRESSED_IMG_FORMATS:
+            # ``img.gz`` / ``img.zst`` / ``img.xz`` publish the SOURCE
+            # as compressed bytes but the appliance's boot chain (NBD
+            # -> initrd -> mount) needs raw block-device bytes.
+            # Decompress on the way in so the on-disk blob IS the
+            # mountable disk image. Content-address on the RAW sha
+            # (post-decompression) so /pxe/<mac> plans + NBD exports
+            # stay stable across recompressions of the same source.
+            decompressed_tmp, sha256, size = _decompress_to_tmpfile(
+                tmp_path, entry.format, store.state_dir / "tmp"
+            )
+            tmp_path.unlink(missing_ok=True)
+            tmp_path = decompressed_tmp
+            _log.info(
+                "fetch %r: decompressed %s -> %d raw bytes (sha=%s)",
+                entry.name,
+                entry.format,
+                size,
+                sha256[:12],
+            )
+            blob_dir = store.blob_path(sha256).parent
+            blob_dir.mkdir(parents=True, exist_ok=True)
+            blob_path = store.blob_path(sha256)
+            os.replace(tmp_path, blob_path)
+            tmp_path = blob_path
+            artifacts = []
         else:
             blob_dir = store.blob_path(sha256).parent
             blob_dir.mkdir(parents=True, exist_ok=True)
@@ -200,6 +229,65 @@ def fetch(entry: CatalogEntry, store: CatalogStore) -> FetchResult:
         format=entry.format,
         artifact_files=artifacts,
     )
+
+
+_COMPRESSED_IMG_FORMATS = frozenset({"img.gz", "img.zst", "img.xz"})
+
+
+def _decompress_to_tmpfile(
+    src: Path, fmt: str, tmp_dir: Path
+) -> tuple[Path, str, int]:
+    """Stream-decompress ``src`` (a downloaded compressed disk image)
+    into a fresh tmpfile under ``tmp_dir``. Returns the tmpfile path
+    plus the sha256 + size of the DECOMPRESSED bytes.
+
+    Uses stdlib decoders for ``.gz`` and ``.xz``; shells out to the
+    ``zstd`` binary for ``.zst`` (the Zstandard stdlib module lands in
+    Python 3.14+ but pixie still supports 3.11). Raises
+    :class:`FetchError` with an operator-actionable message when the
+    input is corrupt or the decoder is missing.
+    """
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+    tmp_path = Path(tempfile.mkstemp(prefix="decompress-", suffix=".raw", dir=tmp_dir)[1])
+    hasher = hashlib.sha256()
+    size = 0
+    try:
+        if fmt == "img.gz":
+            with gzip.open(src, "rb") as src_fh, open(tmp_path, "wb") as dst_fh:
+                while chunk := src_fh.read(CHUNK):
+                    dst_fh.write(chunk)
+                    hasher.update(chunk)
+                    size += len(chunk)
+        elif fmt == "img.xz":
+            with lzma.open(src, "rb") as src_fh, open(tmp_path, "wb") as dst_fh:
+                while chunk := src_fh.read(CHUNK):
+                    dst_fh.write(chunk)
+                    hasher.update(chunk)
+                    size += len(chunk)
+        elif fmt == "img.zst":
+            if shutil.which("zstd") is None:
+                raise FetchError(
+                    "img.zst decompression needs the 'zstd' binary on PATH; install zstd"
+                )
+            with open(tmp_path, "wb") as dst_fh:
+                proc = subprocess.Popen(
+                    ["zstd", "-d", "--stdout", "--quiet", str(src)],
+                    stdout=subprocess.PIPE,
+                )
+                assert proc.stdout is not None
+                while chunk := proc.stdout.read(CHUNK):
+                    dst_fh.write(chunk)
+                    hasher.update(chunk)
+                    size += len(chunk)
+                rc = proc.wait()
+                if rc != 0:
+                    raise FetchError(f"zstd -d exited {rc} on {src}")
+        else:
+            raise FetchError(f"unsupported compressed img format: {fmt!r}")
+    except (OSError, EOFError, lzma.LZMAError, gzip.BadGzipFile) as exc:
+        tmp_path.unlink(missing_ok=True)
+        raise FetchError(f"decompress {fmt} failed: {exc}") from exc
+    return tmp_path, hasher.hexdigest(), size
 
 
 # ------------------------------------------------------------------------
