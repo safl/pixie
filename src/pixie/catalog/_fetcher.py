@@ -234,9 +234,7 @@ def fetch(entry: CatalogEntry, store: CatalogStore) -> FetchResult:
 _COMPRESSED_IMG_FORMATS = frozenset({"img.gz", "img.zst", "img.xz"})
 
 
-def _decompress_to_tmpfile(
-    src: Path, fmt: str, tmp_dir: Path
-) -> tuple[Path, str, int]:
+def _decompress_to_tmpfile(src: Path, fmt: str, tmp_dir: Path) -> tuple[Path, str, int]:
     """Stream-decompress ``src`` (a downloaded compressed disk image)
     into a fresh tmpfile under ``tmp_dir``. Returns the tmpfile path
     plus the sha256 + size of the DECOMPRESSED bytes.
