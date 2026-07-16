@@ -1,21 +1,40 @@
 {% extends "layout.html" %}
-{% block title %}pixie login{% endblock %}
+{% block title %}Log in - pixie{% endblock %}
 {% block content %}
-<div class="card">
-    <h1>pixie</h1>
-    <p class="muted">Bare-metal netboot appliance.</p>
-    {% if error %}
-    <p class="error">{{ error }}</p>
-    {% endif %}
-    <form method="post" action="/ui/login">
-        <p>
-            <label for="password">Admin password</label><br>
-            <input type="password" id="password" name="password"
-                   autocomplete="current-password" autofocus required>
-        </p>
-        <p>
-            <button type="submit">Sign in</button>
-        </p>
-    </form>
+<div class="row justify-content-center">
+    <div class="col-md-6">
+        <div class="card">
+            <div class="card-body">
+                <h1 class="h4 mb-3"><i class="bi bi-shield-lock me-2"></i>Log in</h1>
+                <p class="text-muted small">
+                    Enter the admin password. The default is
+                    <code>pixie-lab</code>; override via
+                    <code>PIXIE_ADMIN_PASSWORD</code> on the server.
+                </p>
+                {% if using_default_password %}
+                <div class="alert alert-warning small mb-3">
+                    <i class="bi bi-exclamation-triangle me-1"></i>
+                    This server still uses the well-known default
+                    password <code>pixie-lab</code>. Set
+                    <code>PIXIE_ADMIN_PASSWORD</code> on the host before
+                    exposing it beyond localhost.
+                </div>
+                {% endif %}
+                {% if error %}
+                <div class="alert alert-danger">{{ error }}</div>
+                {% endif %}
+                <form action="/ui/login" method="post">
+                    <div class="mb-3">
+                        <label for="password" class="form-label">Password</label>
+                        <input type="password" class="form-control" id="password"
+                               name="password" autocomplete="current-password" autofocus required>
+                    </div>
+                    <button type="submit" class="btn btn-primary w-100">
+                        <i class="bi bi-box-arrow-in-right me-1"></i>Log in
+                    </button>
+                </form>
+            </div>
+        </div>
+    </div>
 </div>
 {% endblock %}

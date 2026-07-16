@@ -1,150 +1,186 @@
 {% extends "layout.html" %}
-{% block title %}pixie machine {{ machine.mac }}{% endblock %}
+{% block title %}{{ machine.mac }} - pixie{% endblock %}
+{% block subnav %}
+<div class="subnav-strip">
+    <div class="container">
+        <a href="/ui/machines" class="text-decoration-none">
+            <i class="bi bi-arrow-left me-1"></i>Machines
+        </a>
+        <span class="text-muted">/</span>
+        <code class="text-white-50">{{ machine.mac }}</code>
+        <ul class="nav nav-pills ms-auto">
+            <li class="nav-item"><a class="nav-link" href="#binding">Binding</a></li>
+            <li class="nav-item"><a class="nav-link" href="#inventory">Inventory</a></li>
+            <li class="nav-item"><a class="nav-link" href="#events">Events</a></li>
+        </ul>
+    </div>
+</div>
+{% endblock %}
 {% block content %}
-<div class="card">
-    <p><a href="/ui/machines" class="muted">&larr; back to machines</a></p>
-    <h1><code>{{ machine.mac }}</code></h1>
-
-    <table class="props">
-        <tr><th>Boot mode</th><td>{{ machine.boot_mode }}</td></tr>
-        <tr>
-            <th>Image content sha</th>
-            <td>
+<div class="card shadow-sm mb-4">
+    <div class="card-header bg-light d-flex align-items-center">
+        <h2 class="h5 mb-0"><i class="bi bi-pc-display me-2"></i><code>{{ machine.mac }}</code></h2>
+        <span class="ms-auto">
+            {% if machine.boot_mode == 'ramboot' %}
+            <span class="badge text-bg-primary">
+                <i class="bi bi-hdd-network me-1"></i>ramboot
+            </span>
+            {% else %}
+            <span class="badge text-bg-secondary">
+                <i class="bi bi-box-arrow-right me-1"></i>{{ machine.boot_mode }}
+            </span>
+            {% endif %}
+        </span>
+    </div>
+    <div class="card-body">
+        <dl class="row mb-0">
+            <dt class="col-sm-3 text-muted small">Image content sha</dt>
+            <dd class="col-sm-9">
                 {% if machine.image_content_sha256 %}
                 <code>{{ machine.image_content_sha256 }}</code>
                 {% else %}
-                <span class="muted">(unbound)</span>
+                <span class="text-muted">(unbound)</span>
                 {% endif %}
-            </td>
-        </tr>
-        <tr><th>Discovered at</th><td class="small muted">{{ machine.discovered_at }}</td></tr>
-        <tr><th>Last seen</th><td class="small muted">{{ machine.last_seen_at }}</td></tr>
-        <tr><th>Last seen IP</th><td class="small muted">
-            {% if machine.last_seen_ip %}{{ machine.last_seen_ip }}
-            {% else %}<span class="muted">-</span>{% endif %}
-        </td></tr>
-    </table>
+            </dd>
+            <dt class="col-sm-3 text-muted small">Discovered at</dt>
+            <dd class="col-sm-9 small text-muted">{{ machine.discovered_at }}</dd>
+            <dt class="col-sm-3 text-muted small">Last seen</dt>
+            <dd class="col-sm-9 small text-muted">{{ machine.last_seen_at }}</dd>
+            <dt class="col-sm-3 text-muted small">Last seen IP</dt>
+            <dd class="col-sm-9 small">
+                {% if machine.last_seen_ip %}<code>{{ machine.last_seen_ip }}</code>
+                {% else %}<span class="text-muted">-</span>{% endif %}
+            </dd>
+        </dl>
+    </div>
+</div>
 
-    <h2>Edit binding</h2>
-    <form method="post" action="/ui/machines/bind" class="add-form">
-        <input type="hidden" name="mac" value="{{ machine.mac }}">
-        <div class="row">
-            <label for="boot_mode">Boot mode</label>
-            <select id="boot_mode" name="boot_mode">
-                <option value="ipxe-exit" {% if machine.boot_mode == "ipxe-exit" %}selected{% endif %}>ipxe-exit (boot local disk)</option>
-                <option value="ramboot" {% if machine.boot_mode == "ramboot" %}selected{% endif %}>ramboot (image over NBD)</option>
-            </select>
+<div class="card shadow-sm mb-4" id="binding">
+    <div class="card-header bg-light">
+        <h2 class="h5 mb-0"><i class="bi bi-pencil me-2"></i>Edit binding</h2>
+    </div>
+    <div class="card-body">
+        <form method="post" action="/ui/machines/bind" class="row g-3">
+            <input type="hidden" name="mac" value="{{ machine.mac }}">
+            <div class="col-md-4">
+                <label for="boot_mode" class="form-label">Boot mode</label>
+                <select id="boot_mode" name="boot_mode" class="form-select">
+                    <option value="ipxe-exit" {% if machine.boot_mode == "ipxe-exit" %}selected{% endif %}>ipxe-exit (boot local disk)</option>
+                    <option value="ramboot" {% if machine.boot_mode == "ramboot" %}selected{% endif %}>ramboot (image over NBD)</option>
+                </select>
+            </div>
+            <div class="col-md-8">
+                <label for="image_content_sha256" class="form-label">Image content sha</label>
+                <input id="image_content_sha256" name="image_content_sha256" type="text"
+                       class="form-control font-monospace"
+                       value="{{ machine.image_content_sha256 or '' }}"
+                       placeholder="64-char sha of a fetched catalog entry">
+            </div>
+            <div class="col-12">
+                <button type="submit" class="btn btn-primary">
+                    <i class="bi bi-check2 me-1"></i>Update binding
+                </button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<div class="card shadow-sm mb-4" id="inventory">
+    <div class="card-header bg-light d-flex align-items-center">
+        <h2 class="h5 mb-0"><i class="bi bi-hdd-stack me-2"></i>Inventory</h2>
+        {% if machine.inventory %}
+        <span class="text-muted small ms-auto">Recorded at {{ machine.inventory_at }}</span>
+        {% endif %}
+    </div>
+    <div class="card-body">
+        <p class="text-muted small">
+            Posted by the live env's <code>pixie</code> CLI on boot via
+            <code>POST /pxe/{{ machine.mac }}/inventory</code>. The blob is stored verbatim;
+            fields below are a best-effort render of the shape emitted by
+            <code>lsblk</code> + <code>lshw</code>.
+        </p>
+        {% if machine.inventory %}
+        {% set disks = machine.inventory.get("disks") or [] %}
+        {% if disks %}
+        <h3 class="h6 mt-3">Disks ({{ disks|length }})</h3>
+        <div class="table-responsive">
+            <table class="table table-sm table-hover align-middle">
+                <thead>
+                    <tr>
+                        <th scope="col">Path</th>
+                        <th scope="col">Size</th>
+                        <th scope="col">Vendor / Model</th>
+                        <th scope="col">Serial</th>
+                        <th scope="col">Transport</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for d in disks %}
+                    <tr>
+                        <td><code>{{ d.get("path") or "-" }}</code></td>
+                        <td class="font-monospace small">{{ d.get("size") or "-" }}</td>
+                        <td>
+                            {{ d.get("vendor") or "-" }}
+                            {% if d.get("model") %}<br><span class="text-muted small">{{ d.get("model") }}</span>{% endif %}
+                        </td>
+                        <td class="small"><code>{{ d.get("serial") or "-" }}</code></td>
+                        <td class="small">{{ d.get("tran") or "-" }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
         </div>
-        <div class="row">
-            <label for="image_content_sha256">Image content sha</label>
-            <input id="image_content_sha256" name="image_content_sha256" type="text"
-                   value="{{ machine.image_content_sha256 or '' }}"
-                   placeholder="64-char sha of a fetched catalog entry">
-        </div>
-        <div class="row">
-            <button type="submit">Update binding</button>
-        </div>
-    </form>
+        {% else %}
+        <p class="text-muted small mb-0">No disks in the posted inventory.</p>
+        {% endif %}
 
-    <h2>Inventory</h2>
-    <p class="muted">
-        Posted by the live env's <code>pixie</code> CLI on boot
-        via <code>POST /pxe/{{ machine.mac }}/inventory</code>.
-        The blob is stored verbatim; fields shown below are pixie's
-        best-effort render of a subset of the shape emitted by
-        <code>lsblk</code> + <code>lshw</code>.
-    </p>
-    {% if machine.inventory %}
-    <p class="muted small">Recorded at {{ machine.inventory_at }}</p>
+        {% if machine.inventory.get("lshw") %}
+        <details class="mt-3">
+            <summary class="text-muted small">Raw <code>lshw</code> JSON</summary>
+            <pre class="bg-light border rounded p-3 mt-2 small" style="max-height: 30rem; overflow: auto;">{{ machine.inventory.get("lshw") | tojson(indent=2) }}</pre>
+        </details>
+        {% endif %}
+        {% else %}
+        <p class="text-muted mb-0">
+            <i class="bi bi-inbox me-1"></i>
+            No inventory has been posted for this machine yet. The live env's
+            <code>pixie</code> CLI posts one on boot; check the target's PXE
+            reach to pixie.
+        </p>
+        {% endif %}
+    </div>
+</div>
 
-    {% set disks = machine.inventory.get("disks") or [] %}
-    {% if disks %}
-    <h3>Disks ({{ disks|length }})</h3>
-    <table>
-        <thead>
-            <tr>
-                <th>Path</th>
-                <th>Size</th>
-                <th>Vendor / Model</th>
-                <th>Serial</th>
-                <th>Transport</th>
-            </tr>
-        </thead>
-        <tbody>
-            {% for d in disks %}
-            <tr>
-                <td><code>{{ d.get("path") or "-" }}</code></td>
-                <td>{{ d.get("size") or "-" }}</td>
-                <td>
-                    {{ d.get("vendor") or "-" }}
-                    {% if d.get("model") %}<br><span class="small muted">{{ d.get("model") }}</span>{% endif %}
-                </td>
-                <td class="small muted"><code>{{ d.get("serial") or "-" }}</code></td>
-                <td class="small">{{ d.get("tran") or "-" }}</td>
-            </tr>
-            {% endfor %}
-        </tbody>
-    </table>
-    {% else %}
-    <p class="muted small">No disks in the posted inventory.</p>
-    {% endif %}
-
-    {% if machine.inventory.get("lshw") %}
-    <h3>Raw <code>lshw</code></h3>
-    <details>
-        <summary class="muted small">Show full JSON</summary>
-        <pre>{{ machine.inventory.get("lshw") | tojson(indent=2) }}</pre>
-    </details>
-    {% else %}
-    <p class="muted small">No <code>lshw</code> in the posted inventory.</p>
-    {% endif %}
-    {% else %}
-    <p class="muted">
-        No inventory has been posted for this machine yet. The live env's
-        <code>pixie</code> CLI posts one on boot; check that the target has
-        completed a PXE boot with a working network reach to pixie.
-    </p>
-    {% endif %}
-
-    <h2>Recent events ({{ events|length }})</h2>
+<div class="card shadow-sm" id="events">
+    <div class="card-header bg-light d-flex align-items-center">
+        <h2 class="h5 mb-0"><i class="bi bi-clock-history me-2"></i>Recent events</h2>
+        <a href="/ui/events" class="ms-auto small">All events</a>
+    </div>
     {% if events %}
-    <table>
-        <thead>
-            <tr>
-                <th>When</th>
-                <th>Kind</th>
-                <th>Summary</th>
-            </tr>
-        </thead>
-        <tbody>
-            {% for e in events %}
-            <tr>
-                <td class="small muted">{{ e.ts }}</td>
-                <td><code>{{ e.kind }}</code></td>
-                <td>{{ e.summary or "" }}</td>
-            </tr>
-            {% endfor %}
-        </tbody>
-    </table>
-    <p class="small muted">
-        <a href="/ui/events">See all events</a>
-    </p>
+    <div class="table-responsive">
+        <table class="table table-sm table-hover align-middle mb-0">
+            <thead>
+                <tr>
+                    <th scope="col">When</th>
+                    <th scope="col">Kind</th>
+                    <th scope="col">Summary</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for e in events %}
+                <tr>
+                    <td class="small text-muted text-nowrap">{{ e.ts }}</td>
+                    <td><code>{{ e.kind }}</code></td>
+                    <td>{{ e.summary or "" }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
     {% else %}
-    <p class="muted small">No events recorded for this machine yet.</p>
+    <div class="card-body">
+        <p class="text-muted small mb-0">No events recorded for this machine yet.</p>
+    </div>
     {% endif %}
 </div>
-<style>
-    .props { width: auto; margin-top: 1rem; }
-    .props th { text-align: left; color: #94a3b8; font-weight: 500;
-                padding-right: 1.5rem; vertical-align: top; }
-    .props td { padding: 0.25rem 0; vertical-align: top; }
-    table { width: 100%; border-collapse: collapse; margin: 0.5rem 0 1rem 0; }
-    th, td { padding: 0.5rem; text-align: left; border-bottom: 1px solid #334155;
-             vertical-align: top; }
-    th { color: #94a3b8; font-weight: 500; font-size: 0.875rem; }
-    .small { font-size: 0.75rem; }
-    pre { background: #0f172a; padding: 0.75rem; border-radius: 4px;
-          overflow-x: auto; font-size: 0.8rem; max-height: 30rem; }
-    details summary { cursor: pointer; user-select: none; margin: 0.5rem 0; }
-</style>
 {% endblock %}

@@ -217,7 +217,7 @@ def test_ui_dashboard_shows_fetching_pill_when_fetch_state_is_fetching(
     }
     body = c.get("/ui/").text
     assert "fetching" in body
-    assert "pill pill-fetching" in body
+    assert "badge text-bg-primary" in body
     assert "disabled" in body
 
 
@@ -241,9 +241,9 @@ def test_ui_dashboard_shows_error_pill_with_retry_when_fetch_failed(
         "error": "download failed: connect timed out",
     }
     body = c.get("/ui/").text
-    assert "pill pill-error" in body
+    assert "badge text-bg-danger" in body
     assert "connect timed out" in body
-    assert ">Retry<" in body
+    assert "Retry" in body
 
 
 def test_ui_exports_delete_removes_missing_export_silently(client: TestClient) -> None:

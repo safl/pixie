@@ -1,69 +1,82 @@
 {% extends "layout.html" %}
-{% block title %}pixie exports{% endblock %}
+{% block title %}Exports - pixie{% endblock %}
+{% block subnav %}
+<div class="subnav-strip">
+    <div class="container">
+        <span class="text-white-50">Exports</span>
+        <span class="text-muted small ms-auto">
+            {{ exports|length }} export{{ '' if exports|length == 1 else 's' }}
+        </span>
+    </div>
+</div>
+{% endblock %}
 {% block content %}
-<div class="card">
-    <h1>Exports</h1>
-    <p class="muted">
-        NBD exports pixie is currently serving. Each row is one
-        <code>nbdkit</code> subprocess against a fetched catalog blob,
-        keyed by <code>content_sha256</code>. Ports assigned from
-        the base scan and reported here.
-    </p>
-
+<div class="card shadow-sm">
+    <div class="card-header bg-light d-flex align-items-center">
+        <h2 class="h5 mb-0"><i class="bi bi-hdd-network me-2"></i>Exports</h2>
+        <span class="text-muted small ms-auto">
+            NBD exports pixie is serving. Each row is one <code>nbdkit</code>
+            subprocess against a fetched catalog blob.
+        </span>
+    </div>
     {% if exports %}
-    <table>
-        <thead>
-            <tr>
-                <th>Name</th>
-                <th>Content sha</th>
-                <th>NBD port</th>
-                <th>Status</th>
-                <th>Actions</th>
-            </tr>
-        </thead>
-        <tbody>
-            {% for e in exports %}
-            <tr>
-                <td><code>{{ e.name }}</code></td>
-                <td>
-                    <code title="{{ e.content_sha256 }}">
-                        {{ e.content_sha256[:12] }}
-                    </code>
-                </td>
-                <td>{{ e.nbd_port or "-" }}</td>
-                <td>
-                    <span class="pill pill-{{ e.status }}">{{ e.status }}</span>
-                    {% if e.error %}<br><span class="error small">{{ e.error }}</span>{% endif %}
-                </td>
-                <td>
-                    <form method="post" action="/ui/exports/delete" style="display:inline">
-                        <input type="hidden" name="name" value="{{ e.name }}">
-                        <button type="submit" class="danger">Delete</button>
-                    </form>
-                </td>
-            </tr>
-            {% endfor %}
-        </tbody>
-    </table>
+    <div class="table-responsive">
+        <table class="table table-hover align-middle mb-0">
+            <thead>
+                <tr>
+                    <th scope="col">Name</th>
+                    <th scope="col">Content sha</th>
+                    <th scope="col">NBD port</th>
+                    <th scope="col">Status</th>
+                    <th scope="col" class="text-end">Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for e in exports %}
+                <tr>
+                    <td><code>{{ e.name }}</code></td>
+                    <td><code title="{{ e.content_sha256 }}">{{ e.content_sha256[:12] }}</code></td>
+                    <td class="font-monospace small">{{ e.nbd_port or "-" }}</td>
+                    <td>
+                        {% if e.status == 'running' %}
+                        <span class="badge text-bg-success">
+                            <i class="bi bi-broadcast me-1"></i>{{ e.status }}
+                        </span>
+                        {% elif e.status == 'error' %}
+                        <span class="badge text-bg-danger">
+                            <i class="bi bi-exclamation-circle me-1"></i>{{ e.status }}
+                        </span>
+                        {% else %}
+                        <span class="badge text-bg-secondary">
+                            <i class="bi bi-pause-circle me-1"></i>{{ e.status }}
+                        </span>
+                        {% endif %}
+                        {% if e.error %}
+                        <div class="text-danger small">{{ e.error }}</div>
+                        {% endif %}
+                    </td>
+                    <td class="text-end text-nowrap">
+                        <form method="post" action="/ui/exports/delete" class="d-inline">
+                            <input type="hidden" name="name" value="{{ e.name }}">
+                            <button type="submit" class="btn btn-sm btn-outline-danger">
+                                <i class="bi bi-trash me-1"></i>Delete
+                            </button>
+                        </form>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
     {% else %}
-    <p class="muted">
-        No exports yet. Exports are spawned automatically when a
-        machine is bound to <code>boot_mode=ramboot</code>, or by
-        <code>POST /exports</code> against a fetched catalog entry.
-    </p>
+    <div class="card-body">
+        <p class="text-muted mb-0">
+            <i class="bi bi-inbox me-1"></i>
+            No exports yet. Exports are spawned automatically when a machine is bound to
+            <code>boot_mode=ramboot</code>, or by <code>POST /exports</code> against a
+            fetched catalog entry.
+        </p>
+    </div>
     {% endif %}
 </div>
-<style>
-    table { width: 100%; border-collapse: collapse; margin-top: 1rem; }
-    th, td { padding: 0.5rem; text-align: left; border-bottom: 1px solid #334155; }
-    th { color: #94a3b8; font-weight: 500; font-size: 0.875rem; }
-    button.danger { background: #7f1d1d; }
-    button.danger:hover { background: #991b1b; }
-    button { padding: 0.35rem 0.75rem; font-size: 0.875rem; }
-    .error.small { font-size: 0.75rem; }
-    .pill { padding: 0.15rem 0.5rem; border-radius: 12px; font-size: 0.75rem; }
-    .pill-running { background: #14532d; color: #86efac; }
-    .pill-idle    { background: #1e293b; color: #94a3b8; }
-    .pill-error   { background: #7f1d1d; color: #fca5a5; }
-</style>
 {% endblock %}
