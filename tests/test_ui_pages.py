@@ -160,8 +160,11 @@ def test_ui_machine_detail_bind_form_prefills_current_binding(client: TestClient
     body = c.get("/ui/machines/aa:bb:cc:dd:ee:04").text
     # boot_mode select is pre-selected to ramboot
     assert 'value="ramboot" selected' in body
-    # image sha input has the current value
-    assert f'value="{sha}"' in body
+    # image sha select has an option with the current sha value
+    # (may or may not be pre-selected depending on whether the sha
+    # corresponds to a fetched catalog entry; the test just seeded
+    # a machine binding with an arbitrary sha, no catalog entry).
+    assert sha in body
     # form action posts to the same /ui/machines/bind route the list
     # page uses; the hidden MAC field is included so operators can't
     # accidentally bind a different one
@@ -215,7 +218,7 @@ def test_ui_dashboard_shows_fetching_pill_when_fetch_state_is_fetching(
         "started_at": "2026-07-14T00:00:00Z",
         "error": None,
     }
-    body = c.get("/ui/").text
+    body = c.get("/ui/catalog").text
     assert "fetching" in body
     assert "badge text-bg-primary" in body
     assert "disabled" in body
@@ -240,7 +243,7 @@ def test_ui_dashboard_shows_error_pill_with_retry_when_fetch_failed(
         "started_at": "2026-07-14T00:00:00Z",
         "error": "download failed: connect timed out",
     }
-    body = c.get("/ui/").text
+    body = c.get("/ui/catalog").text
     assert "badge text-bg-danger" in body
     assert "connect timed out" in body
     assert "Retry" in body

@@ -55,6 +55,13 @@
     </div>
 </div>
 
+{% set boot_mode_labels = {
+    'ipxe-exit': 'ipxe-exit (boot local disk)',
+    'ramboot': 'ramboot (image over NBD)',
+    'pixie-flash-once': 'pixie-flash-once (flash image once, then boot disk)',
+    'pixie-flash-always': 'pixie-flash-always (re-flash every boot)',
+    'pixie-inventory': 'pixie-inventory (collect inventory, then boot)',
+} %}
 <div class="card shadow-sm mb-4" id="binding">
     <div class="card-header bg-light">
         <h2 class="h5 mb-0"><i class="bi bi-pencil me-2"></i>Edit binding</h2>
@@ -62,19 +69,46 @@
     <div class="card-body">
         <form method="post" action="/ui/machines/bind" class="row g-3">
             <input type="hidden" name="mac" value="{{ machine.mac }}">
-            <div class="col-md-4">
+            <div class="col-md-6">
                 <label for="boot_mode" class="form-label">Boot mode</label>
                 <select id="boot_mode" name="boot_mode" class="form-select">
-                    <option value="ipxe-exit" {% if machine.boot_mode == "ipxe-exit" %}selected{% endif %}>ipxe-exit (boot local disk)</option>
-                    <option value="ramboot" {% if machine.boot_mode == "ramboot" %}selected{% endif %}>ramboot (image over NBD)</option>
+                    {% for mode in boot_modes %}
+                    <option value="{{ mode }}" {% if machine.boot_mode == mode %}selected{% endif %}>
+                        {{ boot_mode_labels.get(mode, mode) }}
+                    </option>
+                    {% endfor %}
                 </select>
             </div>
-            <div class="col-md-8">
-                <label for="image_content_sha256" class="form-label">Image content sha</label>
-                <input id="image_content_sha256" name="image_content_sha256" type="text"
-                       class="form-control font-monospace"
-                       value="{{ machine.image_content_sha256 or '' }}"
-                       placeholder="64-char sha of a fetched catalog entry">
+            <div class="col-md-6">
+                <label for="image_content_sha256" class="form-label">
+                    Image <span class="text-muted small">(used by ramboot / flash modes)</span>
+                </label>
+                {% set entry_shas = bindable_entries | map(attribute='content_sha256') | list %}
+                <select id="image_content_sha256" name="image_content_sha256" class="form-select">
+                    <option value="" {% if not machine.image_content_sha256 %}selected{% endif %}>
+                        (unbound)
+                    </option>
+                    {% for e in bindable_entries %}
+                    <option value="{{ e.content_sha256 }}"
+                            {% if machine.image_content_sha256 == e.content_sha256 %}selected{% endif %}>
+                        {{ e.name }}{% if e.arch %} ({{ e.arch }}){% endif %}
+                    </option>
+                    {% endfor %}
+                    {# Fallback option: keep a bound sha visible even if the
+                       matching catalog entry has been deleted, so an
+                       operator can see (and clear) the stale binding rather
+                       than losing it silently. #}
+                    {% if machine.image_content_sha256 and machine.image_content_sha256 not in entry_shas %}
+                    <option value="{{ machine.image_content_sha256 }}" selected>
+                        {{ machine.image_content_sha256 }} (no matching catalog entry)
+                    </option>
+                    {% endif %}
+                </select>
+                {% if not bindable_entries %}
+                <div class="form-text text-muted">
+                    No fetched images yet. <a href="/ui/catalog">Add and fetch one on the Catalog page.</a>
+                </div>
+                {% endif %}
             </div>
             <div class="col-12">
                 <button type="submit" class="btn btn-primary">

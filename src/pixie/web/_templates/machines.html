@@ -3,15 +3,8 @@
 {% block subnav %}
 <div class="subnav-strip">
     <div class="container">
-        <ul class="nav nav-pills me-auto">
-            <li class="nav-item">
-                <a class="nav-link active" href="#known">Known</a>
-            </li>
-            <li class="nav-item">
-                <a class="nav-link" href="#bind">Bind</a>
-            </li>
-        </ul>
-        <span class="text-muted small">
+        <span class="text-white-50">Machines</span>
+        <span class="text-muted small ms-auto">
             {{ machines|length }} machine{{ '' if machines|length == 1 else 's' }}
         </span>
     </div>
@@ -102,45 +95,10 @@
     <div class="card-body">
         <p class="text-muted mb-0">
             <i class="bi bi-inbox me-1"></i>
-            No machines yet. Bind one below, or wait for a PXE-booting target to hit
-            <code>/pxe/&lt;mac&gt;</code> and auto-discover.
+            No machines yet. Machines appear when a PXE-booting target hits
+            <code>/pxe/&lt;mac&gt;</code>; open a machine to edit its binding.
         </p>
     </div>
     {% endif %}
-</div>
-
-<div class="card shadow-sm" id="bind">
-    <div class="card-header bg-light">
-        <h2 class="h5 mb-0"><i class="bi bi-link-45deg me-2"></i>Bind a machine</h2>
-    </div>
-    <div class="card-body">
-        <form method="post" action="/ui/machines/bind" class="row g-3">
-            <div class="col-md-4">
-                <label for="mac" class="form-label">MAC</label>
-                <input id="mac" name="mac" type="text" class="form-control font-monospace" required
-                       placeholder="aa:bb:cc:dd:ee:ff">
-            </div>
-            <div class="col-md-4">
-                <label for="boot_mode" class="form-label">Boot mode</label>
-                <select id="boot_mode" name="boot_mode" class="form-select">
-                    <option value="ipxe-exit">ipxe-exit (boot local disk)</option>
-                    <option value="ramboot">ramboot (image over NBD)</option>
-                </select>
-            </div>
-            <div class="col-md-4 d-flex align-items-end">
-                <button type="submit" class="btn btn-primary w-100">
-                    <i class="bi bi-link-45deg me-1"></i>Bind
-                </button>
-            </div>
-            <div class="col-12">
-                <label for="image_content_sha256" class="form-label">
-                    Image content sha <span class="text-muted small">(only for ramboot)</span>
-                </label>
-                <input id="image_content_sha256" name="image_content_sha256" type="text"
-                       class="form-control font-monospace"
-                       placeholder="64-char sha of a fetched catalog entry">
-            </div>
-        </form>
-    </div>
 </div>
 {% endblock %}

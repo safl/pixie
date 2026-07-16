@@ -24,9 +24,22 @@ _DB_WRITE_LOCK = threading.Lock()
 
 # Boot modes pixie renders a plan for. The set is closed on purpose:
 # an unknown mode on a row would silently fall through to the default
-# and confuse an operator staring at ``GET /machines/<mac>`` wondering
-# why the target boots ``ipxe-exit``.
-BOOT_MODES: frozenset[str] = frozenset({"ipxe-exit", "ramboot"})
+# and confuse an operator staring at ``GET /machines/<mac>``. Mirrors
+# bty's tuple minus ``bty-tui`` (whose live-env driver has not been
+# ported yet). ``pixie-flash-*`` + ``pixie-inventory`` chain into
+# pixie's own live env; the renderer currently emits an
+# ``unavailable`` plan for them so a bound target boots into a
+# readable "live env not yet baked" screen rather than kernel-panicking
+# on a bty-media initrd.
+BOOT_MODES: frozenset[str] = frozenset(
+    {
+        "ipxe-exit",
+        "pixie-flash-once",
+        "pixie-flash-always",
+        "pixie-inventory",
+        "ramboot",
+    }
+)
 DEFAULT_BOOT_MODE = "ipxe-exit"
 
 # Normalise MAC to lower-case colon form. Rejects anything else.
