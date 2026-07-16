@@ -75,7 +75,7 @@
                         {% endif %}
                     </td>
                     <td class="small text-muted">
-                        {{ m.last_seen_at }}
+                        {{ m.last_seen_at | fmt_ts }}
                         {% if m.last_seen_ip %}<br><code>{{ m.last_seen_ip }}</code>{% endif %}
                     </td>
                     <td class="text-end text-nowrap">

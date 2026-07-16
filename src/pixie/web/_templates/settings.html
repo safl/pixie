@@ -1,0 +1,91 @@
+{% extends "layout.html" %}
+{% block title %}Settings - pixie{% endblock %}
+{% block subnav %}
+<nav class="navbar subnav-strip" aria-label="Section sub-navigation">
+    <div class="container">
+        <span class="subnav-jumps d-flex align-items-center flex-wrap">
+            <a href="#display">Display</a>
+        </span>
+    </div>
+</nav>
+{% endblock %}
+{% block content %}
+{% if flash_error %}
+<div class="alert alert-danger">
+    <i class="bi bi-exclamation-triangle me-1"></i>{{ flash_error }}
+</div>
+{% endif %}
+
+<div class="card shadow-sm mb-4" id="display">
+    <div class="card-header bg-light fw-semibold d-flex flex-wrap align-items-center gap-3 py-2">
+        <span class="text-nowrap"><i class="bi bi-clock me-1"></i>Display</span>
+        <span class="text-muted small">
+            timezone + strftime pattern for every operator-facing timestamp
+        </span>
+    </div>
+    <div class="card-body">
+        <form method="post" action="/ui/settings/display/edit" class="row g-3">
+            <div class="col-md-6">
+                <label for="timezone" class="form-label">
+                    Display timezone
+                    <span class="badge text-bg-{% if display_tz.override %}primary{% else %}secondary{% endif %} ms-1">
+                        {% if display_tz.override %}override{% elif display_tz.effective != display_tz.default %}env{% else %}default{% endif %}
+                    </span>
+                </label>
+                <input type="text" id="timezone" name="timezone"
+                       class="form-control font-monospace"
+                       value="{{ display_tz.override }}"
+                       placeholder="{{ display_tz.default }}"
+                       list="tz-suggestions">
+                <datalist id="tz-suggestions">
+                    <option value="UTC">
+                    <option value="Europe/Copenhagen">
+                    <option value="Europe/London">
+                    <option value="Europe/Berlin">
+                    <option value="America/New_York">
+                    <option value="America/Los_Angeles">
+                    <option value="Asia/Tokyo">
+                </datalist>
+                <div class="form-text">
+                    IANA timezone name. Blank falls back to
+                    <code>{{ display_tz.env }}</code> then <code>{{ display_tz.default }}</code>.
+                    Currently effective: <code>{{ display_tz.effective }}</code>.
+                    {% if display_tz.updated_at %}
+                    <br>Last updated: <code>{{ display_tz.updated_at | fmt_ts }}</code>.
+                    {% endif %}
+                </div>
+            </div>
+            <div class="col-md-6">
+                <label for="datetime_format" class="form-label">
+                    Datetime format
+                    <span class="badge text-bg-{% if datetime_format.override %}primary{% else %}secondary{% endif %} ms-1">
+                        {% if datetime_format.override %}override{% elif datetime_format.effective != datetime_format.default %}env{% else %}default{% endif %}
+                    </span>
+                </label>
+                <input type="text" id="datetime_format" name="datetime_format"
+                       class="form-control font-monospace"
+                       value="{{ datetime_format.override }}"
+                       placeholder="{{ datetime_format.default }}">
+                <div class="form-text">
+                    Python <code>strftime</code> pattern (e.g.
+                    <code>%Y-%m-%d %H:%M:%S %Z</code>,
+                    <code>%d %b %Y %H:%M</code>). Blank falls back to
+                    <code>{{ datetime_format.env }}</code> then the default.
+                    Currently effective: <code>{{ datetime_format.effective }}</code>.
+                    {% if datetime_format.updated_at %}
+                    <br>Last updated: <code>{{ datetime_format.updated_at | fmt_ts }}</code>.
+                    {% endif %}
+                </div>
+            </div>
+            <div class="col-12">
+                <button type="submit" class="btn btn-primary">
+                    <i class="bi bi-check2 me-1"></i>Save
+                </button>
+                <span class="text-muted small ms-2">
+                    Blank fields CLEAR the override. Env / default takes over.
+                </span>
+            </div>
+        </form>
+    </div>
+</div>
+{% endblock %}
