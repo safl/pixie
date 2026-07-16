@@ -198,7 +198,7 @@
                 <div class="text-muted small">{{ fetch_state.error }}</div>
                 {% elif entry.content_sha256 %}
                 <span class="badge text-bg-success"><i class="bi bi-check-circle me-1"></i>fetched</span>
-                {% if entry.fetched_at %}<span class="text-muted small ms-2">at {{ entry.fetched_at }}</span>{% endif %}
+                {% if entry.fetched_at %}<span class="text-muted small ms-2">at {{ entry.fetched_at | fmt_ts }}</span>{% endif %}
                 {% else %}
                 <span class="badge text-bg-secondary"><i class="bi bi-dash-circle me-1"></i>not fetched</span>
                 {% endif %}
@@ -212,7 +212,7 @@
             <dd class="col-sm-9 font-monospace">{{ entry.size_bytes }} bytes</dd>
             {% endif %}
             <dt class="col-sm-3 text-muted small">Added at</dt>
-            <dd class="col-sm-9 small text-muted">{{ entry.added_at }}</dd>
+            <dd class="col-sm-9 small text-muted">{{ entry.added_at | fmt_ts }}</dd>
         </dl>
     </div>
     <div class="card-footer bg-light py-2">

@@ -34,7 +34,7 @@
             <tbody>
                 {% for e in events %}
                 <tr>
-                    <td class="small text-muted text-nowrap">{{ e.ts }}</td>
+                    <td class="small text-muted text-nowrap">{{ e.ts | fmt_ts }}</td>
                     <td><code>{{ e.kind }}</code></td>
                     <td>
                         {% if e.subject_kind %}

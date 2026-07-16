@@ -24,6 +24,7 @@ from collections.abc import AsyncIterator
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from contextlib import suppress as contextlib_suppress
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -69,6 +70,13 @@ from pixie.web._auth import (
     check_password,
     require_auth,
     using_default_password,
+)
+from pixie.web._settings_store import (
+    KEY_DATETIME_FORMAT,
+    KEY_DISPLAY_TZ,
+    SettingsStore,
+    SettingValueError,
+    format_ts,
 )
 from pixie.web._table_state import DEFAULT_PER_PAGE
 
@@ -316,6 +324,7 @@ def create_app() -> FastAPI:
     app.state.exports_store = ExportsStore(app.state.catalog_store.db_path)
     app.state.machines_store = MachinesStore(app.state.catalog_store.db_path)
     app.state.events_log = EventsLog(app.state.catalog_store.db_path)
+    app.state.settings_store = SettingsStore(app.state.catalog_store.db_path)
     app.state.nbd_server = NbdServer(
         port_base=_resolve_nbd_port_base(),
         bind=_resolve_nbd_bind(),
@@ -363,6 +372,18 @@ def create_app() -> FastAPI:
     from pixie.web._table_state import build_query_string as _qs_helper
 
     templates.env.globals["_qs"] = _qs_helper
+
+    # ``fmt_ts`` folds a raw ISO-8601 timestamp (as pixie writes them
+    # to state.db) through the operator's current Settings picks:
+    # timezone + strftime pattern. A closure over ``app.state.settings_store``
+    # keeps the filter dependency-free at the call site
+    # (``{{ e.ts | fmt_ts }}``) while still picking up a live Settings
+    # change on the next render, since ``resolve_*`` reads the DB on
+    # every call.
+    def _fmt_ts_filter(raw: str) -> str:
+        return format_ts(raw or "", app.state.settings_store)
+
+    templates.env.filters["fmt_ts"] = _fmt_ts_filter
     if _STATIC_DIR.is_dir():
         app.mount("/static", StaticFiles(directory=str(_STATIC_DIR)), name="static")
     # Serve the netboot-pc bake artifacts (vmlinuz + initrd +
@@ -1235,6 +1256,104 @@ def create_app() -> FastAPI:
                 details={"url": target_url, "count": len(entries), "new": added},
             )
         return RedirectResponse(url="/ui/catalog", status_code=status.HTTP_303_SEE_OTHER)
+
+    # ---------- settings pane ---------------------------------------
+
+    def _settings_context(request: Request, flash_error: str | None = None) -> dict[str, Any]:
+        """Build the render context for /ui/settings. Each row exposes
+        the effective value (what pixie will use), the stored override
+        (blank when unset), and the source bucket (override / env /
+        default) so the operator sees the provenance chain at a
+        glance."""
+        store: SettingsStore = request.app.state.settings_store
+        tz_override = store.get(KEY_DISPLAY_TZ) or ""
+        try:
+            tz_effective = str(store.resolve_display_timezone())
+        except SettingValueError as exc:
+            tz_effective = f"(invalid: {exc})"
+        fmt_override = store.get(KEY_DATETIME_FORMAT) or ""
+        fmt_effective = store.resolve_datetime_format()
+        return {
+            "version": pixie.__version__,
+            "authed": True,
+            "page": "settings",
+            "display_tz": {
+                "override": tz_override,
+                "effective": tz_effective,
+                "default": "UTC",
+                "env": "PIXIE_DISPLAY_TZ",
+                "updated_at": store.updated_at(KEY_DISPLAY_TZ) or "",
+            },
+            "datetime_format": {
+                "override": fmt_override,
+                "effective": fmt_effective,
+                "default": "%Y-%m-%d %H:%M:%S %Z",
+                "env": "PIXIE_DATETIME_FORMAT",
+                "updated_at": store.updated_at(KEY_DATETIME_FORMAT) or "",
+            },
+            "flash_error": flash_error,
+        }
+
+    @app.get("/ui/settings", response_class=HTMLResponse)
+    def ui_settings(
+        request: Request,
+        _auth: None = Depends(_require_ui_auth),
+    ) -> HTMLResponse:
+        return templates.TemplateResponse(request, "settings.html", _settings_context(request))
+
+    @app.post("/ui/settings/display/edit", response_model=None)
+    def ui_settings_display_edit(
+        request: Request,
+        timezone: str = Form(""),
+        datetime_format: str = Form(""),
+        _auth: None = Depends(_require_ui_auth),
+    ) -> HTMLResponse | RedirectResponse:
+        """Persist the two Display settings. Blank inputs CLEAR the
+        override so the value falls back to env / default. Both fields
+        are validated BEFORE any write so a bad tz + a good format
+        don't leave the DB in a half-updated state."""
+        from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+        store: SettingsStore = request.app.state.settings_store
+        tz_raw = (timezone or "").strip()
+        fmt_raw = (datetime_format or "").strip()
+        # Validate tz + fmt up-front so a bad value on either side
+        # rejects the whole submit rather than partially applying.
+        if tz_raw:
+            try:
+                ZoneInfo(tz_raw)
+            except ZoneInfoNotFoundError:
+                return templates.TemplateResponse(
+                    request,
+                    "settings.html",
+                    _settings_context(
+                        request,
+                        flash_error=f"'{tz_raw}' is not a known IANA timezone.",
+                    ),
+                    status_code=400,
+                )
+        if fmt_raw:
+            try:
+                datetime.now(UTC).strftime(fmt_raw)
+            except ValueError as exc:
+                return templates.TemplateResponse(
+                    request,
+                    "settings.html",
+                    _settings_context(
+                        request,
+                        flash_error=f"invalid datetime format: {exc}",
+                    ),
+                    status_code=400,
+                )
+        if tz_raw:
+            store.set_value(KEY_DISPLAY_TZ, tz_raw)
+        else:
+            store.clear(KEY_DISPLAY_TZ)
+        if fmt_raw:
+            store.set_value(KEY_DATETIME_FORMAT, fmt_raw)
+        else:
+            store.clear(KEY_DATETIME_FORMAT)
+        return RedirectResponse(url="/ui/settings", status_code=status.HTTP_303_SEE_OTHER)
 
     # ---------- feature routers --------------------------------------
     #

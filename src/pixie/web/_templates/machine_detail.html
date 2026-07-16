@@ -43,9 +43,9 @@
                 {% endif %}
             </dd>
             <dt class="col-sm-3 text-muted small">Discovered at</dt>
-            <dd class="col-sm-9 small text-muted">{{ machine.discovered_at }}</dd>
+            <dd class="col-sm-9 small text-muted">{{ machine.discovered_at | fmt_ts }}</dd>
             <dt class="col-sm-3 text-muted small">Last seen</dt>
-            <dd class="col-sm-9 small text-muted">{{ machine.last_seen_at }}</dd>
+            <dd class="col-sm-9 small text-muted">{{ machine.last_seen_at | fmt_ts }}</dd>
             <dt class="col-sm-3 text-muted small">Last seen IP</dt>
             <dd class="col-sm-9 small">
                 {% if machine.last_seen_ip %}<code>{{ machine.last_seen_ip }}</code>
@@ -136,7 +136,7 @@
     <div class="card-header bg-light d-flex align-items-center">
         <h2 class="h5 mb-0"><i class="bi bi-hdd-stack me-2"></i>Inventory</h2>
         {% if machine.inventory %}
-        <span class="text-muted small ms-auto">Recorded at {{ machine.inventory_at }}</span>
+        <span class="text-muted small ms-auto">Recorded at {{ machine.inventory_at | fmt_ts }}</span>
         {% endif %}
     </div>
     <div class="card-body">
@@ -216,7 +216,7 @@
             <tbody>
                 {% for e in events %}
                 <tr>
-                    <td class="small text-muted text-nowrap">{{ e.ts }}</td>
+                    <td class="small text-muted text-nowrap">{{ e.ts | fmt_ts }}</td>
                     <td><code>{{ e.kind }}</code></td>
                     <td>{{ e.summary or "" }}</td>
                 </tr>
