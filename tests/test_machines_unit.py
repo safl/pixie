@@ -38,6 +38,7 @@ def test_boot_modes_is_the_locked_set() -> None:
                 "pixie-flash-once",
                 "pixie-flash-always",
                 "pixie-inventory",
+                "pixie-tui",
                 "ramboot",
             }
         )

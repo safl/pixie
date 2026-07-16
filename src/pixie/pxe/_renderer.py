@@ -53,6 +53,7 @@ _LIVE_ENV_MODES: frozenset[str] = frozenset(
         "pixie-flash-once",
         "pixie-flash-always",
         "pixie-inventory",
+        "pixie-tui",
     }
 )
 
@@ -77,14 +78,32 @@ class PlanRenderer:
         catalog: CatalogStore,
         exports: ExportsStore,
         nbd: NbdServer,
+        live_env_dir: Path | None = None,
     ) -> None:
         self._catalog = catalog
         self._exports = exports
         self._nbd = nbd
+        # Where the netboot-pc bake's vmlinuz + initrd + squashfs are
+        # staged on disk. When set + the three files exist, the
+        # ``pixie-*`` boot modes chain into the live env; otherwise
+        # they fall back to the ``unavailable`` plan so a bound
+        # target does not silently boot nothing.
+        self._live_env_dir = live_env_dir
         self._env = Environment(
             loader=FileSystemLoader(str(_TEMPLATES_DIR)),
             autoescape=select_autoescape(disabled_extensions=("j2",)),
             keep_trailing_newline=True,
+        )
+
+    def _live_env_ready(self) -> bool:
+        """True iff the netboot-pc artifacts are staged on disk under
+        ``self._live_env_dir``. Called per-render so an operator
+        dropping the files in without a pixie restart takes effect
+        on the next PXE hit."""
+        if self._live_env_dir is None:
+            return False
+        return all(
+            (self._live_env_dir / name).is_file() for name in ("vmlinuz", "initrd", "squashfs")
         )
 
     def render(self, machine: Machine, ctx: RenderContext) -> str:
@@ -94,13 +113,21 @@ class PlanRenderer:
         if mode == "ramboot":
             return self._render_ramboot(machine, ctx)
         if mode in _LIVE_ENV_MODES:
-            # pixie's live-env media (netboot-pc bake) does not yet
-            # ship the pixie TUI + flash + inventory drivers. Emit a
-            # readable "unavailable" plan so a bound target lands on a
-            # legible screen instead of a stale bty-media initrd.
-            return self._unavailable(
-                machine,
-                f"boot_mode={mode!r} needs pixie live-env media; not baked yet",
+            if not self._live_env_ready():
+                # netboot-pc bake artifacts have not been staged on
+                # this deploy yet; degrade to the readable
+                # unavailable plan so a bound target lands on a
+                # legible screen instead of a bty-media initrd.
+                return self._unavailable(
+                    machine,
+                    f"boot_mode={mode!r} needs pixie live-env media; "
+                    f"stage vmlinuz+initrd+squashfs under $PIXIE_LIVE_ENV_DIR",
+                )
+            return self._env.get_template("pixie-live-env.j2").render(
+                mac=machine.mac,
+                boot_mode=mode,
+                host=ctx.host,
+                port=ctx.port,
             )
         # Unknown mode: refuse loudly rather than falling through.
         return self._env.get_template("unavailable.j2").render(
