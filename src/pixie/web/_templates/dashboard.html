@@ -19,12 +19,12 @@
                     <i class="bi bi-pc-display fs-4 text-primary me-2"></i>
                     <h2 class="h6 mb-0">Machines</h2>
                 </div>
-                <div class="display-6 fw-semibold">{{ stats.machines_total }}</div>
+                <div class="display-6 fw-semibold" data-stat="machines_total">{{ stats.machines_total }}</div>
                 <dl class="row small text-muted mb-0 mt-2">
                     <dt class="col-6">Bound</dt>
-                    <dd class="col-6 text-end">{{ stats.machines_bound }}</dd>
+                    <dd class="col-6 text-end" data-stat="machines_bound">{{ stats.machines_bound }}</dd>
                     <dt class="col-6">Inventoried</dt>
-                    <dd class="col-6 text-end">{{ stats.machines_with_inventory }}</dd>
+                    <dd class="col-6 text-end" data-stat="machines_with_inventory">{{ stats.machines_with_inventory }}</dd>
                 </dl>
             </div>
             <div class="card-footer bg-light border-top-0 py-2">
@@ -41,14 +41,14 @@
                     <i class="bi bi-collection fs-4 text-primary me-2"></i>
                     <h2 class="h6 mb-0">Catalog</h2>
                 </div>
-                <div class="display-6 fw-semibold">{{ stats.catalog_total }}</div>
+                <div class="display-6 fw-semibold" data-stat="catalog_total">{{ stats.catalog_total }}</div>
                 <dl class="row small text-muted mb-0 mt-2">
                     <dt class="col-6">Disk images</dt>
-                    <dd class="col-6 text-end font-monospace">
+                    <dd class="col-6 text-end font-monospace" data-stat="catalog_images">
                         {{ stats.catalog_images_fetched }} / {{ stats.catalog_images_total }}
                     </dd>
                     <dt class="col-6">Netboot bundles</dt>
-                    <dd class="col-6 text-end font-monospace">
+                    <dd class="col-6 text-end font-monospace" data-stat="catalog_bundles">
                         {{ stats.catalog_bundles_fetched }} / {{ stats.catalog_bundles_total }}
                     </dd>
                 </dl>
@@ -67,12 +67,12 @@
                     <i class="bi bi-hdd-network fs-4 text-primary me-2"></i>
                     <h2 class="h6 mb-0">NBD serving</h2>
                 </div>
-                <div class="display-6 fw-semibold">{{ stats.exports_total }}</div>
+                <div class="display-6 fw-semibold" data-stat="exports_total">{{ stats.exports_total }}</div>
                 <dl class="row small text-muted mb-0 mt-2">
                     <dt class="col-6"><span class="text-success">Running</span></dt>
-                    <dd class="col-6 text-end">{{ stats.exports_running }}</dd>
+                    <dd class="col-6 text-end" data-stat="exports_running">{{ stats.exports_running }}</dd>
                     <dt class="col-6"><span class="text-danger">Error</span></dt>
-                    <dd class="col-6 text-end">{{ stats.exports_error }}</dd>
+                    <dd class="col-6 text-end" data-stat="exports_error">{{ stats.exports_error }}</dd>
                 </dl>
             </div>
             <div class="card-footer bg-light border-top-0 py-2">
@@ -100,7 +100,7 @@
                     <th scope="col">Summary</th>
                 </tr>
             </thead>
-            <tbody>
+            <tbody data-events-feed>
                 {% for e in events %}
                 <tr>
                     <td class="small text-muted text-nowrap">{{ e.ts | fmt_ts }}</td>
@@ -127,4 +127,71 @@
     </div>
     {% endif %}
 </div>
+
+<script>
+// Dashboard cards + recent-events feed poll every 5 s so the
+// operator sees counts + fresh events tick without a page reload.
+// Same shape as the machines / fetch-states pollers: request the
+// JSON, walk it, update matching [data-stat] / [data-event-row]
+// cells in place. Silently skips a lost or 500'd poll (retries on
+// the next tick) so a suspended laptop resumes cleanly on wake.
+(function () {
+    const POLL_MS = 5000;
+
+    async function pollStats() {
+        try {
+            const r = await fetch("/ui/dashboard-live.json", {credentials: "same-origin"});
+            if (!r.ok) return;
+            const s = await r.json();
+            const setN = (key, n) => {
+                document.querySelectorAll(`[data-stat="${key}"]`).forEach((el) => {
+                    if (el.textContent.trim() !== String(n)) el.textContent = n;
+                });
+            };
+            setN("machines_total", s.machines_total);
+            setN("machines_bound", s.machines_bound);
+            setN("machines_with_inventory", s.machines_with_inventory);
+            setN("catalog_total", s.catalog_total);
+            setN("exports_total", s.exports_total);
+            setN("exports_running", s.exports_running);
+            setN("exports_error", s.exports_error);
+            document.querySelectorAll('[data-stat="catalog_images"]').forEach((el) => {
+                const t = `${s.catalog_images_fetched} / ${s.catalog_images_total}`;
+                if (el.textContent.trim() !== t) el.textContent = t;
+            });
+            document.querySelectorAll('[data-stat="catalog_bundles"]').forEach((el) => {
+                const t = `${s.catalog_bundles_fetched} / ${s.catalog_bundles_total}`;
+                if (el.textContent.trim() !== t) el.textContent = t;
+            });
+        } catch (e) { /* swallow */ }
+    }
+
+    async function pollEvents() {
+        try {
+            const r = await fetch("/ui/events-live.json?limit=10", {credentials: "same-origin"});
+            if (!r.ok) return;
+            const body = await r.json();
+            const feed = document.querySelector("[data-events-feed]");
+            if (!feed || !body.events) return;
+            const rows = body.events.map((e) => {
+                const subject = e.subject_kind
+                    ? `<code class="small">${e.subject_kind}</code> <span class="text-muted small">${e.subject_id || ""}</span>`
+                    : `<span class="text-muted small">-</span>`;
+                return `<tr>
+                    <td class="small text-muted text-nowrap">${e.ts_display || e.ts}</td>
+                    <td><code>${e.kind}</code></td>
+                    <td>${subject}</td>
+                    <td>${e.summary || ""}</td>
+                </tr>`;
+            }).join("");
+            feed.innerHTML = rows;
+        } catch (e) { /* swallow */ }
+    }
+
+    pollStats();
+    pollEvents();
+    setInterval(pollStats, POLL_MS);
+    setInterval(pollEvents, POLL_MS);
+})();
+</script>
 {% endblock %}

@@ -385,3 +385,48 @@ def test_ui_exports_delete_removes_missing_export_silently(client: TestClient) -
     )
     assert r.status_code == 303
     assert r.headers["location"] == "/ui/catalog"
+
+
+def test_ui_dashboard_live_returns_stats(client: TestClient) -> None:
+    """/ui/dashboard-live.json echoes the same stats the dashboard
+    HTML renders so a poll updates counts in place."""
+    c = _authed(client)
+    # Seed a machine + a catalog entry so the counts aren't all zero.
+    c.get("/pxe/aa:bb:cc:dd:ee:aa")  # discovery
+    c.post(
+        "/catalog/entries",
+        json={"name": "seed", "src": "https://example.invalid/s.img", "format": "img.gz"},
+    )
+    r = c.get("/ui/dashboard-live.json")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["machines_total"] >= 1
+    assert body["catalog_total"] >= 1
+    for k in ("machines_bound", "catalog_fetched", "exports_running"):
+        assert k in body
+
+
+def test_ui_events_live_returns_recent_events(client: TestClient) -> None:
+    """/ui/events-live.json returns the most recent events, respects
+    since_ts (only rows strictly newer), and clamps limit."""
+    from pixie.events._kinds import CATALOG_ENTRY_ADDED
+
+    c = _authed(client)
+    log = c.app.state.events_log  # type: ignore[attr-defined]
+    log.emit(CATALOG_ENTRY_ADDED, subject_kind="entry", subject_id="e1", summary="e1")
+    r = c.get("/ui/events-live.json?limit=5")
+    assert r.status_code == 200
+    body = r.json()
+    assert "events" in body
+    kinds = [e["kind"] for e in body["events"]]
+    assert CATALOG_ENTRY_ADDED in kinds
+    # since_ts trims: use a future stamp -> no rows returned.
+    r2 = c.get("/ui/events-live.json?since_ts=2999-01-01T00:00:00Z")
+    assert r2.json()["events"] == []
+
+
+def test_ui_live_endpoints_require_auth(client: TestClient) -> None:
+    for path in ("/ui/dashboard-live.json", "/ui/events-live.json"):
+        r = client.get(path, follow_redirects=False)
+        assert r.status_code == 303
+        assert r.headers["location"] == "/ui/login"
