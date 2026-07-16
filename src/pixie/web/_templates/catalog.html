@@ -1,0 +1,174 @@
+{% extends "layout.html" %}
+{% block title %}Catalog - pixie{% endblock %}
+{% block subnav %}
+<div class="subnav-strip">
+    <div class="container">
+        <ul class="nav nav-pills me-auto">
+            <li class="nav-item">
+                <a class="nav-link active" href="#catalog">Catalog</a>
+            </li>
+            <li class="nav-item">
+                <a class="nav-link" href="#add-entry">Add entry</a>
+            </li>
+        </ul>
+        <span class="text-muted small">
+            {{ entries|length }} entr{{ 'y' if entries|length == 1 else 'ies' }}
+        </span>
+    </div>
+</div>
+{% endblock %}
+{% block content %}
+<div class="card shadow-sm mb-4" id="catalog">
+    <div class="card-header bg-light d-flex align-items-center">
+        <h2 class="h5 mb-0"><i class="bi bi-collection me-2"></i>Catalog</h2>
+        <span class="text-muted small ms-auto">
+            Operator-curated image library. Each entry backs a bootable disk image
+            or a netboot bundle; fetch pulls the bytes onto this pixie.
+        </span>
+    </div>
+    {% if entries %}
+    <div class="table-responsive">
+        <table class="table table-hover align-middle mb-0">
+            <thead>
+                <tr>
+                    <th scope="col">Name</th>
+                    <th scope="col">Format</th>
+                    <th scope="col">Arch</th>
+                    <th scope="col">Size</th>
+                    <th scope="col">Content sha</th>
+                    <th scope="col" class="text-end">Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for e in entries %}
+                <tr>
+                    <td>
+                        <div class="fw-semibold"><code>{{ e.name }}</code></div>
+                        {% if e.description %}
+                        <div class="text-muted small">{{ e.description }}</div>
+                        {% endif %}
+                        <div class="text-muted small">
+                            <i class="bi bi-link-45deg"></i>
+                            <code>{{ e.src }}</code>
+                        </div>
+                        {% if e.netboot_src %}
+                        <div class="text-muted small">
+                            <i class="bi bi-box-seam"></i>
+                            netboot: <code>{{ e.netboot_src }}</code>
+                        </div>
+                        {% endif %}
+                    </td>
+                    <td><span class="badge text-bg-secondary">{{ e.format }}</span></td>
+                    <td>{{ e.arch or "-" }}</td>
+                    <td class="font-monospace small">{{ e.size_bytes if e.size_bytes else "-" }}</td>
+                    {% set st = fetch_states.get(e.name) or {} %}
+                    <td>
+                        {% if st.state == "fetching" %}
+                        <span class="badge text-bg-primary">
+                            <i class="bi bi-arrow-down-circle me-1"></i>fetching&hellip;
+                        </span>
+                        {% if st.started_at %}
+                        <div class="text-muted small">since {{ st.started_at }}</div>
+                        {% endif %}
+                        {% elif st.state == "error" %}
+                        <span class="badge text-bg-danger" title="{{ st.error or '' }}">
+                            <i class="bi bi-exclamation-circle me-1"></i>error
+                        </span>
+                        {% if st.error %}
+                        <div class="text-muted small">{{ st.error }}</div>
+                        {% endif %}
+                        {% elif e.content_sha256 %}
+                        <code title="{{ e.content_sha256 }}">{{ e.content_sha256[:12] }}</code>
+                        {% else %}
+                        <span class="text-muted small">not fetched</span>
+                        {% endif %}
+                    </td>
+                    <td class="text-end text-nowrap">
+                        <form method="post" action="/ui/catalog/fetch" class="d-inline">
+                            <input type="hidden" name="name" value="{{ e.name }}">
+                            {% if st.state == "fetching" %}
+                            <button type="submit" class="btn btn-sm btn-outline-primary" disabled
+                                    title="fetch already in flight">
+                                <i class="bi bi-hourglass-split me-1"></i>Fetching
+                            </button>
+                            {% else %}
+                            <button type="submit" class="btn btn-sm btn-outline-primary">
+                                <i class="bi bi-arrow-down-circle me-1"></i>{% if st.state == "error" %}Retry{% else %}Fetch{% endif %}
+                            </button>
+                            {% endif %}
+                        </form>
+                        <form method="post" action="/ui/catalog/delete" class="d-inline">
+                            <input type="hidden" name="name" value="{{ e.name }}">
+                            <button type="submit" class="btn btn-sm btn-outline-danger">
+                                <i class="bi bi-trash me-1"></i>Delete
+                            </button>
+                        </form>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% else %}
+    <div class="card-body">
+        <p class="text-muted mb-0">
+            <i class="bi bi-inbox me-1"></i>
+            No entries yet. Add one below.
+        </p>
+    </div>
+    {% endif %}
+</div>
+
+<div class="card shadow-sm" id="add-entry">
+    <div class="card-header bg-light">
+        <h2 class="h5 mb-0"><i class="bi bi-plus-square me-2"></i>Add entry</h2>
+    </div>
+    <div class="card-body">
+        <form method="post" action="/ui/catalog/add" class="row g-3">
+            <div class="col-md-6">
+                <label for="name" class="form-label">Name</label>
+                <input id="name" name="name" type="text" class="form-control" required
+                       placeholder="nosi ubuntu-2604-headless (x86_64, 2026.W28)">
+            </div>
+            <div class="col-md-3">
+                <label for="format" class="form-label">Format</label>
+                <select id="format" name="format" class="form-select">
+                    <option value="img.gz">img.gz</option>
+                    <option value="img.zst">img.zst</option>
+                    <option value="img.xz">img.xz</option>
+                    <option value="img">img</option>
+                    <option value="qcow2">qcow2</option>
+                    <option value="tar.gz">tar.gz (netboot bundle)</option>
+                </select>
+            </div>
+            <div class="col-md-3">
+                <label for="arch" class="form-label">Arch <span class="text-muted small">(optional)</span></label>
+                <input id="arch" name="arch" type="text" class="form-control" placeholder="x86_64">
+            </div>
+            <div class="col-12">
+                <label for="src" class="form-label">Source URL</label>
+                <input id="src" name="src" type="text" class="form-control" required
+                       placeholder="oras://ghcr.io/... or https://...">
+            </div>
+            <div class="col-12">
+                <label for="netboot_src" class="form-label">
+                    Netboot bundle URL <span class="text-muted small">(optional)</span>
+                </label>
+                <input id="netboot_src" name="netboot_src" type="text" class="form-control"
+                       placeholder="oras://.../ubuntu-2604-headless-netboot:2026.W28">
+            </div>
+            <div class="col-12">
+                <label for="description" class="form-label">
+                    Description <span class="text-muted small">(optional)</span>
+                </label>
+                <input id="description" name="description" type="text" class="form-control">
+            </div>
+            <div class="col-12">
+                <button type="submit" class="btn btn-primary">
+                    <i class="bi bi-plus-lg me-1"></i>Add
+                </button>
+            </div>
+        </form>
+    </div>
+</div>
+{% endblock %}

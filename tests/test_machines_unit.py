@@ -31,7 +31,18 @@ def test_boot_modes_is_the_locked_set() -> None:
     """The set is closed on purpose (see :mod:`pixie.machines._store`).
     If this test fails you added a mode; update the closed-set
     guarantee in the module docstring too."""
-    assert frozenset({"ipxe-exit", "ramboot"}) == BOOT_MODES
+    assert (
+        frozenset(
+            {
+                "ipxe-exit",
+                "pixie-flash-once",
+                "pixie-flash-always",
+                "pixie-inventory",
+                "ramboot",
+            }
+        )
+        == BOOT_MODES
+    )
 
 
 def test_get_machine_404_before_discovery(client: TestClient) -> None:

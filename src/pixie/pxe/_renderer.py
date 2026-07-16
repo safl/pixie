@@ -43,6 +43,19 @@ def _export_name_for(image_sha: str) -> str:
 
 DEFAULT_OVERLAY_SIZE = "10G"
 
+# Boot modes that chain into pixie's own live env (flash + inventory
+# + TUI drivers). Kept as a set so ``mode in _LIVE_ENV_MODES`` scales
+# past two entries without a chain of ``or`` checks. The renderer
+# emits an ``unavailable`` plan for these until the live-env media
+# is baked with the pixie CLI wired in.
+_LIVE_ENV_MODES: frozenset[str] = frozenset(
+    {
+        "pixie-flash-once",
+        "pixie-flash-always",
+        "pixie-inventory",
+    }
+)
+
 
 @dataclass
 class RenderContext:
@@ -80,6 +93,15 @@ class PlanRenderer:
             return self._env.get_template("exit.j2").render(mac=machine.mac)
         if mode == "ramboot":
             return self._render_ramboot(machine, ctx)
+        if mode in _LIVE_ENV_MODES:
+            # pixie's live-env media (netboot-pc bake) does not yet
+            # ship the pixie TUI + flash + inventory drivers. Emit a
+            # readable "unavailable" plan so a bound target lands on a
+            # legible screen instead of a stale bty-media initrd.
+            return self._unavailable(
+                machine,
+                f"boot_mode={mode!r} needs pixie live-env media; not baked yet",
+            )
         # Unknown mode: refuse loudly rather than falling through.
         return self._env.get_template("unavailable.j2").render(
             mac=machine.mac,

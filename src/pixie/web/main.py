@@ -162,6 +162,55 @@ class NotAuthenticated(Exception):
     session cookie. The exception handler redirects to /ui/login."""
 
 
+def _respawn_exports_at_startup(app: FastAPI) -> None:
+    """Walk ``exports_store.list()`` and spawn nbdkit for each row
+    whose catalog blob still exists on disk. Called once from the
+    lifespan startup path so an operator who bounces the container
+    (rebuild + recreate) does not come back to a wall of
+    ``status=error nbdkit exited`` rows in the /ui/exports table.
+
+    Runs BEFORE ``yield`` so the first ``GET /pxe/<mac>`` served
+    after startup sees the exports as ``running`` again. Errors on
+    an individual export (missing blob, nbdkit refuses to spawn)
+    update that row's ``status`` + ``error`` but do NOT abort
+    startup; the other exports still respawn.
+    """
+    import logging as _logging
+
+    log = _logging.getLogger(__name__)
+    catalog = app.state.catalog_store
+    exports_store = app.state.exports_store
+    nbd = app.state.nbd_server
+    for export in exports_store.list():
+        blob_path = catalog.blob_path(export.content_sha256)
+        if not blob_path.exists():
+            exports_store.update_runtime(
+                export.name,
+                nbd_port=0,
+                status="error",
+                error=f"blob missing at {blob_path}",
+            )
+            log.warning(
+                "export %s: blob missing at %s; leaving row in error state",
+                export.name,
+                blob_path,
+            )
+            continue
+        try:
+            port = nbd.spawn(export.name, blob_path)
+        except RuntimeError as exc:
+            exports_store.update_runtime(
+                export.name,
+                nbd_port=0,
+                status="error",
+                error=f"respawn failed: {exc}",
+            )
+            log.warning("export %s: respawn failed: %s", export.name, exc)
+            continue
+        exports_store.update_runtime(export.name, nbd_port=port, status="running", error="")
+        log.info("export %s: respawned on port %d", export.name, port)
+
+
 def _require_ui_auth(request: Request) -> None:
     if not request.session.get(SESSION_AUTHED_KEY):
         raise NotAuthenticated
@@ -182,6 +231,15 @@ def create_app() -> FastAPI:
                 import logging as _logging
 
                 _logging.getLogger(__name__).warning("tftp start failed: %s", exc)
+        # Re-spawn nbdkit for every stored export whose catalog blob
+        # still exists. A container recreate takes down nbdkit
+        # subprocesses (they are children of the previous uvicorn),
+        # but the export rows in state.db persist. Without this
+        # startup pass the rows come back as ``status=error``
+        # ``nbdkit exited`` forever until an operator deletes + POSTs
+        # them again. Idempotent per name; harmless on cold boot
+        # (empty export list -> no-op).
+        _respawn_exports_at_startup(app)
         try:
             yield
         finally:
@@ -317,19 +375,58 @@ def create_app() -> FastAPI:
         request: Request,
         _auth: None = Depends(_require_ui_auth),
     ) -> HTMLResponse:
-        # Per-entry fetch state so the operator sees "fetching..." /
-        # "error" pills instead of a bare "not fetched" while an
-        # async fetch is in-flight. Mirrors the JSON /catalog shape.
-        fetch_states = request.app.state.fetch_states
+        # Landing page: summary counts + latest events. The catalog
+        # moved to its own /ui/catalog route so the brand pill's
+        # "Home" click lands on a page that reads as a status
+        # overview rather than a management surface.
+        catalog = request.app.state.catalog_store
+        exports_store = request.app.state.exports_store
+        machines_store = request.app.state.machines_store
+        events_log = request.app.state.events_log
+        nbd = request.app.state.nbd_server
+        from pixie.exports._routes import _refresh_row
+
+        entries = catalog.list_entries()
+        exports = [_refresh_row(e, nbd, exports_store) for e in exports_store.list()]
+        machines = machines_store.list()
+        events = events_log.list(limit=10)
+        stats = {
+            "machines_total": len(machines),
+            "machines_bound": sum(1 for m in machines if m.image_content_sha256),
+            "machines_with_inventory": sum(1 for m in machines if m.inventory),
+            "catalog_total": len(entries),
+            "catalog_fetched": sum(1 for e in entries if getattr(e, "content_sha256", "")),
+            "exports_total": len(exports),
+            "exports_running": sum(1 for e in exports if e.status == "running"),
+            "exports_error": sum(1 for e in exports if e.status == "error"),
+        }
         return templates.TemplateResponse(
             request,
             "dashboard.html",
             {
                 "version": pixie.__version__,
+                "stats": stats,
+                "events": events,
+                "authed": True,
+                "page": "dashboard",
+            },
+        )
+
+    @app.get("/ui/catalog", response_class=HTMLResponse)
+    def ui_catalog(
+        request: Request,
+        _auth: None = Depends(_require_ui_auth),
+    ) -> HTMLResponse:
+        fetch_states = request.app.state.fetch_states
+        return templates.TemplateResponse(
+            request,
+            "catalog.html",
+            {
+                "version": pixie.__version__,
                 "entries": request.app.state.catalog_store.list_entries(),
                 "fetch_states": fetch_states,
                 "authed": True,
-                "page": "dashboard",
+                "page": "catalog",
             },
         )
 
@@ -394,7 +491,7 @@ def create_app() -> FastAPI:
         ``POST /pxe/<mac>/inventory``, driven by the live env's
         pixie CLI). Falls through to /ui/machines on a bad MAC or a
         row that doesn't exist yet."""
-        from pixie.machines._store import BadMac
+        from pixie.machines._store import BOOT_MODES, BadMac
 
         try:
             machine = request.app.state.machines_store.get(mac)
@@ -407,6 +504,16 @@ def create_app() -> FastAPI:
             subject_id=machine.mac,
             limit=25,
         )
+        # Bindable entries: fetched disk images (bindable=True on the
+        # catalog schema means it has a content_sha256 an operator can
+        # point a machine at). Netboot-bundle rows are excluded --
+        # they are pointed at by the sibling disk-image row's
+        # ``netboot_src``, not bound directly.
+        bindable_entries = [
+            e
+            for e in request.app.state.catalog_store.list_entries()
+            if getattr(e, "bindable", False)
+        ]
         return templates.TemplateResponse(
             request,
             "machine_detail.html",
@@ -414,6 +521,8 @@ def create_app() -> FastAPI:
                 "version": pixie.__version__,
                 "machine": machine,
                 "events": events,
+                "bindable_entries": bindable_entries,
+                "boot_modes": sorted(BOOT_MODES),
                 "authed": True,
                 "page": "machines",
             },
