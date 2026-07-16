@@ -528,6 +528,13 @@ def create_app() -> FastAPI:
                 "netboot_sibling": forward,
                 "disk_image_users": backward,
                 "export": exp,
+                "warn_delete": bool(request.query_params.get("warn_delete")),
+                "orphans_bundle_name": (
+                    forward.name
+                    if (forward is not None and entry.bindable and forward.fetched)
+                    else None
+                ),
+                "breaks_ramboot_for": [e.name for e in backward] if not entry.bindable else [],
                 "authed": True,
                 "page": "catalog",
             },
@@ -785,9 +792,54 @@ def create_app() -> FastAPI:
     def ui_catalog_delete(
         request: Request,
         name: str = Form(...),
+        force: str = Form(""),
         _auth: None = Depends(_require_ui_auth),
     ) -> RedirectResponse:
+        """Delete a catalog entry. Relation-aware: when the entry has
+        a sibling that would be left dangling (a disk image that
+        names an already-fetched netboot bundle, or a netboot bundle
+        that is named by any disk image's ``netboot_src``), bounce
+        the operator back to the entry's detail page with a
+        ``warn_delete`` marker so the second click is intentional.
+        A hidden ``force=1`` from that confirmation form skips the
+        bounce and deletes.
+
+        Skipping this check on the JSON API is deliberate: automation
+        callers set force=1 or use the raw ``DELETE /catalog/entries``
+        endpoint that never had a warning path."""
         store = request.app.state.catalog_store
+        entry = store.get_entry(name)
+        if entry is None:
+            return RedirectResponse(url="/ui/catalog", status_code=status.HTTP_303_SEE_OTHER)
+        if not force:
+            # Compute the relations for this entry so we know whether
+            # deletion would break someone.
+            all_entries = store.list_entries()
+            breaks_ramboot_for: list[str] = []
+            orphans_bundle: str | None = None
+            if entry.bindable:
+                # Deleting a disk image orphans its sibling bundle
+                # (harmless -- the bundle is still fetched -- but the
+                # operator should know).
+                if entry.netboot_src:
+                    sibling = next(
+                        (e for e in all_entries if e.src == entry.netboot_src),
+                        None,
+                    )
+                    if sibling is not None and sibling.fetched:
+                        orphans_bundle = sibling.name
+            else:
+                # Deleting a bundle breaks ramboot for every disk
+                # image whose netboot_src pointed at it.
+                if entry.src:
+                    breaks_ramboot_for = [e.name for e in all_entries if e.netboot_src == entry.src]
+            if breaks_ramboot_for or orphans_bundle:
+                # Bounce with a marker so /ui/catalog/<name> can
+                # render the warning inline.
+                return RedirectResponse(
+                    url=f"/ui/catalog/{name}?warn_delete=1",
+                    status_code=status.HTTP_303_SEE_OTHER,
+                )
         store.delete(name)
         request.app.state.fetch_states.pop(name, None)
         return RedirectResponse(url="/ui/catalog", status_code=status.HTTP_303_SEE_OTHER)

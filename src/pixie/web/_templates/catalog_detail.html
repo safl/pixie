@@ -12,6 +12,43 @@
 </nav>
 {% endblock %}
 {% block content %}
+{% if warn_delete %}
+<div class="alert alert-warning d-flex align-items-start" role="alert">
+    <i class="bi bi-exclamation-triangle-fill me-2 mt-1"></i>
+    <div class="flex-grow-1">
+        <strong>Delete would leave a broken chain.</strong>
+        {% if orphans_bundle_name %}
+        <div class="mt-1 small">
+            Deleting <code>{{ entry.name }}</code> orphans the fetched netboot bundle
+            <code>{{ orphans_bundle_name }}</code>. The bundle stays on disk but no
+            disk-image entry will point at it -- ramboot for this image will not work
+            until you either restore this entry or delete the bundle too.
+        </div>
+        {% endif %}
+        {% if breaks_ramboot_for %}
+        <div class="mt-1 small">
+            Deleting <code>{{ entry.name }}</code> breaks ramboot for
+            {{ breaks_ramboot_for|length }} disk image{{ 's' if breaks_ramboot_for|length != 1 else '' }}
+            that name{{ '' if breaks_ramboot_for|length != 1 else 's' }} it as
+            <code>netboot_src</code>:
+            <ul class="mb-0 mt-1">
+                {% for name in breaks_ramboot_for %}
+                <li><code>{{ name }}</code></li>
+                {% endfor %}
+            </ul>
+        </div>
+        {% endif %}
+        <form method="post" action="/ui/catalog/delete" class="mt-2 d-inline">
+            <input type="hidden" name="name" value="{{ entry.name }}">
+            <input type="hidden" name="force" value="1">
+            <button type="submit" class="btn btn-sm btn-danger">
+                <i class="bi bi-trash me-1"></i>Delete anyway
+            </button>
+        </form>
+        <a href="/ui/catalog" class="btn btn-sm btn-outline-secondary ms-1">Cancel</a>
+    </div>
+</div>
+{% endif %}
 <div class="card shadow-sm mb-4">
     <div class="card-header bg-light d-flex align-items-center">
         <h2 class="h5 mb-0">
