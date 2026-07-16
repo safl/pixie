@@ -9,6 +9,37 @@
         <span class="subnav-jumps d-flex align-items-center flex-wrap">
             <a href="#log">Log</a>
         </span>
+        {# RIGHT: inline dropdowns. Kind + subject_kind are strict-
+           equality narrowings applied BEFORE the freeform ``q``
+           filter, so they're a separate control from the search
+           box (which lives on the card header row). Submit on
+           change means the operator doesn't need a Filter button;
+           preserved query params ride along so page/sort survive
+           a filter flip. #}
+        <form method="get" action="/ui/events"
+              class="subnav-actions d-flex align-items-center gap-2 m-0 ms-auto">
+            {% if preserved.q %}<input type="hidden" name="q" value="{{ preserved.q }}">{% endif %}
+            <label for="filter-kind" class="text-white-50 small mb-0 flex-shrink-0">Kind:</label>
+            <select id="filter-kind" name="kind" onchange="this.form.submit()"
+                    class="form-select form-select-sm" style="max-width: 18rem;">
+                <option value="">(any)</option>
+                {% for k in kind_choices %}
+                <option value="{{ k }}" {% if k == kind_selected %}selected{% endif %}>{{ k }}</option>
+                {% endfor %}
+            </select>
+            <label for="filter-subject" class="text-white-50 small mb-0 flex-shrink-0">Subject:</label>
+            <select id="filter-subject" name="subject_kind" onchange="this.form.submit()"
+                    class="form-select form-select-sm" style="max-width: 10rem;">
+                <option value="">(any)</option>
+                {% for s in subject_kind_choices %}
+                <option value="{{ s }}" {% if s == subject_kind_selected %}selected{% endif %}>{{ s }}</option>
+                {% endfor %}
+            </select>
+            {% if kind_selected or subject_kind_selected %}
+            <a href="/ui/events{% if preserved.q %}?q={{ preserved.q }}{% endif %}"
+               class="btn btn-sm btn-link text-nowrap" title="Clear filters">Clear</a>
+            {% endif %}
+        </form>
     </div>
 </nav>
 {% endblock %}

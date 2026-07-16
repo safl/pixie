@@ -188,7 +188,8 @@
                             </button>
                         </form>
                         <form method="post" action="/ui/catalog/delete" class="d-inline"
-                              title="Delete this catalog entry (does not delete the fetched blob).">
+                              title="Delete this catalog entry (does not delete the fetched blob)."
+                              onsubmit="return confirm('Delete catalog entry {{ e.name }}? The fetched blob stays on disk.');">
                             <input type="hidden" name="name" value="{{ e.name }}">
                             <button type="submit" class="btn btn-sm btn-outline-danger">
                                 <i class="bi bi-trash"></i>

@@ -277,6 +277,103 @@ def test_ui_dashboard_shows_error_pill_with_retry_when_fetch_failed(
     assert "Retry" in body
 
 
+def test_ui_events_filter_by_kind(client: TestClient) -> None:
+    """``?kind=<slug>`` narrows the log to rows whose kind matches; a
+    ``kind`` value that isn't in the closed registry is ignored (i.e.
+    behaves like no filter) so a stale bookmark doesn't render an
+    empty page for no reason. The dropdown carries the KNOWN_EVENT_KINDS
+    set as options."""
+    from pixie.events._kinds import (
+        AUTH_LOGIN_SUCCEEDED,
+        CATALOG_ENTRY_ADDED,
+        KNOWN_EVENT_KINDS,
+    )
+
+    c = _authed(client)
+    log = c.app.state.events_log  # type: ignore[attr-defined]
+    log.emit(CATALOG_ENTRY_ADDED, subject_kind="entry", subject_id="a", summary="added a")
+    log.emit(CATALOG_ENTRY_ADDED, subject_kind="entry", subject_id="b", summary="added b")
+
+    body_all = c.get("/ui/events").text
+    assert "added a" in body_all and "added b" in body_all
+
+    body_narrowed = c.get(f"/ui/events?kind={CATALOG_ENTRY_ADDED}").text
+    assert "added a" in body_narrowed and "added b" in body_narrowed
+    # login-success rows are not in the narrowed slice
+    assert AUTH_LOGIN_SUCCEEDED not in body_narrowed.split("<tbody>")[1].split("</tbody>")[0]
+
+    # Kind dropdown rendered with the full closed set.
+    for k in list(KNOWN_EVENT_KINDS)[:3]:
+        assert f'value="{k}"' in body_all
+
+    # A bogus ?kind= is silently dropped: page still lists both rows.
+    body_bogus = c.get("/ui/events?kind=not.a.real.kind").text
+    assert "added a" in body_bogus and "added b" in body_bogus
+
+
+def test_ui_events_filter_by_subject_kind(client: TestClient) -> None:
+    from pixie.events._kinds import (
+        AUTH_LOGIN_SUCCEEDED,
+        CATALOG_ENTRY_ADDED,
+        MACHINE_BOUND,
+    )
+
+    c = _authed(client)
+    log = c.app.state.events_log  # type: ignore[attr-defined]
+    log.emit(CATALOG_ENTRY_ADDED, subject_kind="entry", subject_id="e1", summary="added e1")
+    log.emit(MACHINE_BOUND, subject_kind="machine", subject_id="aa:bb", summary="bound m1")
+    log.emit(AUTH_LOGIN_SUCCEEDED, summary="login")
+
+    body = c.get("/ui/events?subject_kind=machine").text
+    assert "bound m1" in body
+    # A tbody-scoped assert so nav / dropdown labels don't confuse
+    # the check.
+    tbody = body.split("<tbody>")[1].split("</tbody>")[0]
+    assert "added e1" not in tbody
+    assert "login" not in tbody
+
+
+def test_ui_events_confirms_on_destructive_forms(client: TestClient) -> None:
+    """Sanity: destructive buttons carry an ``onsubmit=confirm`` gate."""
+    c = _authed(client)
+    # Seed one machine + one catalog entry so the delete buttons render.
+    c.post("/ui/machines/bind", data={"mac": "aa:bb:cc:dd:ee:07", "boot_mode": "ipxe-exit"})
+    c.post(
+        "/catalog/entries",
+        json={"name": "tiny", "src": "https://example.invalid/t.img", "format": "img.gz"},
+    )
+    machines = c.get("/ui/machines").text
+    catalog = c.get("/ui/catalog").text
+    assert 'onsubmit="return confirm' in machines
+    assert 'onsubmit="return confirm' in catalog
+
+
+def test_ui_machine_detail_renders_inventory_sections(client: TestClient) -> None:
+    """The machine detail's inventory pane renders each section
+    (system / cpu / memory / nics / disks) present on the posted
+    payload; sections not in the payload are simply absent."""
+    c = _authed(client)
+    payload = {
+        "system": {"vendor": "GMKtec", "model": "NUCBOX G5", "serial": "SN123"},
+        "cpu": {"model": "Intel N100", "cores": 4, "threads": 4, "arch": "x86_64"},
+        "memory": {"total": "16GiB", "modules": 1},
+        "nics": [
+            {"name": "enp1s0", "mac": "aa:bb:cc:dd:ee:08", "vendor": "Realtek", "driver": "r8125"}
+        ],
+        "disks": [{"path": "/dev/nvme0n1", "size": "1T", "vendor": "Samsung"}],
+    }
+    r = c.post("/pxe/aa:bb:cc:dd:ee:08/inventory", json=payload)
+    assert r.status_code == 204
+    body = c.get("/ui/machines/aa:bb:cc:dd:ee:08").text
+    assert "GMKtec" in body
+    assert "NUCBOX G5" in body
+    assert "Intel N100" in body
+    assert "16GiB" in body
+    assert "enp1s0" in body
+    assert "r8125" in body
+    assert "Samsung" in body
+
+
 def test_ui_exports_delete_removes_missing_export_silently(client: TestClient) -> None:
     """A DELETE for an unknown export is 303 (not 500). The catalog
     tab does the same for missing entries; consistent shape."""
