@@ -17,7 +17,14 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
-from pixie.machines._store import BOOT_MODES, BadMac, MachinesStore, normalise_mac
+from pixie.events._kinds import MACHINE_BINDING_CHANGED, MACHINE_BOUND, MACHINE_DELETED
+from pixie.machines._store import (
+    BOOT_MODES,
+    DEFAULT_BOOT_MODE,
+    BadMac,
+    MachinesStore,
+    normalise_mac,
+)
 from pixie.web._auth import require_auth
 
 router = APIRouter()
@@ -69,6 +76,12 @@ def upsert_machine(
         canon = normalise_mac(mac)
     except BadMac as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    # Snapshot the pre-bind state so we can distinguish a fresh
+    # bind (no row existed, or existed but had no binding) from a
+    # binding CHANGE on an already-bound row. Two event kinds so an
+    # operator can filter for "first bind ever for this MAC" vs
+    # "someone swapped the image behind this MAC".
+    previous = _get_machines(request).get(canon)
     try:
         row = _get_machines(request).upsert_binding(
             canon,
@@ -82,13 +95,36 @@ def upsert_machine(
         details: dict[str, Any] = {"boot_mode": row.boot_mode}
         if row.image_content_sha256:
             details["image_content_sha256"] = row.image_content_sha256
-        log.emit(
-            "machine.bound",
-            subject_kind="machine",
-            subject_id=row.mac,
-            summary=f"{row.mac} -> {row.boot_mode}",
-            details=details,
+        # ``machine.bound`` on a fresh MAC or on a row that was
+        # discovered-only (previous.boot_mode default with no bound
+        # image); ``machine.binding.changed`` when the mode or image
+        # actually shifted between the previous state and the new one.
+        was_bound = previous is not None and (
+            bool(previous.image_content_sha256) or previous.boot_mode != DEFAULT_BOOT_MODE
         )
+        changed = previous is not None and (
+            previous.boot_mode != row.boot_mode
+            or previous.image_content_sha256 != row.image_content_sha256
+        )
+        if previous is not None and was_bound and changed:
+            details["previous_boot_mode"] = previous.boot_mode
+            if previous.image_content_sha256:
+                details["previous_image_content_sha256"] = previous.image_content_sha256
+            log.emit(
+                MACHINE_BINDING_CHANGED,
+                subject_kind="machine",
+                subject_id=row.mac,
+                summary=f"{row.mac}: {previous.boot_mode} -> {row.boot_mode}",
+                details=details,
+            )
+        else:
+            log.emit(
+                MACHINE_BOUND,
+                subject_kind="machine",
+                subject_id=row.mac,
+                summary=f"{row.mac} -> {row.boot_mode}",
+                details=details,
+            )
     return row.to_dict()
 
 
@@ -106,5 +142,5 @@ def delete_machine(
         raise HTTPException(status_code=404, detail=f"no machine {canon}")
     log = getattr(request.app.state, "events_log", None)
     if log is not None:
-        log.emit("machine.deleted", subject_kind="machine", subject_id=canon, summary=canon)
+        log.emit(MACHINE_DELETED, subject_kind="machine", subject_id=canon, summary=canon)
     return Response(status_code=204)

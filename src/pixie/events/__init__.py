@@ -22,6 +22,7 @@ Hard-forked from bty's ``_events_log.py`` (see
 
 from __future__ import annotations
 
-from pixie.events._log import KNOWN_EVENT_KINDS, EventsLog
+from pixie.events._kinds import KNOWN_EVENT_KINDS
+from pixie.events._log import EventsLog, UnknownEventKind
 
-__all__ = ["KNOWN_EVENT_KINDS", "EventsLog"]
+__all__ = ["KNOWN_EVENT_KINDS", "EventsLog", "UnknownEventKind"]

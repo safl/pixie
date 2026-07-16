@@ -21,40 +21,22 @@ from pathlib import Path
 from typing import Any
 
 from pixie._util import now_iso
+from pixie.events._kinds import KNOWN_EVENT_KINDS
 
 _DB_WRITE_LOCK = threading.Lock()
 
-# Closed enum of event kinds pixie emits. Anything not in this set
-# still writes fine (the schema is permissive), but ``KNOWN_EVENT_KINDS``
-# doubles as the operator's grep menu -- add a new kind here when a
-# new write path fires.
-KNOWN_EVENT_KINDS: frozenset[str] = frozenset(
-    {
-        # catalog + fetch
-        "catalog.entry.added",
-        "catalog.entry.deleted",
-        "catalog.fetch.started",
-        "catalog.fetch.done",
-        "catalog.fetch.failed",
-        # exports + NBD
-        "export.registered",
-        "export.deleted",
-        "export.nbdkit.spawned",
-        "export.nbdkit.exited",
-        # machines + PXE
-        "machine.discovered",
-        "machine.bound",
-        "machine.deleted",
-        "pxe.plan.rendered",
-        "pxe.plan.unavailable",
-        # tftp
-        "tftp.started",
-        "tftp.stopped",
-        # auth
-        "auth.login.succeeded",
-        "auth.login.failed",
-    }
-)
+
+class UnknownEventKind(ValueError):
+    """Raised by :meth:`EventsLog.emit` when the caller passed a
+    ``kind`` string not in :data:`pixie.events.KNOWN_EVENT_KINDS`.
+
+    Every action pixie takes must land in the event log with a
+    well-defined identifier from ``pixie.events._kinds``; the closed
+    set is enforced (not advisory) so a new mutation site cannot slip
+    through without an operator seeing it. Add the constant to
+    ``_kinds.py`` first, then wire the call site.
+    """
+
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS events (
@@ -130,10 +112,23 @@ class EventsLog:
         summary: str = "",
         details: dict[str, Any] | None = None,
     ) -> Event:
-        """Append one row. Rejects nothing (kind is a free string; the
-        ``KNOWN_EVENT_KINDS`` set is guidance, not a constraint) so
-        an emerging module can emit before the closed set is updated.
+        """Append one row.
+
+        ``kind`` MUST be one of the constants declared in
+        :mod:`pixie.events._kinds`; anything else raises
+        :class:`UnknownEventKind`. Every pixie mutation carries an
+        event log entry with a well-defined identifier, and the
+        closed set is enforced so a new mutation site cannot slip in
+        without an operator noticing. Register the constant in
+        ``_kinds.py`` first, then wire the call site.
         """
+        if kind not in KNOWN_EVENT_KINDS:
+            raise UnknownEventKind(
+                f"event kind {kind!r} is not registered in "
+                f"pixie.events._kinds.KNOWN_EVENT_KINDS. Add a constant "
+                f"there first (with a docstring) before emitting from a "
+                f"new site."
+            )
         row = Event(
             ts=now_iso(),
             kind=kind,
