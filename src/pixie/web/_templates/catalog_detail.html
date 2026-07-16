@@ -80,17 +80,24 @@
         </dl>
     </div>
     <div class="card-footer bg-light py-2">
+        {% set fetching = fetch_state.state == 'fetching' %}
+        {% set fetch_errored = fetch_state.state == 'error' %}
+        {% set already_fetched = entry.content_sha256 and not fetch_errored %}
         <form method="post" action="/ui/catalog/fetch" class="d-inline">
             <input type="hidden" name="name" value="{{ entry.name }}">
-            {% if fetch_state.state == 'fetching' %}
-            <button type="submit" class="btn btn-sm btn-outline-primary" disabled>
+            <button type="submit" class="btn btn-sm btn-outline-primary"
+                    {% if fetching %}disabled{% endif %}
+                    title="{% if fetching %}fetch already in flight{% elif already_fetched %}re-run the fetch pipeline; picks up a moved oras:// tag's new bytes{% elif fetch_errored %}retry the failed fetch{% else %}download the bytes for this entry{% endif %}">
+                {% if fetching %}
                 <i class="bi bi-hourglass-split me-1"></i>Fetching
+                {% elif fetch_errored %}
+                <i class="bi bi-arrow-clockwise me-1"></i>Retry
+                {% elif already_fetched %}
+                <i class="bi bi-arrow-repeat me-1"></i>Update
+                {% else %}
+                <i class="bi bi-arrow-down-circle me-1"></i>Fetch
+                {% endif %}
             </button>
-            {% else %}
-            <button type="submit" class="btn btn-sm btn-outline-primary">
-                <i class="bi bi-arrow-down-circle me-1"></i>{% if fetch_state.state == 'error' %}Retry{% else %}Fetch{% endif %}
-            </button>
-            {% endif %}
         </form>
         <form method="post" action="/ui/catalog/delete" class="d-inline">
             <input type="hidden" name="name" value="{{ entry.name }}">
