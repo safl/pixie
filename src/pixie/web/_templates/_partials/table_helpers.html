@@ -13,22 +13,23 @@
    its /ui/machines + /ui/events pages: a single input + Filter
    button + optional Clear cross. ``per_page`` survives via a hidden
    input; ``page`` intentionally does NOT so a fresh query resets to
-   page 1. Kept narrow so a subnav with several inline forms still
-   fits on a typical laptop width without wrapping. #}
+   page 1. Widened enough for a real query so the affordance reads as
+   "filter this table" rather than a stray icon-in-a-corner. #}
 <form method="get" action="{{ action }}"
       class="subnav-actions d-flex align-items-center gap-1 m-0">
-    <label for="filter-q" class="text-white-50 small mb-0 flex-shrink-0" title="Filter">
+    <label for="filter-q" class="text-white-50 small mb-0 flex-shrink-0" title="Freeform filter">
         <i class="bi bi-funnel"></i>
     </label>
-    <input type="text" id="filter-q" name="q" value="{{ q or '' }}"
+    <input type="search" id="filter-q" name="q" value="{{ q or '' }}"
            class="form-control form-control-sm"
-           style="max-width: 16rem; min-width: 0;"
-           placeholder="filter">
+           style="width: 20rem; min-width: 12rem;"
+           placeholder="filter (any field)"
+           aria-label="Filter this table">
     {% if per_page and per_page != 25 %}
     <input type="hidden" name="per_page" value="{{ per_page }}">
     {% endif %}
     <button type="submit" class="btn btn-sm btn-outline-light flex-shrink-0 text-nowrap">
-        Filter
+        <i class="bi bi-search me-1"></i>Filter
     </button>
     {% if q %}
     <a href="{{ action }}{% if per_page and per_page != 25 %}?per_page={{ per_page }}{% endif %}"
