@@ -80,19 +80,31 @@
                     {% endfor %}
                 </select>
             </div>
-            <div class="col-md-6">
+            <div class="col-md-6"
+                 data-policy-relevant="pixie-flash-once pixie-flash-always ramboot">
                 <label for="image_content_sha256" class="form-label">
-                    Image <span class="text-muted small">(used by ramboot / flash modes)</span>
+                    Image
+                    <span class="policy-usage small text-muted fw-normal ms-1"></span>
                 </label>
                 {% set entry_shas = bindable_entries | map(attribute='content_sha256') | list %}
-                <select id="image_content_sha256" name="image_content_sha256" class="form-select">
+                <select id="image_content_sha256" name="image_content_sha256"
+                        class="form-select" data-ramboot-gate="1">
                     <option value="" {% if not machine.image_content_sha256 %}selected{% endif %}>
                         (unbound)
                     </option>
                     {% for e in bindable_entries %}
+                    {# ``data-ramboot-ready`` mirrors ``e.fetched``: bytes on
+                       disk means pixie can serve the image over NBD for
+                       ramboot. The inline script below disables options
+                       whose value is "false" when ``boot_mode=ramboot`` so
+                       an operator can't accidentally bind an unfetched
+                       image for a ramboot target. Flash modes leave every
+                       option enabled (the flash pipeline will refuse a
+                       missing blob at plan time). #}
                     <option value="{{ e.content_sha256 }}"
+                            data-ramboot-ready="{{ 'true' if e.fetched else 'false' }}"
                             {% if machine.image_content_sha256 == e.content_sha256 %}selected{% endif %}>
-                        {{ e.name }}{% if e.arch %} ({{ e.arch }}){% endif %}
+                        {{ e.name }}{% if e.arch %} ({{ e.arch }}){% endif %}{% if not e.fetched %} -- not fetched{% endif %}
                     </option>
                     {% endfor %}
                     {# Fallback option: keep a bound sha visible even if the
@@ -218,4 +230,59 @@
     </div>
     {% endif %}
 </div>
+
+<script>
+(function () {
+    // Machine config is GENERAL (a property of the row); each boot_mode
+    // READS a subset. Ported from bty: instead of hiding image / target
+    // fields a mode ignores, we DIM them and tag them "(not used by
+    // <mode>)" so the general/consumed-by split stays visible. Each
+    // relevant field carries ``data-policy-relevant`` listing the modes
+    // that consume it; the value survives a mode switch (a sha bound
+    // under ramboot is not cleared when the operator flips to
+    // pixie-inventory to run a discovery pass).
+    const modeSelect = document.getElementById("boot_mode");
+    if (!modeSelect) return;
+    const targets = document.querySelectorAll("[data-policy-relevant]");
+
+    function applyUsage() {
+        const current = modeSelect.value;
+        targets.forEach((el) => {
+            const allowed = (el.getAttribute("data-policy-relevant") || "").split(/\s+/);
+            const consumed = allowed.includes(current);
+            el.classList.toggle("opacity-50", !consumed);
+            const note = el.querySelector(".policy-usage");
+            if (note) note.textContent = consumed ? "" : "(not used by " + current + ")";
+        });
+    }
+
+    // Ramboot gate on the image picker: when the operator flips to
+    // boot_mode=ramboot, disable options whose ``data-ramboot-ready`` is
+    // "false" (blob not fetched -> pixie can't serve it over NBD). Flash
+    // modes leave every option enabled -- the flash renderer refuses a
+    // missing blob at plan time. If the currently-selected option gets
+    // disabled by the switch, drop the binding so the operator doesn't
+    // Save a stale mismatch.
+    const imgSelect = document.querySelector("select[data-ramboot-gate]");
+
+    function applyRambootGate() {
+        if (!imgSelect) return;
+        const isRamboot = modeSelect.value === "ramboot";
+        imgSelect.querySelectorAll("option[data-ramboot-ready]").forEach((opt) => {
+            const ready = opt.getAttribute("data-ramboot-ready") === "true";
+            opt.disabled = isRamboot && !ready;
+        });
+        if (imgSelect.selectedOptions.length && imgSelect.selectedOptions[0].disabled) {
+            imgSelect.value = "";
+        }
+    }
+
+    modeSelect.addEventListener("change", () => {
+        applyUsage();
+        applyRambootGate();
+    });
+    applyUsage();
+    applyRambootGate();
+})();
+</script>
 {% endblock %}
