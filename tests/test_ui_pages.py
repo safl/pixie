@@ -174,6 +174,32 @@ def test_ui_machine_detail_bind_form_prefills_current_binding(client: TestClient
     assert 'name="mac" value="aa:bb:cc:dd:ee:04"' in body
 
 
+def test_ui_machine_detail_image_picker_has_boot_mode_gate_markup(
+    client: TestClient,
+) -> None:
+    """Image picker carries the JS-driven boot-mode gate: the wrapping
+    div is tagged ``data-policy-relevant`` with the modes that consume
+    an image, the select carries ``data-ramboot-gate``, and each option
+    reflects the entry's fetched state via ``data-ramboot-ready``. The
+    JS itself is browser-side; this guards the markup contract."""
+    from pixie.catalog._schema import CatalogEntry
+
+    c = _authed(client)
+    catalog = c.app.state.catalog_store  # type: ignore[attr-defined]
+    catalog.upsert(CatalogEntry(name="ready-img", src="https://x/ready.img.gz", format="img.gz"))
+    catalog.mark_fetched("ready-img", content_sha256="a" * 64, size_bytes=42)
+    catalog.upsert(CatalogEntry(name="staged-img", src="https://x/staged.img.gz", format="img.gz"))
+
+    c.put("/machines/aa:bb:cc:dd:ee:06", json={"boot_mode": "ramboot"})
+    body = c.get("/ui/machines/aa:bb:cc:dd:ee:06").text
+
+    assert 'data-policy-relevant="pixie-flash-once pixie-flash-always ramboot"' in body
+    assert 'data-ramboot-gate="1"' in body
+    assert 'data-ramboot-ready="true"' in body
+    assert 'data-ramboot-ready="false"' in body
+    assert "-- not fetched" in body
+
+
 def test_ui_machine_detail_lists_recent_events(client: TestClient) -> None:
     """Detail page shows a filtered event history for the machine
     (subject_kind=machine, subject_id=<mac>)."""
