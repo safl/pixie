@@ -562,6 +562,7 @@ def create_app() -> FastAPI:
                 "export": exp,
                 "warn_delete": bool(request.query_params.get("warn_delete")),
                 "warn_delete_blob": bool(request.query_params.get("warn_delete_blob")),
+                "warn_update": bool(request.query_params.get("warn_update")),
                 "orphans_bundle_name": (
                     forward.name
                     if (forward is not None and entry.bindable and forward.fetched)
@@ -801,12 +802,38 @@ def create_app() -> FastAPI:
     def ui_catalog_fetch(
         request: Request,
         name: str = Form(...),
+        force: str = Form(""),
         _auth: None = Depends(_require_ui_auth),
     ) -> RedirectResponse:
         store = request.app.state.catalog_store
         entry = store.get_entry(name)
         if entry is None:
             return RedirectResponse(url="/ui/catalog", status_code=status.HTTP_303_SEE_OTHER)
+
+        # Update-fetch guard. A fetch on an already-fetched entry
+        # ("Update" in the UI) re-runs the pipeline; if the sha
+        # shifts (moved oras:// tag, upstream re-tag) any machine
+        # currently bound to the OLD sha silently rots. Bounce to
+        # the detail page with warn_update=1 unless the operator
+        # explicitly opts in via force=1 (from the banner).
+        # A pristine fetch (no content_sha256 yet) skips the guard --
+        # the entry is not in use so there is nothing to warn about.
+        if entry.content_sha256 and not force:
+            using_machines = [
+                m.mac
+                for m in request.app.state.machines_store.list()
+                if m.image_content_sha256 == entry.content_sha256
+            ]
+            running_exports = [
+                e.name
+                for e in request.app.state.exports_store.list()
+                if e.content_sha256 == entry.content_sha256 and e.status == "running"
+            ]
+            if using_machines or running_exports:
+                return RedirectResponse(
+                    url=f"/ui/catalog/{name}?warn_update=1",
+                    status_code=status.HTTP_303_SEE_OTHER,
+                )
 
         states = request.app.state.fetch_states
         if states.get(name, {}).get("state") == "fetching":

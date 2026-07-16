@@ -12,6 +12,56 @@
 </nav>
 {% endblock %}
 {% block content %}
+{% if warn_update %}
+<div class="alert alert-warning d-flex align-items-start" role="alert">
+    <i class="bi bi-exclamation-triangle-fill me-2 mt-1"></i>
+    <div class="flex-grow-1">
+        <strong>Update would overwrite bytes in use.</strong>
+        <div class="mt-1 small">
+            The current blob for <code>{{ entry.name }}</code>
+            (sha <code>{{ entry.content_sha256[:12] }}</code>) is
+            referenced by:
+            {% if blob_using_machines %}
+            <div class="mt-1">
+                <span class="text-muted">Machines bound to this image:</span>
+                <ul class="mb-0">
+                    {% for mac in blob_using_machines %}
+                    <li><a href="/ui/machines/{{ mac }}"><code>{{ mac }}</code></a></li>
+                    {% endfor %}
+                </ul>
+            </div>
+            {% endif %}
+            {% if blob_running_exports %}
+            <div class="mt-1">
+                <span class="text-muted">Running NBD exports:</span>
+                <ul class="mb-0">
+                    {% for name in blob_running_exports %}
+                    <li><code>{{ name }}</code></li>
+                    {% endfor %}
+                </ul>
+            </div>
+            {% endif %}
+            <div class="mt-2">
+                Update re-runs the fetch pipeline; if the upstream sha has moved
+                (an <code>oras://</code> tag pointing at new bytes) the new
+                content will land at a new content-address and the machines /
+                exports above will still be pinned to the OLD sha until you
+                re-bind them. Point those machines at the new binding first, or
+                click "Update anyway" to overwrite.
+            </div>
+        </div>
+        <form method="post" action="/ui/catalog/fetch" class="mt-2 d-inline">
+            <input type="hidden" name="name" value="{{ entry.name }}">
+            <input type="hidden" name="force" value="1">
+            <button type="submit" class="btn btn-sm btn-warning">
+                <i class="bi bi-arrow-repeat me-1"></i>Update anyway
+            </button>
+        </form>
+        <a href="/ui/catalog/{{ entry.name }}"
+           class="btn btn-sm btn-outline-secondary ms-1">Cancel</a>
+    </div>
+</div>
+{% endif %}
 {% if warn_delete_blob %}
 <div class="alert alert-warning d-flex align-items-start" role="alert">
     <i class="bi bi-exclamation-triangle-fill me-2 mt-1"></i>
