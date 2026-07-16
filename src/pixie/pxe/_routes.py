@@ -19,6 +19,12 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import PlainTextResponse
 
+from pixie.events._kinds import (
+    MACHINE_INVENTORY_UPDATED,
+    PXE_PLAN_RENDERED,
+    PXE_PLAN_UNAVAILABLE,
+    PXE_STATUS_RECEIVED,
+)
 from pixie.machines._store import BadMac, MachinesStore, normalise_mac
 from pixie.pxe._renderer import PlanRenderer, RenderContext
 
@@ -109,7 +115,7 @@ async def pxe_inventory(request: Request, mac: str) -> PlainTextResponse:
             details["disks_count"] = len(disks)
         details["has_lshw"] = payload.get("lshw") is not None
         log.emit(
-            "machine.inventory.updated",
+            MACHINE_INVENTORY_UPDATED,
             subject_kind="machine",
             subject_id=canon,
             summary=f"{canon} posted inventory",
@@ -151,9 +157,83 @@ def pxe_plan(request: Request, mac: str) -> PlainTextResponse:
 
     ctx = _render_context(request)
     body = _get_renderer(request).render(row, ctx)
+    # Every plan render emits one event so an operator can grep the
+    # log for "every time this MAC PXE'd + what mode it got". The
+    # unavailable variant is distinguished by the renderer emitting
+    # ``exit`` instead of a real chain -- the plan body carries the
+    # reason as a comment, which we extract for details.
+    log = getattr(request.app.state, "events_log", None)
+    if log is not None:
+        is_unavailable = "\nexit\n" in body and "unavailable" in body.lower()
+        if is_unavailable:
+            log.emit(
+                PXE_PLAN_UNAVAILABLE,
+                subject_kind="machine",
+                subject_id=canon,
+                summary=f"{canon}: boot_mode={row.boot_mode} not renderable",
+                details={"boot_mode": row.boot_mode},
+            )
+        else:
+            log.emit(
+                PXE_PLAN_RENDERED,
+                subject_kind="machine",
+                subject_id=canon,
+                summary=f"{canon}: boot_mode={row.boot_mode}",
+                details={"boot_mode": row.boot_mode},
+            )
     # Always ``text/plain`` per bty's convention; iPXE parses on
     # bytes, not on Content-Type.
     return PlainTextResponse(body, media_type="text/plain")
+
+
+@router.post("/pxe/{mac}/status", status_code=204)
+async def pxe_status(request: Request, mac: str) -> PlainTextResponse:
+    """Accept a status token from the target's initrd or live env.
+
+    Bty's ramboot dracut hook + pixie's own tui both fire tokens like
+    ``ramboot.up`` / ``ramboot.nbd_connect_failed`` / ``ramboot.die``
+    so an operator watching /ui/events sees the boot flow land or
+    fail. The body carries either ``status=<token>`` in a form or a
+    JSON object -- normalise both to a string.
+    """
+    try:
+        canon = normalise_mac(mac)
+    except BadMac as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    ctype = (request.headers.get("content-type") or "").lower()
+    status_token = ""
+    if "application/json" in ctype:
+        try:
+            payload = await request.json()
+        except Exception:
+            payload = None
+        if isinstance(payload, dict):
+            status_token = str(payload.get("status") or "").strip()
+    else:
+        form = await request.form()
+        raw = form.get("status")
+        if isinstance(raw, str):
+            status_token = raw.strip()
+    if not status_token:
+        # Fall back to a raw body read for the wget-style
+        # ``--post-data=status=X`` shape busybox uses in the ramboot
+        # initrd (application/x-www-form-urlencoded handled above,
+        # but old busybox drops the content-type header).
+        raw_body = (await request.body()).decode("utf-8", errors="replace").strip()
+        if raw_body.startswith("status="):
+            status_token = raw_body.split("=", 1)[1]
+    if not status_token:
+        raise HTTPException(status_code=400, detail="missing status token")
+    log = getattr(request.app.state, "events_log", None)
+    if log is not None:
+        log.emit(
+            PXE_STATUS_RECEIVED,
+            subject_kind="machine",
+            subject_id=canon,
+            summary=f"{canon}: {status_token}",
+            details={"status": status_token},
+        )
+    return PlainTextResponse("", status_code=204)
 
 
 @router.get("/pxe/{mac}/plan")

@@ -17,6 +17,12 @@ from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
 from pixie.catalog._store import CatalogStore
+from pixie.events._kinds import (
+    EXPORT_DELETED,
+    EXPORT_NBDKIT_EXITED,
+    EXPORT_NBDKIT_SPAWNED,
+    EXPORT_REGISTERED,
+)
 from pixie.exports._store import Export, ExportsStore
 from pixie.exports._supervisor import NbdServer
 from pixie.web._auth import require_auth
@@ -65,7 +71,12 @@ def _get_nbd(request: Request) -> NbdServer:
     return nbd
 
 
-def _refresh_row(export: Export, nbd: NbdServer, exports: ExportsStore) -> Export:
+def _refresh_row(
+    export: Export,
+    nbd: NbdServer,
+    exports: ExportsStore,
+    events_log: Any = None,
+) -> Export:
     """Merge live supervisor state into a stored row before returning
     it to the operator. Doesn't persist the port -- we do that from
     the spawn path -- but keeps ``GET /exports`` honest when nbdkit
@@ -73,10 +84,23 @@ def _refresh_row(export: Export, nbd: NbdServer, exports: ExportsStore) -> Expor
     port = nbd.port_for(export.name)
     if port is None and export.status == "running":
         # Supervisor lost track: row still says running but no proc.
+        # Log the transition as a distinct event so an operator can
+        # grep for spontaneous nbdkit deaths without having to diff
+        # /exports over time. The row's own status still moves to
+        # ``error`` so the /ui/catalog table renders it.
+        previous_port = export.nbd_port
         exports.update_runtime(export.name, nbd_port=0, status="error", error="nbdkit exited")
         export.nbd_port = 0
         export.status = "error"
         export.error = "nbdkit exited"
+        if events_log is not None:
+            events_log.emit(
+                EXPORT_NBDKIT_EXITED,
+                subject_kind="export",
+                subject_id=export.name,
+                summary=f"nbdkit for {export.name} exited",
+                details={"previous_port": previous_port},
+            )
     elif port is not None and export.nbd_port != port:
         exports.update_runtime(export.name, nbd_port=port, status="running", error="")
         export.nbd_port = port
@@ -89,7 +113,8 @@ def _refresh_row(export: Export, nbd: NbdServer, exports: ExportsStore) -> Expor
 def list_exports(request: Request) -> dict[str, list[dict[str, Any]]]:
     exports = _get_exports(request)
     nbd = _get_nbd(request)
-    rows = [_refresh_row(e, nbd, exports).to_dict() for e in exports.list()]
+    events_log = getattr(request.app.state, "events_log", None)
+    rows = [_refresh_row(e, nbd, exports, events_log).to_dict() for e in exports.list()]
     return {"exports": rows}
 
 
@@ -100,7 +125,7 @@ def get_export(request: Request, name: str) -> dict[str, Any]:
     if row is None:
         raise HTTPException(status_code=404, detail=f"no export named {name!r}")
     nbd = _get_nbd(request)
-    return _refresh_row(row, nbd, exports).to_dict()
+    return _refresh_row(row, nbd, exports, getattr(request.app.state, "events_log", None)).to_dict()
 
 
 @router.post("/exports", status_code=201)
@@ -150,11 +175,18 @@ def register_export(
     log = getattr(request.app.state, "events_log", None)
     if log is not None:
         log.emit(
-            "export.registered",
+            EXPORT_REGISTERED,
             subject_kind="export",
             subject_id=body.name,
             summary=f"{body.name} on port {port}",
             details={"content_sha256": body.content_sha256, "nbd_port": port},
+        )
+        log.emit(
+            EXPORT_NBDKIT_SPAWNED,
+            subject_kind="export",
+            subject_id=body.name,
+            summary=f"nbdkit spawned on port {port}",
+            details={"nbd_port": port},
         )
     row = exports.get(body.name)
     assert row is not None
@@ -175,5 +207,5 @@ def delete_export(
     exports.delete(name)
     log = getattr(request.app.state, "events_log", None)
     if log is not None:
-        log.emit("export.deleted", subject_kind="export", subject_id=name, summary=name)
+        log.emit(EXPORT_DELETED, subject_kind="export", subject_id=name, summary=name)
     return Response(status_code=204)

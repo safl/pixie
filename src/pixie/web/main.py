@@ -38,6 +38,22 @@ import pixie
 from pixie.catalog._routes import router as catalog_router
 from pixie.catalog._store import CatalogStore
 from pixie.events import EventsLog
+from pixie.events._kinds import (
+    AUTH_LOGIN_FAILED,
+    AUTH_LOGIN_SUCCEEDED,
+    CATALOG_BLOB_DELETED,
+    CATALOG_ENTRY_ADDED,
+    CATALOG_ENTRY_DELETED,
+    CATALOG_ENTRY_UPDATED,
+    CATALOG_FETCH_DONE,
+    CATALOG_FETCH_FAILED,
+    CATALOG_FETCH_STARTED,
+    CATALOG_IMPORT_FAILED,
+    CATALOG_IMPORT_OK,
+    EXPORT_NBDKIT_SPAWNED,
+    TFTP_STARTED,
+    TFTP_STOPPED,
+)
 from pixie.events._routes import router as events_router
 from pixie.exports._routes import router as exports_router
 from pixie.exports._store import ExportsStore
@@ -228,6 +244,15 @@ def _respawn_exports_at_startup(app: FastAPI) -> None:
             continue
         exports_store.update_runtime(export.name, nbd_port=port, status="running", error="")
         log.info("export %s: respawned on port %d", export.name, port)
+        events = getattr(app.state, "events_log", None)
+        if events is not None:
+            events.emit(
+                EXPORT_NBDKIT_SPAWNED,
+                subject_kind="export",
+                subject_id=export.name,
+                summary=f"nbdkit respawned on port {port} (startup)",
+                details={"nbd_port": port, "reason": "startup-respawn"},
+            )
 
 
 def _require_ui_auth(request: Request) -> None:
@@ -246,6 +271,9 @@ def create_app() -> FastAPI:
         if getattr(app.state, "tftp_server", None) is not None:
             try:
                 app.state.tftp_server.start()
+                events = getattr(app.state, "events_log", None)
+                if events is not None:
+                    events.emit(TFTP_STARTED, summary="tftp subprocess up")
             except RuntimeError as exc:
                 import logging as _logging
 
@@ -270,6 +298,9 @@ def create_app() -> FastAPI:
             if getattr(app.state, "tftp_server", None) is not None:
                 with contextlib_suppress(Exception):
                     app.state.tftp_server.stop()
+                    events = getattr(app.state, "events_log", None)
+                    if events is not None:
+                        events.emit(TFTP_STOPPED, summary="tftp subprocess down")
 
     app = FastAPI(
         title="pixie",
@@ -388,7 +419,13 @@ def create_app() -> FastAPI:
 
     @app.post("/ui/login", response_class=HTMLResponse)
     def ui_login(request: Request, password: str = Form(...)) -> Any:
+        events = getattr(request.app.state, "events_log", None)
         if not check_password(password):
+            if events is not None:
+                events.emit(
+                    AUTH_LOGIN_FAILED,
+                    summary="wrong password",
+                )
             return templates.TemplateResponse(
                 request,
                 "login.html",
@@ -401,6 +438,8 @@ def create_app() -> FastAPI:
                 },
                 status_code=status.HTTP_401_UNAUTHORIZED,
             )
+        if events is not None:
+            events.emit(AUTH_LOGIN_SUCCEEDED, summary="admin logged in")
         request.session[SESSION_AUTHED_KEY] = True
         return RedirectResponse(url="/ui/", status_code=status.HTTP_303_SEE_OTHER)
 
@@ -426,7 +465,7 @@ def create_app() -> FastAPI:
         from pixie.exports._routes import _refresh_row
 
         entries = catalog.list_entries()
-        exports = [_refresh_row(e, nbd, exports_store) for e in exports_store.list()]
+        exports = [_refresh_row(e, nbd, exports_store, events_log) for e in exports_store.list()]
         machines = machines_store.list()
         events = events_log.list(limit=10)
         # Split the catalog into disk-image entries (bindable = can be
@@ -483,9 +522,10 @@ def create_app() -> FastAPI:
         catalog = request.app.state.catalog_store
         exports_store = request.app.state.exports_store
         nbd_server = request.app.state.nbd_server
+        events_log = request.app.state.events_log
         exports_by_sha: dict[str, Any] = {}
         for row in exports_store.list():
-            refreshed = _refresh_row(row, nbd_server, exports_store)
+            refreshed = _refresh_row(row, nbd_server, exports_store, events_log)
             exports_by_sha[refreshed.content_sha256] = refreshed
         all_entries = catalog.list_entries()
         # Freeform text filter across the fields an operator most
@@ -548,6 +588,7 @@ def create_app() -> FastAPI:
                         row,
                         request.app.state.nbd_server,
                         request.app.state.exports_store,
+                        request.app.state.events_log,
                     )
                     break
         return templates.TemplateResponse(
@@ -785,17 +826,25 @@ def create_app() -> FastAPI:
             # 303 back to /ui/catalog silently on conflict; UI shows
             # the row already exists.
             return RedirectResponse(url="/ui/catalog", status_code=status.HTTP_303_SEE_OTHER)
-        store.upsert(
-            _Entry(
-                name=name.strip(),
-                src=src.strip(),
-                format=format.strip(),
-                arch=arch.strip(),
-                description=description.strip(),
-                netboot_src=netboot_src.strip(),
-                added_at=_now_iso(),
-            )
+        entry = _Entry(
+            name=name.strip(),
+            src=src.strip(),
+            format=format.strip(),
+            arch=arch.strip(),
+            description=description.strip(),
+            netboot_src=netboot_src.strip(),
+            added_at=_now_iso(),
         )
+        store.upsert(entry)
+        events = getattr(request.app.state, "events_log", None)
+        if events is not None:
+            events.emit(
+                CATALOG_ENTRY_ADDED,
+                subject_kind="entry",
+                subject_id=entry.name,
+                summary=f"{entry.name} ({entry.format})",
+                details={"src": entry.src},
+            )
         return RedirectResponse(url="/ui/catalog", status_code=status.HTTP_303_SEE_OTHER)
 
     @app.post("/ui/catalog/fetch")
@@ -839,23 +888,70 @@ def create_app() -> FastAPI:
         if states.get(name, {}).get("state") == "fetching":
             return RedirectResponse(url="/ui/catalog", status_code=status.HTTP_303_SEE_OTHER)
         states[name] = {"state": "fetching", "started_at": _now_iso(), "error": None}
+        is_update = bool(entry.content_sha256)
+        events = getattr(request.app.state, "events_log", None)
+        if events is not None:
+            events.emit(
+                CATALOG_FETCH_STARTED,
+                subject_kind="entry",
+                subject_id=name,
+                summary=f"{name} <- {entry.src}",
+                details={"src": entry.src, "update": is_update},
+            )
 
         def _run() -> None:
             try:
-                _fetch(entry, store)
+                result = _fetch(entry, store)
                 states[name] = {"state": "done", "started_at": states[name].get("started_at")}
+                if events is not None:
+                    events.emit(
+                        CATALOG_FETCH_DONE,
+                        subject_kind="entry",
+                        subject_id=name,
+                        summary=(
+                            f"{name}: {result.size_bytes} bytes, sha {result.content_sha256[:12]}"
+                        ),
+                        details={
+                            "content_sha256": result.content_sha256,
+                            "size_bytes": result.size_bytes,
+                        },
+                    )
+                    if is_update:
+                        events.emit(
+                            CATALOG_ENTRY_UPDATED,
+                            subject_kind="entry",
+                            subject_id=name,
+                            summary=f"{name}: bytes refreshed",
+                            details={"content_sha256": result.content_sha256},
+                        )
             except FetchError as exc:
                 states[name] = {
                     "state": "error",
                     "started_at": states[name].get("started_at"),
                     "error": str(exc),
                 }
+                if events is not None:
+                    events.emit(
+                        CATALOG_FETCH_FAILED,
+                        subject_kind="entry",
+                        subject_id=name,
+                        summary=str(exc),
+                        details={"error": str(exc)[:200]},
+                    )
             except Exception as exc:  # pragma: no cover -- defensive
                 states[name] = {
                     "state": "error",
                     "started_at": states[name].get("started_at"),
                     "error": f"internal: {exc}",
                 }
+                if events is not None:
+                    events.emit(
+                        CATALOG_FETCH_FAILED,
+                        subject_kind="entry",
+                        subject_id=name,
+                        summary=f"internal: {exc}",
+                        details={"error": f"internal: {exc}"[:200]},
+                    )
 
         request.app.state.fetch_pool.submit(_run)
         return RedirectResponse(url="/ui/catalog", status_code=status.HTTP_303_SEE_OTHER)
@@ -914,6 +1010,15 @@ def create_app() -> FastAPI:
                 )
         store.delete(name)
         request.app.state.fetch_states.pop(name, None)
+        events = getattr(request.app.state, "events_log", None)
+        if events is not None:
+            events.emit(
+                CATALOG_ENTRY_DELETED,
+                subject_kind="entry",
+                subject_id=name,
+                summary=name,
+                details={"forced": bool(force)},
+            )
         return RedirectResponse(url="/ui/catalog", status_code=status.HTTP_303_SEE_OTHER)
 
     @app.post("/ui/catalog/delete-blob")
@@ -981,7 +1086,7 @@ def create_app() -> FastAPI:
         log = getattr(request.app.state, "events_log", None)
         if log is not None:
             log.emit(
-                "catalog.blob.deleted",
+                CATALOG_BLOB_DELETED,
                 subject_kind="entry",
                 subject_id=name,
                 summary=f"blob deleted for {name} (sha {sha[:12]})",
@@ -1017,7 +1122,7 @@ def create_app() -> FastAPI:
             log = getattr(request.app.state, "events_log", None)
             if log is not None:
                 log.emit(
-                    "catalog.import.failed",
+                    CATALOG_IMPORT_FAILED,
                     subject_kind="catalog",
                     subject_id=target_url,
                     summary=f"import from {target_url} failed",
@@ -1033,7 +1138,7 @@ def create_app() -> FastAPI:
         log = getattr(request.app.state, "events_log", None)
         if log is not None:
             log.emit(
-                "catalog.import.ok",
+                CATALOG_IMPORT_OK,
                 subject_kind="catalog",
                 subject_id=target_url,
                 summary=f"imported {len(entries)} entries from {target_url} ({added} new)",

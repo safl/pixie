@@ -26,6 +26,13 @@ from pydantic import BaseModel, Field
 from pixie._util import now_iso
 from pixie.catalog._fetcher import FetchError, entry_from_dict, fetch
 from pixie.catalog._store import CatalogStore
+from pixie.events._kinds import (
+    CATALOG_ENTRY_ADDED,
+    CATALOG_ENTRY_DELETED,
+    CATALOG_FETCH_DONE,
+    CATALOG_FETCH_FAILED,
+    CATALOG_FETCH_STARTED,
+)
 from pixie.web._auth import require_auth
 
 # Named field-safety regex for the content sha URL segment. iPXE fires
@@ -169,7 +176,7 @@ def add_entry(
     store.upsert(entry)
     _emit_event(
         request,
-        "catalog.entry.added",
+        CATALOG_ENTRY_ADDED,
         subject_kind="entry",
         subject_id=entry.name,
         summary=f"{entry.name} ({entry.format})",
@@ -195,7 +202,7 @@ def delete_entry(
     _fetch_states(request).pop(name, None)
     _emit_event(
         request,
-        "catalog.entry.deleted",
+        CATALOG_ENTRY_DELETED,
         subject_kind="entry",
         subject_id=name,
         summary=name,
@@ -234,7 +241,7 @@ async def start_fetch(
 
     if log_emit is not None:
         log_emit(
-            "catalog.fetch.started",
+            CATALOG_FETCH_STARTED,
             subject_kind="entry",
             subject_id=name,
             summary=f"{name} <- {entry.src}",
@@ -246,7 +253,7 @@ async def start_fetch(
             states[name] = {"state": "done", "started_at": states[name].get("started_at")}
             if log_emit is not None:
                 log_emit(
-                    "catalog.fetch.done",
+                    CATALOG_FETCH_DONE,
                     subject_kind="entry",
                     subject_id=name,
                     summary=f"{name}: {result.size_bytes} bytes, sha {result.content_sha256[:12]}",
@@ -263,7 +270,7 @@ async def start_fetch(
             }
             if log_emit is not None:
                 log_emit(
-                    "catalog.fetch.failed",
+                    CATALOG_FETCH_FAILED,
                     subject_kind="entry",
                     subject_id=name,
                     summary=str(exc),
@@ -276,7 +283,7 @@ async def start_fetch(
             }
             if log_emit is not None:
                 log_emit(
-                    "catalog.fetch.failed",
+                    CATALOG_FETCH_FAILED,
                     subject_kind="entry",
                     subject_id=name,
                     summary=f"internal: {exc}",
