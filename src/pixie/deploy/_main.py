@@ -268,7 +268,7 @@ def _build_parser() -> argparse.ArgumentParser:
         sp.add_argument(
             "--admin-password",
             default=None,
-            help="operator UI + write-route password (init: default pixie-lab; deploy: random)",
+            help="operator UI + write-route password (init: default pixie; deploy: random)",
         )
         sp.add_argument(
             "--force",

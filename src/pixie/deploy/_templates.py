@@ -16,7 +16,7 @@ from __future__ import annotations
 from typing import Any
 
 DEFAULT_IMAGE_REPO = "ghcr.io/safl/pixie"
-DEFAULT_ADMIN_PASSWORD = "pixie-lab"
+DEFAULT_ADMIN_PASSWORD = "pixie"
 
 # NBD supervisor's default port range base -- kept in lockstep with
 # ``pixie.exports._supervisor.DEFAULT_PORT_BASE``.
