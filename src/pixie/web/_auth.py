@@ -7,11 +7,11 @@ session is a server-signed cookie managed by Starlette's
 
 The password is sourced from ``$PIXIE_ADMIN_PASSWORD`` if set +
 non-empty, otherwise falls back to :data:`DEFAULT_ADMIN_PASSWORD`
-(``"pixie-lab"``). Auth is ALWAYS on; an unset env var just means the
+(``"pixie"``). Auth is ALWAYS on; an unset env var just means the
 operator gets the well-known default until they override it. The
 startup banner (added in a later PR) will warn when the default is in
 use so an exposed pixie does not silently ship with
-``pixie-lab / pixie-lab``.
+``pixie / pixie``.
 
 Failure modes return 401; ``/ui/*`` routes catch the exception in a
 middleware and redirect to ``/ui/login``.
@@ -27,7 +27,7 @@ from fastapi import HTTPException, Request, status
 # Well-known fallback password. Kept here (no ``_config`` module in the
 # skeleton yet) so callers don't need a two-step import; the config-file
 # path lands with the first PR that grows a ``pixie.toml`` reader.
-DEFAULT_ADMIN_PASSWORD = "pixie-lab"
+DEFAULT_ADMIN_PASSWORD = "pixie"
 
 # Session-cookie name. Set explicitly so integration tests and operator
 # scripts can grep for a stable token in Set-Cookie.
