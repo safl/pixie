@@ -42,6 +42,13 @@
                         <a href="/ui/machines/{{ m.mac }}" class="text-decoration-none">
                             <code>{{ m.mac }}</code>
                         </a>
+                        {% if m.labels %}
+                        <div class="mt-1">
+                            {% for lbl in m.labels %}
+                            <span class="badge text-bg-light border me-1">{{ lbl }}</span>
+                            {% endfor %}
+                        </div>
+                        {% endif %}
                     </td>
                     <td>
                         {% if m.boot_mode == 'ramboot' %}

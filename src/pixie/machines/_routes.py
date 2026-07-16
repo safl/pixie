@@ -24,6 +24,7 @@ from pixie.machines._store import (
     BadMac,
     MachinesStore,
     normalise_mac,
+    parse_labels,
 )
 from pixie.web._auth import require_auth
 
@@ -32,12 +33,34 @@ router = APIRouter()
 
 class BindBody(BaseModel):
     """Operator binding: pick a boot mode + optional image ref by
-    content sha. Empty ``image_content_sha256`` clears the binding."""
+    content sha. Empty ``image_content_sha256`` clears the binding.
+
+    Extended fields (``labels`` / ``sanboot_drive`` / ``target_disk_serial``)
+    let the operator tag the machine + tune the flash / ipxe-exit
+    chain without a second round-trip. Fields default to no-op values
+    so a pre-extension client can PUT with only ``boot_mode`` and get
+    the same behaviour it did before.
+    """
 
     boot_mode: str = Field(..., description=f"one of {sorted(BOOT_MODES)}")
     image_content_sha256: str = Field(
         default="",
         description="64-char lowercase hex sha of a fetched catalog entry, or empty to clear",
+    )
+    labels: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Free-form tags: alphanumeric-leading, a-z / 0-9 / space / ._-, "
+            "max 64 chars each, max 16 tags."
+        ),
+    )
+    sanboot_drive: str = Field(
+        default="",
+        description="iPXE BIOS drive slug (e.g. '0x80' for first disk). Consumed by ipxe-exit.",
+    )
+    target_disk_serial: str = Field(
+        default="",
+        description="Serial of the target disk for pixie-flash-*. Matched against the inventory.",
     )
 
 
@@ -83,10 +106,17 @@ def upsert_machine(
     # "someone swapped the image behind this MAC".
     previous = _get_machines(request).get(canon)
     try:
+        # ``labels`` in the JSON body is already a list; run it through
+        # ``parse_labels`` (via a comma-join) so the same validator
+        # rejects bogus tokens on both the JSON + form paths.
+        labels = parse_labels(", ".join(str(x) for x in (body.labels or [])))
         row = _get_machines(request).upsert_binding(
             canon,
             boot_mode=body.boot_mode,
             image_content_sha256=body.image_content_sha256.strip().lower(),
+            labels=labels,
+            sanboot_drive=body.sanboot_drive,
+            target_disk_serial=body.target_disk_serial,
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
