@@ -12,6 +12,43 @@
 </nav>
 {% endblock %}
 {% block content %}
+{% if warn_delete %}
+<div class="alert alert-warning d-flex align-items-start" role="alert">
+    <i class="bi bi-exclamation-triangle-fill me-2 mt-1"></i>
+    <div class="flex-grow-1">
+        <strong>Delete would leave a broken chain.</strong>
+        {% if orphans_bundle_name %}
+        <div class="mt-1 small">
+            Deleting <code>{{ entry.name }}</code> orphans the fetched netboot bundle
+            <code>{{ orphans_bundle_name }}</code>. The bundle stays on disk but no
+            disk-image entry will point at it -- ramboot for this image will not work
+            until you either restore this entry or delete the bundle too.
+        </div>
+        {% endif %}
+        {% if breaks_ramboot_for %}
+        <div class="mt-1 small">
+            Deleting <code>{{ entry.name }}</code> breaks ramboot for
+            {{ breaks_ramboot_for|length }} disk image{{ 's' if breaks_ramboot_for|length != 1 else '' }}
+            that name{{ '' if breaks_ramboot_for|length != 1 else 's' }} it as
+            <code>netboot_src</code>:
+            <ul class="mb-0 mt-1">
+                {% for name in breaks_ramboot_for %}
+                <li><code>{{ name }}</code></li>
+                {% endfor %}
+            </ul>
+        </div>
+        {% endif %}
+        <form method="post" action="/ui/catalog/delete" class="mt-2 d-inline">
+            <input type="hidden" name="name" value="{{ entry.name }}">
+            <input type="hidden" name="force" value="1">
+            <button type="submit" class="btn btn-sm btn-danger">
+                <i class="bi bi-trash me-1"></i>Delete anyway
+            </button>
+        </form>
+        <a href="/ui/catalog" class="btn btn-sm btn-outline-secondary ms-1">Cancel</a>
+    </div>
+</div>
+{% endif %}
 <div class="card shadow-sm mb-4">
     <div class="card-header bg-light d-flex align-items-center">
         <h2 class="h5 mb-0">
@@ -80,17 +117,24 @@
         </dl>
     </div>
     <div class="card-footer bg-light py-2">
+        {% set fetching = fetch_state.state == 'fetching' %}
+        {% set fetch_errored = fetch_state.state == 'error' %}
+        {% set already_fetched = entry.content_sha256 and not fetch_errored %}
         <form method="post" action="/ui/catalog/fetch" class="d-inline">
             <input type="hidden" name="name" value="{{ entry.name }}">
-            {% if fetch_state.state == 'fetching' %}
-            <button type="submit" class="btn btn-sm btn-outline-primary" disabled>
+            <button type="submit" class="btn btn-sm btn-outline-primary"
+                    {% if fetching %}disabled{% endif %}
+                    title="{% if fetching %}fetch already in flight{% elif already_fetched %}re-run the fetch pipeline; picks up a moved oras:// tag's new bytes{% elif fetch_errored %}retry the failed fetch{% else %}download the bytes for this entry{% endif %}">
+                {% if fetching %}
                 <i class="bi bi-hourglass-split me-1"></i>Fetching
+                {% elif fetch_errored %}
+                <i class="bi bi-arrow-clockwise me-1"></i>Retry
+                {% elif already_fetched %}
+                <i class="bi bi-arrow-repeat me-1"></i>Update
+                {% else %}
+                <i class="bi bi-arrow-down-circle me-1"></i>Fetch
+                {% endif %}
             </button>
-            {% else %}
-            <button type="submit" class="btn btn-sm btn-outline-primary">
-                <i class="bi bi-arrow-down-circle me-1"></i>{% if fetch_state.state == 'error' %}Retry{% else %}Fetch{% endif %}
-            </button>
-            {% endif %}
         </form>
         <form method="post" action="/ui/catalog/delete" class="d-inline">
             <input type="hidden" name="name" value="{{ entry.name }}">

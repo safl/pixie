@@ -144,28 +144,45 @@
                         {% endif %}
                     </td>
                     <td class="text-end text-nowrap">
+                        {# All three action buttons are ALWAYS rendered so an
+                           operator's eye finds them at the same X position in
+                           every row. Verb + enabled state track the row's
+                           current state: no bytes on disk -> Fetch; a prior
+                           fetch failed -> Retry; already have bytes -> Update
+                           (re-runs the fetch pipeline; picks up a moved
+                           oras:// tag's new manifest); in-flight fetch ->
+                           Fetching (disabled). Update is enabled because
+                           labelling a fetched entry as "Fetch" makes an
+                           operator instinctively hit it thinking bytes are
+                           missing. Stop is disabled when there is no NBD
+                           export to stop; Delete is always enabled. #}
+                        {% set fetching = st.state == 'fetching' %}
+                        {% set fetch_errored = st.state == 'error' %}
+                        {% set already_fetched = e.content_sha256 and not fetch_errored %}
                         <form method="post" action="/ui/catalog/fetch" class="d-inline">
                             <input type="hidden" name="name" value="{{ e.name }}">
-                            {% if st.state == "fetching" %}
-                            <button type="submit" class="btn btn-sm btn-outline-primary" disabled
-                                    title="fetch already in flight">
+                            <button type="submit" class="btn btn-sm btn-outline-primary"
+                                    {% if fetching %}disabled{% endif %}
+                                    title="{% if fetching %}fetch already in flight{% elif already_fetched %}re-run the fetch pipeline; picks up a moved oras:// tag's new bytes{% elif fetch_errored %}retry the failed fetch{% else %}download the bytes for this entry{% endif %}">
+                                {% if fetching %}
                                 <i class="bi bi-hourglass-split me-1"></i>Fetching
+                                {% elif fetch_errored %}
+                                <i class="bi bi-arrow-clockwise me-1"></i>Retry
+                                {% elif already_fetched %}
+                                <i class="bi bi-arrow-repeat me-1"></i>Update
+                                {% else %}
+                                <i class="bi bi-arrow-down-circle me-1"></i>Fetch
+                                {% endif %}
                             </button>
-                            {% else %}
-                            <button type="submit" class="btn btn-sm btn-outline-primary">
-                                <i class="bi bi-arrow-down-circle me-1"></i>{% if st.state == "error" %}Retry{% else %}Fetch{% endif %}
-                            </button>
-                            {% endif %}
                         </form>
-                        {% if exp is not none %}
                         <form method="post" action="/ui/exports/delete" class="d-inline"
-                              title="Stop the NBD export ({{ exp.name }}); the catalog entry stays.">
-                            <input type="hidden" name="name" value="{{ exp.name }}">
-                            <button type="submit" class="btn btn-sm btn-outline-warning">
+                              title="{% if exp is none %}no NBD export to stop{% else %}stop the NBD export ({{ exp.name }}); the catalog entry stays{% endif %}">
+                            <input type="hidden" name="name" value="{{ exp.name if exp is not none else '' }}">
+                            <button type="submit" class="btn btn-sm btn-outline-warning"
+                                    {% if exp is none %}disabled{% endif %}>
                                 <i class="bi bi-stop-circle"></i>
                             </button>
                         </form>
-                        {% endif %}
                         <form method="post" action="/ui/catalog/delete" class="d-inline"
                               title="Delete this catalog entry (does not delete the fetched blob).">
                             <input type="hidden" name="name" value="{{ e.name }}">
