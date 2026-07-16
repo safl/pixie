@@ -478,40 +478,8 @@ def create_app() -> FastAPI:
         # moved to its own /ui/catalog route so the brand pill's
         # "Home" click lands on a page that reads as a status
         # overview rather than a management surface.
-        catalog = request.app.state.catalog_store
-        exports_store = request.app.state.exports_store
-        machines_store = request.app.state.machines_store
-        events_log = request.app.state.events_log
-        nbd = request.app.state.nbd_server
-        from pixie.exports._routes import _refresh_row
-
-        entries = catalog.list_entries()
-        exports = [_refresh_row(e, nbd, exports_store, events_log) for e in exports_store.list()]
-        machines = machines_store.list()
-        events = events_log.list(limit=10)
-        # Split the catalog into disk-image entries (bindable = can be
-        # served over NBD for ramboot + flashed later) and netboot
-        # bundles (tar.gz of vmlinuz+initrd used as the kernel/initrd
-        # side of a ramboot). ``fetched`` counts the ones whose bytes
-        # are actually on disk. The operator wanted the dashboard to
-        # read as ``<fetched> / <total>`` per category instead of a
-        # bare single number.
-        images = [e for e in entries if getattr(e, "bindable", False)]
-        bundles = [e for e in entries if not getattr(e, "bindable", False)]
-        stats = {
-            "machines_total": len(machines),
-            "machines_bound": sum(1 for m in machines if m.image_content_sha256),
-            "machines_with_inventory": sum(1 for m in machines if m.inventory),
-            "catalog_total": len(entries),
-            "catalog_fetched": sum(1 for e in entries if getattr(e, "content_sha256", "")),
-            "catalog_images_total": len(images),
-            "catalog_images_fetched": sum(1 for e in images if e.content_sha256),
-            "catalog_bundles_total": len(bundles),
-            "catalog_bundles_fetched": sum(1 for e in bundles if e.content_sha256),
-            "exports_total": len(exports),
-            "exports_running": sum(1 for e in exports if e.status == "running"),
-            "exports_error": sum(1 for e in exports if e.status == "error"),
-        }
+        events = request.app.state.events_log.list(limit=10)
+        stats = _dashboard_stats(request)
         return templates.TemplateResponse(
             request,
             "dashboard.html",
@@ -949,6 +917,81 @@ def create_app() -> FastAPI:
         _auth: None = Depends(require_auth),
     ) -> dict[str, Any]:
         return {"pong": True, "version": pixie.__version__}
+
+    # ---------- dashboard + events live refresh ---------------------
+    #
+    # Two more polling endpoints in the same shape as fetch-states +
+    # machines-live. The dashboard cards + recent-events table poll
+    # these so an operator watching a target fetch complete or a
+    # binding change sees the count tick without a page reload.
+
+    def _dashboard_stats(request: Request) -> dict[str, Any]:
+        """Same shape as ``ui_dashboard`` computes; factored so the
+        JSON endpoint + the HTML render share the calculation."""
+        from pixie.exports._routes import _refresh_row
+
+        catalog = request.app.state.catalog_store
+        exports_store = request.app.state.exports_store
+        machines_store = request.app.state.machines_store
+        events_log = request.app.state.events_log
+        nbd = request.app.state.nbd_server
+        entries = catalog.list_entries()
+        exports = [_refresh_row(e, nbd, exports_store, events_log) for e in exports_store.list()]
+        machines = machines_store.list()
+        images = [e for e in entries if getattr(e, "bindable", False)]
+        bundles = [e for e in entries if not getattr(e, "bindable", False)]
+        return {
+            "machines_total": len(machines),
+            "machines_bound": sum(1 for m in machines if m.image_content_sha256),
+            "machines_with_inventory": sum(1 for m in machines if m.inventory),
+            "catalog_total": len(entries),
+            "catalog_fetched": sum(1 for e in entries if getattr(e, "content_sha256", "")),
+            "catalog_images_total": len(images),
+            "catalog_images_fetched": sum(1 for e in images if e.content_sha256),
+            "catalog_bundles_total": len(bundles),
+            "catalog_bundles_fetched": sum(1 for e in bundles if e.content_sha256),
+            "exports_total": len(exports),
+            "exports_running": sum(1 for e in exports if e.status == "running"),
+            "exports_error": sum(1 for e in exports if e.status == "error"),
+        }
+
+    @app.get("/ui/dashboard-live.json")
+    def ui_dashboard_live(
+        request: Request,
+        _auth: None = Depends(_require_ui_auth),
+    ) -> JSONResponse:
+        return JSONResponse(_dashboard_stats(request))
+
+    @app.get("/ui/events-live.json")
+    def ui_events_live(
+        request: Request,
+        since_ts: str = "",
+        limit: int = 25,
+        _auth: None = Depends(_require_ui_auth),
+    ) -> JSONResponse:
+        """Return the N most recent events. Optional ``since_ts``
+        (a raw ISO string the caller got from a previous poll) trims
+        to rows strictly newer than that stamp so the JS can insert
+        just the new rows into the log. The clamp on ``limit``
+        protects the endpoint against a runaway ``?limit=99999``."""
+        limit = max(1, min(limit, 200))
+        settings_store: SettingsStore = request.app.state.settings_store
+        events = request.app.state.events_log.list(limit=limit)
+        out: list[dict[str, Any]] = []
+        for e in events:
+            if since_ts and e.ts <= since_ts:
+                continue
+            out.append(
+                {
+                    "ts": e.ts,
+                    "ts_display": format_ts(e.ts, settings_store),
+                    "kind": e.kind,
+                    "subject_kind": e.subject_kind,
+                    "subject_id": e.subject_id,
+                    "summary": e.summary or "",
+                }
+            )
+        return JSONResponse({"events": out})
 
     # ---------- live fetch progress ---------------------------------
     #
