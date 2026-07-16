@@ -100,13 +100,13 @@ def upsert_machine(
         # image); ``machine.binding.changed`` when the mode or image
         # actually shifted between the previous state and the new one.
         was_bound = previous is not None and (
-            previous.image_content_sha256 or previous.boot_mode != DEFAULT_BOOT_MODE
+            bool(previous.image_content_sha256) or previous.boot_mode != DEFAULT_BOOT_MODE
         )
         changed = previous is not None and (
             previous.boot_mode != row.boot_mode
             or previous.image_content_sha256 != row.image_content_sha256
         )
-        if was_bound and changed:
+        if previous is not None and was_bound and changed:
             details["previous_boot_mode"] = previous.boot_mode
             if previous.image_content_sha256:
                 details["previous_image_content_sha256"] = previous.image_content_sha256
