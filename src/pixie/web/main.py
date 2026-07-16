@@ -509,6 +509,8 @@ def create_app() -> FastAPI:
         q: str = "",
         page: int = 1,
         per_page: int = DEFAULT_PER_PAGE,
+        sort: str = "",
+        dir: str = "",
         _auth: None = Depends(_require_ui_auth),
     ) -> HTMLResponse:
         """Catalog + exports in one view. Each disk-image entry
@@ -517,7 +519,12 @@ def create_app() -> FastAPI:
         as HTTP artifacts from ``/artifacts/<sha>/{vmlinuz,initrd}``
         rather than over NBD, so no port is meaningful for them."""
         from pixie.exports._routes import _refresh_row
-        from pixie.web._table_state import filter_rows, parse_pagination
+        from pixie.web._table_state import (
+            filter_rows,
+            parse_pagination,
+            parse_sort,
+            sort_rows,
+        )
 
         catalog = request.app.state.catalog_store
         exports_store = request.app.state.exports_store
@@ -528,16 +535,37 @@ def create_app() -> FastAPI:
             refreshed = _refresh_row(row, nbd_server, exports_store, events_log)
             exports_by_sha[refreshed.content_sha256] = refreshed
         all_entries = catalog.list_entries()
-        # Freeform text filter across the fields an operator most
-        # often greps by: display name, source URL, sibling netboot
-        # URL, arch, format tag, description.
         filtered = filter_rows(
             all_entries,
             q,
             fields=("name", "src", "netboot_src", "arch", "format", "description"),
         )
+        sort_state = parse_sort(
+            dict(request.query_params),
+            allowed={
+                "name": "name",
+                "format": "format",
+                "arch": "arch",
+                "added_at": "added_at",
+                "size_bytes": "size_bytes",
+            },
+            default_column="name",
+        )
+        filtered = sort_rows(filtered, sort_state)
         page_state = parse_pagination(dict(request.query_params), total=len(filtered))
         page_entries = filtered[page_state.offset : page_state.offset + page_state.per_page]
+        preserved = {
+            k: v
+            for k, v in {
+                "q": q,
+                "sort": sort_state.column if sort_state.column != "name" else "",
+                "dir": sort_state.direction if sort_state.direction != "asc" else "",
+                "per_page": str(page_state.per_page)
+                if page_state.per_page != DEFAULT_PER_PAGE
+                else "",
+            }.items()
+            if v
+        }
         return templates.TemplateResponse(
             request,
             "catalog.html",
@@ -547,8 +575,9 @@ def create_app() -> FastAPI:
                 "fetch_states": request.app.state.fetch_states,
                 "exports_by_sha": exports_by_sha,
                 "q": q,
+                "sort": sort_state,
                 "page_state": page_state,
-                "total_entries": len(all_entries),
+                "preserved": preserved,
                 "authed": True,
                 "page": "catalog",
             },
@@ -650,9 +679,16 @@ def create_app() -> FastAPI:
         q: str = "",
         page: int = 1,
         per_page: int = DEFAULT_PER_PAGE,
+        sort: str = "",
+        dir: str = "",
         _auth: None = Depends(_require_ui_auth),
     ) -> HTMLResponse:
-        from pixie.web._table_state import filter_rows, parse_pagination
+        from pixie.web._table_state import (
+            filter_rows,
+            parse_pagination,
+            parse_sort,
+            sort_rows,
+        )
 
         all_machines = request.app.state.machines_store.list()
         filtered = filter_rows(
@@ -660,8 +696,33 @@ def create_app() -> FastAPI:
             q,
             fields=("mac", "boot_mode", "image_content_sha256", "last_seen_ip"),
         )
+        sort_state = parse_sort(
+            dict(request.query_params),
+            allowed={
+                "mac": "mac",
+                "boot_mode": "boot_mode",
+                "last_seen_at": "last_seen_at",
+                "last_seen_ip": "last_seen_ip",
+                "discovered_at": "discovered_at",
+            },
+            default_column="last_seen_at",
+            default_direction="desc",
+        )
+        filtered = sort_rows(filtered, sort_state)
         page_state = parse_pagination(dict(request.query_params), total=len(filtered))
         page_machines = filtered[page_state.offset : page_state.offset + page_state.per_page]
+        preserved = {
+            k: v
+            for k, v in {
+                "q": q,
+                "sort": sort_state.column if sort_state.column != "last_seen_at" else "",
+                "dir": sort_state.direction if sort_state.direction != "desc" else "",
+                "per_page": str(page_state.per_page)
+                if page_state.per_page != DEFAULT_PER_PAGE
+                else "",
+            }.items()
+            if v
+        }
         return templates.TemplateResponse(
             request,
             "machines.html",
@@ -669,8 +730,9 @@ def create_app() -> FastAPI:
                 "version": pixie.__version__,
                 "machines": page_machines,
                 "q": q,
+                "sort": sort_state,
                 "page_state": page_state,
-                "total_machines": len(all_machines),
+                "preserved": preserved,
                 "authed": True,
                 "page": "machines",
             },
@@ -761,21 +823,48 @@ def create_app() -> FastAPI:
         q: str = "",
         page: int = 1,
         per_page: int = DEFAULT_PER_PAGE,
+        sort: str = "",
+        dir: str = "",
         _auth: None = Depends(_require_ui_auth),
     ) -> HTMLResponse:
-        from pixie.web._table_state import filter_rows, parse_pagination
+        from pixie.web._table_state import (
+            filter_rows,
+            parse_pagination,
+            parse_sort,
+            sort_rows,
+        )
 
-        # Cap the pull at 2000 so a very long events log doesn't
-        # blow up in-memory filtering. Post-pagination we still
-        # only render one page.
         all_events = request.app.state.events_log.list(limit=2000)
         filtered = filter_rows(
             all_events,
             q,
             fields=("kind", "subject_kind", "subject_id", "summary", "ts"),
         )
+        sort_state = parse_sort(
+            dict(request.query_params),
+            allowed={
+                "ts": "ts",
+                "kind": "kind",
+                "subject_id": "subject_id",
+            },
+            default_column="ts",
+            default_direction="desc",
+        )
+        filtered = sort_rows(filtered, sort_state)
         page_state = parse_pagination(dict(request.query_params), total=len(filtered))
         page_events = filtered[page_state.offset : page_state.offset + page_state.per_page]
+        preserved = {
+            k: v
+            for k, v in {
+                "q": q,
+                "sort": sort_state.column if sort_state.column != "ts" else "",
+                "dir": sort_state.direction if sort_state.direction != "desc" else "",
+                "per_page": str(page_state.per_page)
+                if page_state.per_page != DEFAULT_PER_PAGE
+                else "",
+            }.items()
+            if v
+        }
         return templates.TemplateResponse(
             request,
             "events.html",
@@ -783,8 +872,9 @@ def create_app() -> FastAPI:
                 "version": pixie.__version__,
                 "events": page_events,
                 "q": q,
+                "sort": sort_state,
                 "page_state": page_state,
-                "total_events": len(all_events),
+                "preserved": preserved,
                 "authed": True,
                 "page": "events",
             },

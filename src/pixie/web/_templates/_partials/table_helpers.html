@@ -1,104 +1,188 @@
-{# Shared UI bits for paginated + filterable tables. The macros are
-   thin wrappers around Bootstrap; every attribute the operator
-   toggles (?q=, ?page=, ?per_page=) is round-tripped through the
-   URL so a page is bookmarkable + survives a form submit.
+{# Table helpers -- ported from bty's ``_table_macros.html`` shape so
+   an operator moving between the two consoles reads the same
+   toolbar layout.
+
+   Callers pass a :class:`SortState`, a :class:`PageState`, and a
+   ``preserved`` dict of query params to carry across every link
+   (filter survives sort clicks; sort survives pagination clicks;
+   per_page survives everything). The macros are shape-agnostic:
+   they don't care whether the underlying rows come from an
+   in-memory list or a SQL LIMIT/OFFSET query.
+
+   Layout intent:
+
+   * The filter form + the pagination live TOGETHER on the card
+     header row -- NOT in a separate subnav or a card footer. That
+     way the operator's eye lands on "who am I looking at" (the
+     title label), "what am I looking for" (the filter), and "how
+     many are there" (the pagination) in one horizontal sweep.
+   * Column headers are clickable ``<a>``s inside ``<th>``: click
+     to sort, click again to reverse. Active column shows a solid
+     up/down triangle; inactive columns show a faded up-down glyph
+     to hint they are sortable.
 
    Macros:
-     search_form(action, q, preserved) : inline subnav search field.
-     pagination(page, q, preserved)    : Prev / numbered / Next footer.
-#}
 
-{% macro search_form(action, q, per_page) -%}
-{# Inline freeform-text filter. Same subnav-actions shape bty uses on
-   its /ui/machines + /ui/events pages: a single input + Filter
-   button + optional Clear cross. ``per_page`` survives via a hidden
-   input; ``page`` intentionally does NOT so a fresh query resets to
-   page 1. Widened enough for a real query so the affordance reads as
-   "filter this table" rather than a stray icon-in-a-corner. #}
+   * ``search_input(name_or_url, q, preserved, placeholder)`` --
+     inline search-and-clear form; sits on the LEFT of the card
+     header row.
+   * ``sort_header(label, column, sort, preserved, th_attrs)`` --
+     a ``<th>`` cell whose contents click to sort.
+   * ``pagination_inline(page, preserved, label)`` -- the totals
+     line + numbered nav + per-page selector; sits on the RIGHT
+     of the card header row via ``ms-auto``. #}
+
+
+{% macro search_input(action, q, preserved, placeholder='freeform filter') -%}
+{# Inline search + Search + Clear. Uses ``type="search"`` so
+   browsers render the built-in clear-X inside the box; the ``m-0``
+   + ``flex-grow-1`` shape survives a narrow viewport by wrapping
+   below the pagination.
+
+   ``preserved`` is a dict of {name: value} query params to preserve
+   as hidden inputs. ``page`` is intentionally NOT preserved -- a
+   fresh query resets to page 1. #}
 <form method="get" action="{{ action }}"
-      class="subnav-actions d-flex align-items-center gap-1 m-0">
-    <label for="filter-q" class="text-white-50 small mb-0 flex-shrink-0" title="Freeform filter">
-        <i class="bi bi-funnel"></i>
+      class="d-flex align-items-center gap-2 m-0 flex-grow-1"
+      style="min-width: 16rem;">
+    {% for k, v in preserved.items() %}
+        {% if v and k not in ('q', 'page') %}
+        <input type="hidden" name="{{ k }}" value="{{ v }}">
+        {% endif %}
+    {% endfor %}
+    <label for="filter-q" class="text-nowrap text-muted small mb-0">
+        <i class="bi bi-funnel"></i> Filter:
     </label>
-    <input type="search" id="filter-q" name="q" value="{{ q or '' }}"
-           class="form-control form-control-sm"
-           style="width: 20rem; min-width: 12rem;"
-           placeholder="filter (any field)"
+    <input type="search" name="q" id="filter-q" value="{{ q or '' }}"
+           class="form-control form-control-sm flex-grow-1"
+           placeholder="{{ placeholder }}"
            aria-label="Filter this table">
-    {% if per_page and per_page != 25 %}
-    <input type="hidden" name="per_page" value="{{ per_page }}">
-    {% endif %}
-    <button type="submit" class="btn btn-sm btn-outline-light flex-shrink-0 text-nowrap">
-        <i class="bi bi-search me-1"></i>Filter
+    <button type="submit" class="btn btn-sm btn-outline-secondary" title="Search">
+        <i class="bi bi-search"></i>
     </button>
     {% if q %}
-    <a href="{{ action }}{% if per_page and per_page != 25 %}?per_page={{ per_page }}{% endif %}"
-       class="btn btn-sm btn-outline-light flex-shrink-0 text-nowrap"
-       title="Clear filter">
-        <i class="bi bi-x-lg"></i>
-    </a>
+    <a href="?{{ _qs(preserved, {'q': None, 'page': None}) }}"
+       class="btn btn-sm btn-link text-nowrap"
+       title="Clear filter">Clear</a>
     {% endif %}
 </form>
 {%- endmacro %}
 
-{% macro pagination(page, base_url, q, per_page) -%}
-{# ``base_url`` is the page's own URL without a query string; the
-   macro appends ?page=... / ?q=... etc. ``page`` is a PageState
-   from _table_state.parse_pagination. #}
-{% set qs_common = {'q': q, 'per_page': (per_page if per_page and per_page != 25 else '')} %}
-<div class="card-footer bg-light d-flex align-items-center flex-wrap gap-2">
-    <span class="text-muted small">
-        Showing {{ page.first_row }}-{{ page.last_row }} of {{ page.total }}
-    </span>
-    <nav class="ms-auto d-flex align-items-center gap-2">
-        <div class="btn-group btn-group-sm" role="group">
-            {# Prev #}
-            {% if page.has_prev %}
-            <a class="btn btn-outline-secondary"
-               href="{{ base_url }}?{{ _qs(qs_common, {'page': page.page - 1}) }}">
-                <i class="bi bi-chevron-left"></i>
-            </a>
-            {% else %}
-            <button class="btn btn-outline-secondary" disabled>
-                <i class="bi bi-chevron-left"></i>
-            </button>
+
+{% macro sort_header(label, column, sort, preserved, th_attrs='') -%}
+{# Sortable column header. Clicking flips direction on the active
+   column or starts a fresh asc on any other column.
+
+   Arrow indicator convention (matches bty):
+
+   * Active + asc  -> filled ▲ in accent colour
+   * Active + desc -> filled ▼ in accent colour
+   * Inactive       -> faded ↕ so the header still telegraphs
+     "this is sortable" without competing with the active one. #}
+{% set qs = _qs(preserved, {'sort': column, 'dir': sort.next_direction(column), 'page': None}) %}
+<th{% if th_attrs %} {{ th_attrs|safe }}{% endif %}>
+    <a href="?{{ qs }}" class="text-decoration-none text-reset"
+       aria-label="Sort by {{ label }}">
+        {{ label }}
+        {% if sort.is_active(column) %}
+        <span class="text-primary" aria-hidden="true">{% if sort.direction == 'asc' %}&#9650;{% else %}&#9660;{% endif %}</span>
+        {% else %}
+        <span class="text-muted" aria-hidden="true">&#8645;</span>
+        {% endif %}
+    </a>
+</th>
+{%- endmacro %}
+
+
+{% macro pagination_inline(page, preserved, label='rows') -%}
+{# Compact pagination that fits on one card-header row alongside a
+   filter form. Renders the "1-25 of 200 events" line as inline
+   muted text, then the Bootstrap ``pagination pagination-sm`` list
+   (« « ‹ 1 2 [3] 4 5 › » »), then the per-page selector.
+
+   The pagination list follows bty's shape: first/prev/window/next/
+   last with ``…`` ellipses when the window doesn't touch the ends.
+   Numbered ``.page-link`` inside ``<li class="page-item">`` is the
+   Bootstrap-native shape (not a btn-group). #}
+<div class="d-flex flex-wrap align-items-center gap-2 ms-auto">
+    <small class="text-muted">
+        {% if page.total == 0 %}
+        No {{ label }}.
+        {% else %}
+        <strong>{{ page.first_row }}</strong>&ndash;<strong>{{ page.last_row }}</strong>
+        of <strong>{{ page.total }}</strong> {{ label }}
+        {% endif %}
+    </small>
+
+    {% if page.last_page > 1 %}
+    <ul class="pagination pagination-sm mb-0">
+        <li class="page-item{% if not page.has_prev %} disabled{% endif %}">
+            <a class="page-link"
+               href="?{{ _qs(preserved, {'page': 1}) }}"
+               aria-label="First page">&laquo;&laquo;</a>
+        </li>
+        <li class="page-item{% if not page.has_prev %} disabled{% endif %}">
+            <a class="page-link"
+               href="?{{ _qs(preserved, {'page': page.page - 1}) }}"
+               aria-label="Previous page">&laquo;</a>
+        </li>
+        {% set nums = page.numbered_pages() %}
+        {% if nums[0] > 1 %}
+        <li class="page-item">
+            <a class="page-link" href="?{{ _qs(preserved, {'page': 1}) }}">1</a>
+        </li>
+        {% if nums[0] > 2 %}
+        <li class="page-item disabled"><span class="page-link">&hellip;</span></li>
+        {% endif %}
+        {% endif %}
+        {% for n in nums %}
+        <li class="page-item{% if n == page.page %} active{% endif %}">
+            <a class="page-link"
+               href="?{{ _qs(preserved, {'page': n}) }}"
+               {% if n == page.page %}aria-current="page"{% endif %}>{{ n }}</a>
+        </li>
+        {% endfor %}
+        {% if nums[-1] < page.last_page %}
+        {% if nums[-1] < page.last_page - 1 %}
+        <li class="page-item disabled"><span class="page-link">&hellip;</span></li>
+        {% endif %}
+        <li class="page-item">
+            <a class="page-link"
+               href="?{{ _qs(preserved, {'page': page.last_page}) }}">{{ page.last_page }}</a>
+        </li>
+        {% endif %}
+        <li class="page-item{% if not page.has_next %} disabled{% endif %}">
+            <a class="page-link"
+               href="?{{ _qs(preserved, {'page': page.page + 1}) }}"
+               aria-label="Next page">&raquo;</a>
+        </li>
+        <li class="page-item{% if not page.has_next %} disabled{% endif %}">
+            <a class="page-link"
+               href="?{{ _qs(preserved, {'page': page.last_page}) }}"
+               aria-label="Last page">&raquo;&raquo;</a>
+        </li>
+    </ul>
+    {% endif %}
+
+    {# Per-page selector as a GET-form: submits with all preserved
+       params as hidden inputs but drops ``page`` so the choice
+       always lands on page 1. #}
+    <form method="get" class="d-flex align-items-center gap-1 mb-0">
+        {% for k, v in preserved.items() %}
+            {% if v and k not in ('per_page', 'page') %}
+            <input type="hidden" name="{{ k }}" value="{{ v }}">
             {% endif %}
-            {# Numbered window #}
-            {% for n in page.numbered_pages() %}
-            {% if n == page.page %}
-            <button class="btn btn-primary" disabled>{{ n }}</button>
-            {% else %}
-            <a class="btn btn-outline-secondary"
-               href="{{ base_url }}?{{ _qs(qs_common, {'page': n}) }}">{{ n }}</a>
-            {% endif %}
+        {% endfor %}
+        <select name="per_page"
+                class="form-select form-select-sm"
+                style="width: auto;"
+                onchange="this.form.submit()"
+                aria-label="Rows per page">
+            {% for choice in (10, 25, 50, 100) %}
+            <option value="{{ choice }}"
+                    {% if choice == page.per_page %}selected{% endif %}>{{ choice }}</option>
             {% endfor %}
-            {# Next #}
-            {% if page.has_next %}
-            <a class="btn btn-outline-secondary"
-               href="{{ base_url }}?{{ _qs(qs_common, {'page': page.page + 1}) }}">
-                <i class="bi bi-chevron-right"></i>
-            </a>
-            {% else %}
-            <button class="btn btn-outline-secondary" disabled>
-                <i class="bi bi-chevron-right"></i>
-            </button>
-            {% endif %}
-        </div>
-        {# per-page selector #}
-        <form method="get" action="{{ base_url }}" class="d-flex align-items-center gap-1">
-            <label for="per-page-select" class="text-muted small mb-0">per page</label>
-            <select id="per-page-select" name="per_page"
-                    class="form-select form-select-sm" style="width: auto;"
-                    onchange="this.form.submit()">
-                {% for choice in (10, 25, 50, 100) %}
-                <option value="{{ choice }}"
-                        {% if choice == page.per_page %}selected{% endif %}>
-                    {{ choice }}
-                </option>
-                {% endfor %}
-            </select>
-            {% if q %}<input type="hidden" name="q" value="{{ q }}">{% endif %}
-        </form>
-    </nav>
+        </select>
+    </form>
 </div>
 {%- endmacro %}
