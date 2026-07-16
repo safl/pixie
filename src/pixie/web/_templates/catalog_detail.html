@@ -1,0 +1,232 @@
+{% extends "layout.html" %}
+{% block title %}{{ entry.name }} - Catalog - pixie{% endblock %}
+{% block subnav %}
+<nav class="navbar subnav-strip" aria-label="Section sub-navigation">
+    <div class="container">
+        <span class="subnav-jumps d-flex align-items-center flex-wrap">
+            <a href="/ui/catalog"><i class="bi bi-arrow-left me-1"></i>Catalog</a>
+            <span class="vr"></span>
+            <span class="text-white-50"><code>{{ entry.name }}</code></span>
+        </span>
+    </div>
+</nav>
+{% endblock %}
+{% block content %}
+<div class="card shadow-sm mb-4">
+    <div class="card-header bg-light d-flex align-items-center">
+        <h2 class="h5 mb-0">
+            {% if entry.bindable %}
+            <i class="bi bi-hdd me-2"></i>
+            {% else %}
+            <i class="bi bi-box-seam me-2"></i>
+            {% endif %}
+            <code>{{ entry.name }}</code>
+        </h2>
+        <span class="ms-auto">
+            {% if entry.bindable %}
+            <span class="badge text-bg-primary"><i class="bi bi-hdd me-1"></i>Disk image</span>
+            {% else %}
+            <span class="badge text-bg-info"><i class="bi bi-box-seam me-1"></i>Netboot bundle</span>
+            {% endif %}
+        </span>
+    </div>
+    <div class="card-body">
+        {% if entry.description %}
+        <p class="mb-3">{{ entry.description }}</p>
+        {% else %}
+        <p class="text-muted small mb-3">
+            <i class="bi bi-info-circle me-1"></i>No description recorded.
+            {% if not entry.bindable %}
+            Netboot bundles are usually the sibling of a disk-image entry; see below for the pairing.
+            {% endif %}
+        </p>
+        {% endif %}
+        <dl class="row mb-0">
+            <dt class="col-sm-3 text-muted small">Format</dt>
+            <dd class="col-sm-9">
+                <span class="badge text-bg-secondary">{{ entry.format }}</span>
+                {% if entry.arch %}<span class="ms-1 text-muted small">{{ entry.arch }}</span>{% endif %}
+            </dd>
+            <dt class="col-sm-3 text-muted small">Source</dt>
+            <dd class="col-sm-9"><code class="user-select-all">{{ entry.src }}</code></dd>
+            {% if entry.netboot_src %}
+            <dt class="col-sm-3 text-muted small">Netboot sibling URL</dt>
+            <dd class="col-sm-9"><code class="user-select-all">{{ entry.netboot_src }}</code></dd>
+            {% endif %}
+            <dt class="col-sm-3 text-muted small">Fetch state</dt>
+            <dd class="col-sm-9">
+                {% if fetch_state.state == 'fetching' %}
+                <span class="badge text-bg-primary"><i class="bi bi-arrow-down-circle me-1"></i>fetching</span>
+                {% elif fetch_state.state == 'error' %}
+                <span class="badge text-bg-danger"><i class="bi bi-exclamation-circle me-1"></i>error</span>
+                <div class="text-muted small">{{ fetch_state.error }}</div>
+                {% elif entry.content_sha256 %}
+                <span class="badge text-bg-success"><i class="bi bi-check-circle me-1"></i>fetched</span>
+                {% if entry.fetched_at %}<span class="text-muted small ms-2">at {{ entry.fetched_at }}</span>{% endif %}
+                {% else %}
+                <span class="badge text-bg-secondary"><i class="bi bi-dash-circle me-1"></i>not fetched</span>
+                {% endif %}
+            </dd>
+            {% if entry.content_sha256 %}
+            <dt class="col-sm-3 text-muted small">Content sha</dt>
+            <dd class="col-sm-9"><code class="user-select-all">{{ entry.content_sha256 }}</code></dd>
+            {% endif %}
+            {% if entry.size_bytes %}
+            <dt class="col-sm-3 text-muted small">Size</dt>
+            <dd class="col-sm-9 font-monospace">{{ entry.size_bytes }} bytes</dd>
+            {% endif %}
+            <dt class="col-sm-3 text-muted small">Added at</dt>
+            <dd class="col-sm-9 small text-muted">{{ entry.added_at }}</dd>
+        </dl>
+    </div>
+    <div class="card-footer bg-light py-2">
+        <form method="post" action="/ui/catalog/fetch" class="d-inline">
+            <input type="hidden" name="name" value="{{ entry.name }}">
+            {% if fetch_state.state == 'fetching' %}
+            <button type="submit" class="btn btn-sm btn-outline-primary" disabled>
+                <i class="bi bi-hourglass-split me-1"></i>Fetching
+            </button>
+            {% else %}
+            <button type="submit" class="btn btn-sm btn-outline-primary">
+                <i class="bi bi-arrow-down-circle me-1"></i>{% if fetch_state.state == 'error' %}Retry{% else %}Fetch{% endif %}
+            </button>
+            {% endif %}
+        </form>
+        <form method="post" action="/ui/catalog/delete" class="d-inline">
+            <input type="hidden" name="name" value="{{ entry.name }}">
+            <button type="submit" class="btn btn-sm btn-outline-danger">
+                <i class="bi bi-trash me-1"></i>Delete
+            </button>
+        </form>
+    </div>
+</div>
+
+{# NBD serving state, disk images only #}
+{% if entry.bindable %}
+<div class="card shadow-sm mb-4">
+    <div class="card-header bg-light">
+        <h2 class="h5 mb-0"><i class="bi bi-hdd-network me-2"></i>NBD serving</h2>
+    </div>
+    <div class="card-body">
+        {% if export is none %}
+        <p class="text-muted mb-0 small">
+            <i class="bi bi-dash-circle me-1"></i>
+            Not currently exported. An NBD export is spawned automatically when a machine
+            is bound to <code>boot_mode=ramboot</code> pointing at this entry.
+        </p>
+        {% else %}
+        <dl class="row mb-0">
+            <dt class="col-sm-3 text-muted small">Status</dt>
+            <dd class="col-sm-9">
+                {% if export.status == 'running' %}
+                <span class="badge text-bg-success"><i class="bi bi-broadcast me-1"></i>running</span>
+                {% elif export.status == 'error' %}
+                <span class="badge text-bg-danger"><i class="bi bi-exclamation-circle me-1"></i>error</span>
+                <div class="text-danger small">{{ export.error }}</div>
+                {% else %}
+                <span class="badge text-bg-secondary">{{ export.status }}</span>
+                {% endif %}
+            </dd>
+            <dt class="col-sm-3 text-muted small">NBD port</dt>
+            <dd class="col-sm-9 font-monospace">{{ export.nbd_port or '-' }}</dd>
+            <dt class="col-sm-3 text-muted small">Export name</dt>
+            <dd class="col-sm-9"><code class="user-select-all">{{ export.name }}</code></dd>
+        </dl>
+        {% endif %}
+    </div>
+</div>
+{% endif %}
+
+{# Relation: this entry -> its netboot sibling (disk images) #}
+{% if entry.bindable and entry.netboot_src %}
+<div class="card shadow-sm mb-4">
+    <div class="card-header bg-light">
+        <h2 class="h5 mb-0">
+            <i class="bi bi-box-seam me-2"></i>Netboot bundle sibling
+        </h2>
+    </div>
+    <div class="card-body">
+        {% if netboot_sibling is none %}
+        <p class="text-muted mb-0 small">
+            <i class="bi bi-question-circle me-1"></i>
+            No catalog entry matches <code>{{ entry.netboot_src }}</code>.
+            Import the sibling bundle to enable ramboot for this disk image.
+        </p>
+        {% else %}
+        <p class="mb-2 small">
+            Ramboot for <code>{{ entry.name }}</code> chains into this bundle's kernel + initrd:
+        </p>
+        <ul class="list-group list-group-flush">
+            <li class="list-group-item d-flex align-items-center">
+                <div class="flex-grow-1">
+                    <a href="/ui/catalog/{{ netboot_sibling.name }}"
+                       class="fw-semibold text-decoration-none">
+                        <code>{{ netboot_sibling.name }}</code>
+                    </a>
+                    <div class="text-muted small">
+                        <span class="badge text-bg-secondary">{{ netboot_sibling.format }}</span>
+                        {% if netboot_sibling.fetched %}
+                        <span class="badge text-bg-success ms-1">fetched</span>
+                        {% else %}
+                        <span class="badge text-bg-secondary ms-1">not fetched</span>
+                        {% endif %}
+                    </div>
+                </div>
+                <i class="bi bi-arrow-right text-muted"></i>
+            </li>
+        </ul>
+        {% endif %}
+    </div>
+</div>
+{% endif %}
+
+{# Reverse relation: netboot bundles show every disk image pointing at them #}
+{% if not entry.bindable and disk_image_users %}
+<div class="card shadow-sm mb-4">
+    <div class="card-header bg-light">
+        <h2 class="h5 mb-0">
+            <i class="bi bi-hdd me-2"></i>Disk images using this bundle
+        </h2>
+    </div>
+    <div class="card-body">
+        <p class="mb-2 small">
+            Every disk image that names <code>{{ entry.src }}</code> as its
+            <code>netboot_src</code> boots with this bundle's kernel + initrd.
+        </p>
+        <ul class="list-group list-group-flush">
+            {% for e in disk_image_users %}
+            <li class="list-group-item d-flex align-items-center">
+                <div class="flex-grow-1">
+                    <a href="/ui/catalog/{{ e.name }}"
+                       class="fw-semibold text-decoration-none">
+                        <code>{{ e.name }}</code>
+                    </a>
+                    <div class="text-muted small">
+                        <span class="badge text-bg-secondary">{{ e.format }}</span>
+                        {% if e.arch %}<span class="ms-1">{{ e.arch }}</span>{% endif %}
+                        {% if e.fetched %}
+                        <span class="badge text-bg-success ms-1">fetched</span>
+                        {% else %}
+                        <span class="badge text-bg-secondary ms-1">not fetched</span>
+                        {% endif %}
+                    </div>
+                </div>
+                <i class="bi bi-arrow-right text-muted"></i>
+            </li>
+            {% endfor %}
+        </ul>
+    </div>
+</div>
+{% endif %}
+
+{% if not entry.bindable and not disk_image_users %}
+<div class="card shadow-sm">
+    <div class="card-body">
+        <p class="text-muted small mb-0">
+            <i class="bi bi-info-circle me-1"></i>
+            No disk-image entry names this bundle as its <code>netboot_src</code> yet.
+        </p>
+    </div>
+</div>
+{% endif %}
+{% endblock %}

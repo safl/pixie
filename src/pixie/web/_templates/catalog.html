@@ -1,31 +1,30 @@
 {% extends "layout.html" %}
+{% from "_partials/table_helpers.html" import search_form, pagination %}
 {% block title %}Catalog - pixie{% endblock %}
 {% block subnav %}
-<div class="subnav-strip">
+<nav class="navbar subnav-strip" aria-label="Section sub-navigation">
     <div class="container">
-        <span class="text-white-50 me-2">Catalog</span>
-        {# Inline import form: paste a catalog.toml URL (bty publishes
-           one at ``GET /catalog.toml``; nosi ships one per release);
-           /ui/catalog/import fetches, parses, and upserts each entry
-           in one round-trip. Same subnav-inline pattern bty uses for
-           its filter chips so the operator's eye stays on one row. #}
+        <span class="subnav-jumps d-flex align-items-center flex-wrap">
+            <a href="#catalog">Catalog</a>
+        </span>
+        {{ search_form("/ui/catalog", q, page_state.per_page) }}
         <form method="post" action="/ui/catalog/import"
-              class="d-flex align-items-center gap-2 me-auto">
-            <label for="catalog_url" class="text-muted small mb-0">Import URL</label>
+              class="subnav-actions d-flex align-items-center gap-1 m-0 ms-auto">
+            <label for="catalog_url" class="text-white-50 small mb-0 flex-shrink-0"
+                   title="Import a catalog.toml URL">
+                <i class="bi bi-cloud-arrow-down"></i>
+            </label>
             <input type="url" id="catalog_url" name="url"
                    class="form-control form-control-sm"
-                   style="min-width: 22rem;"
-                   placeholder="https://example.com/catalog.toml"
+                   style="max-width: 22rem; min-width: 0;"
+                   placeholder="catalog.toml URL"
                    required>
-            <button type="submit" class="btn btn-sm btn-primary">
-                <i class="bi bi-cloud-arrow-down me-1"></i>Import
+            <button type="submit" class="btn btn-sm btn-primary flex-shrink-0 text-nowrap">
+                Import
             </button>
         </form>
-        <span class="text-muted small">
-            {{ entries|length }} entr{{ 'y' if entries|length == 1 else 'ies' }}
-        </span>
     </div>
-</div>
+</nav>
 {% endblock %}
 {% block content %}
 <div class="card shadow-sm">
@@ -54,7 +53,11 @@
                 {% set exp = exports_by_sha.get(e.content_sha256) if e.content_sha256 else none %}
                 <tr>
                     <td>
-                        <div class="fw-semibold"><code>{{ e.name }}</code></div>
+                        <div class="fw-semibold">
+                            <a href="/ui/catalog/{{ e.name }}" class="text-decoration-none">
+                                <code>{{ e.name }}</code>
+                            </a>
+                        </div>
                         {% if e.description %}
                         <div class="text-muted small">{{ e.description }}</div>
                         {% endif %}
@@ -180,11 +183,18 @@
     <div class="card-body">
         <p class="text-muted mb-0">
             <i class="bi bi-inbox me-1"></i>
+            {% if q %}
+            No entries match <code>{{ q }}</code>.
+            {% else %}
             No entries yet. Paste a catalog URL in the bar above and hit Import;
             entries land here staged (not fetched) so you can pick the ones to
             pull with Fetch.
+            {% endif %}
         </p>
     </div>
+    {% endif %}
+    {% if page_state.total > page_state.per_page %}
+    {{ pagination(page_state, "/ui/catalog", q, page_state.per_page) }}
     {% endif %}
 </div>
 {% endblock %}

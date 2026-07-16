@@ -1,14 +1,15 @@
 {% extends "layout.html" %}
+{% from "_partials/table_helpers.html" import search_form, pagination %}
 {% block title %}Machines - pixie{% endblock %}
 {% block subnav %}
-<div class="subnav-strip">
+<nav class="navbar subnav-strip" aria-label="Section sub-navigation">
     <div class="container">
-        <span class="text-white-50">Machines</span>
-        <span class="text-muted small ms-auto">
-            {{ machines|length }} machine{{ '' if machines|length == 1 else 's' }}
+        <span class="subnav-jumps d-flex align-items-center flex-wrap">
+            <a href="#known">Machines</a>
         </span>
+        {{ search_form("/ui/machines", q, page_state.per_page) }}
     </div>
-</div>
+</nav>
 {% endblock %}
 {% block content %}
 <div class="card shadow-sm mb-4" id="known">
@@ -95,10 +96,17 @@
     <div class="card-body">
         <p class="text-muted mb-0">
             <i class="bi bi-inbox me-1"></i>
+            {% if q %}
+            No machines match <code>{{ q }}</code>.
+            {% else %}
             No machines yet. Machines appear when a PXE-booting target hits
             <code>/pxe/&lt;mac&gt;</code>; open a machine to edit its binding.
+            {% endif %}
         </p>
     </div>
+    {% endif %}
+    {% if page_state.total > page_state.per_page %}
+    {{ pagination(page_state, "/ui/machines", q, page_state.per_page) }}
     {% endif %}
 </div>
 {% endblock %}

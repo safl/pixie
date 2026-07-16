@@ -95,6 +95,19 @@ class CatalogEntry:
         serve over NBD. Netboot bundles return False."""
         return self.format in BINDABLE_FORMATS
 
+    @property
+    def bindable(self) -> bool:
+        """Attribute-style alias of :meth:`is_bindable` so Jinja
+        templates + ``getattr(entry, 'bindable', False)`` filters
+        work without the ``()`` call. Same value; do not diverge."""
+        return self.is_bindable()
+
+    @property
+    def fetched(self) -> bool:
+        """Attribute-style alias of :meth:`is_fetched` for the same
+        Jinja / getattr convenience as :attr:`bindable`."""
+        return self.is_fetched()
+
     def to_dict(self) -> dict[str, Any]:
         """JSON-serialisable view. Skips zero-y fields so the JSON
         stays compact + easy to grep."""

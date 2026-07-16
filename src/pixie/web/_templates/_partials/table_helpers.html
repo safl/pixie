@@ -1,0 +1,103 @@
+{# Shared UI bits for paginated + filterable tables. The macros are
+   thin wrappers around Bootstrap; every attribute the operator
+   toggles (?q=, ?page=, ?per_page=) is round-tripped through the
+   URL so a page is bookmarkable + survives a form submit.
+
+   Macros:
+     search_form(action, q, preserved) : inline subnav search field.
+     pagination(page, q, preserved)    : Prev / numbered / Next footer.
+#}
+
+{% macro search_form(action, q, per_page) -%}
+{# Inline freeform-text filter. Same subnav-actions shape bty uses on
+   its /ui/machines + /ui/events pages: a single input + Filter
+   button + optional Clear cross. ``per_page`` survives via a hidden
+   input; ``page`` intentionally does NOT so a fresh query resets to
+   page 1. Kept narrow so a subnav with several inline forms still
+   fits on a typical laptop width without wrapping. #}
+<form method="get" action="{{ action }}"
+      class="subnav-actions d-flex align-items-center gap-1 m-0">
+    <label for="filter-q" class="text-white-50 small mb-0 flex-shrink-0" title="Filter">
+        <i class="bi bi-funnel"></i>
+    </label>
+    <input type="text" id="filter-q" name="q" value="{{ q or '' }}"
+           class="form-control form-control-sm"
+           style="max-width: 16rem; min-width: 0;"
+           placeholder="filter">
+    {% if per_page and per_page != 25 %}
+    <input type="hidden" name="per_page" value="{{ per_page }}">
+    {% endif %}
+    <button type="submit" class="btn btn-sm btn-outline-light flex-shrink-0 text-nowrap">
+        Filter
+    </button>
+    {% if q %}
+    <a href="{{ action }}{% if per_page and per_page != 25 %}?per_page={{ per_page }}{% endif %}"
+       class="btn btn-sm btn-outline-light flex-shrink-0 text-nowrap"
+       title="Clear filter">
+        <i class="bi bi-x-lg"></i>
+    </a>
+    {% endif %}
+</form>
+{%- endmacro %}
+
+{% macro pagination(page, base_url, q, per_page) -%}
+{# ``base_url`` is the page's own URL without a query string; the
+   macro appends ?page=... / ?q=... etc. ``page`` is a PageState
+   from _table_state.parse_pagination. #}
+{% set qs_common = {'q': q, 'per_page': (per_page if per_page and per_page != 25 else '')} %}
+<div class="card-footer bg-light d-flex align-items-center flex-wrap gap-2">
+    <span class="text-muted small">
+        Showing {{ page.first_row }}-{{ page.last_row }} of {{ page.total }}
+    </span>
+    <nav class="ms-auto d-flex align-items-center gap-2">
+        <div class="btn-group btn-group-sm" role="group">
+            {# Prev #}
+            {% if page.has_prev %}
+            <a class="btn btn-outline-secondary"
+               href="{{ base_url }}?{{ _qs(qs_common, {'page': page.page - 1}) }}">
+                <i class="bi bi-chevron-left"></i>
+            </a>
+            {% else %}
+            <button class="btn btn-outline-secondary" disabled>
+                <i class="bi bi-chevron-left"></i>
+            </button>
+            {% endif %}
+            {# Numbered window #}
+            {% for n in page.numbered_pages() %}
+            {% if n == page.page %}
+            <button class="btn btn-primary" disabled>{{ n }}</button>
+            {% else %}
+            <a class="btn btn-outline-secondary"
+               href="{{ base_url }}?{{ _qs(qs_common, {'page': n}) }}">{{ n }}</a>
+            {% endif %}
+            {% endfor %}
+            {# Next #}
+            {% if page.has_next %}
+            <a class="btn btn-outline-secondary"
+               href="{{ base_url }}?{{ _qs(qs_common, {'page': page.page + 1}) }}">
+                <i class="bi bi-chevron-right"></i>
+            </a>
+            {% else %}
+            <button class="btn btn-outline-secondary" disabled>
+                <i class="bi bi-chevron-right"></i>
+            </button>
+            {% endif %}
+        </div>
+        {# per-page selector #}
+        <form method="get" action="{{ base_url }}" class="d-flex align-items-center gap-1">
+            <label for="per-page-select" class="text-muted small mb-0">per page</label>
+            <select id="per-page-select" name="per_page"
+                    class="form-select form-select-sm" style="width: auto;"
+                    onchange="this.form.submit()">
+                {% for choice in (10, 25, 50, 100) %}
+                <option value="{{ choice }}"
+                        {% if choice == page.per_page %}selected{% endif %}>
+                    {{ choice }}
+                </option>
+                {% endfor %}
+            </select>
+            {% if q %}<input type="hidden" name="q" value="{{ q }}">{% endif %}
+        </form>
+    </nav>
+</div>
+{%- endmacro %}
