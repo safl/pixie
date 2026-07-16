@@ -22,7 +22,7 @@ def test_dashboard_renders_nav_when_authed(client: TestClient) -> None:
     r = c.get("/ui/")
     assert r.status_code == 200
     body = r.text
-    assert 'href="/ui/exports"' in body
+    assert 'href="/ui/catalog"' in body
     assert 'href="/ui/machines"' in body
 
 
@@ -32,15 +32,17 @@ def test_login_page_has_no_nav(client: TestClient) -> None:
     r = client.get("/ui/login")
     assert r.status_code == 200
     body = r.text
-    assert 'href="/ui/exports"' not in body
+    assert 'href="/ui/catalog"' not in body
     assert 'href="/ui/machines"' not in body
 
 
-def test_ui_exports_empty(client: TestClient) -> None:
+def test_ui_exports_redirects_to_catalog(client: TestClient) -> None:
+    """Exports merged into the Catalog view; the /ui/exports URL is
+    kept as a 308 redirect so any operator bookmark still lands."""
     c = _authed(client)
-    r = c.get("/ui/exports")
-    assert r.status_code == 200
-    assert "No exports yet" in r.text
+    r = c.get("/ui/exports", follow_redirects=False)
+    assert r.status_code == 308
+    assert r.headers["location"] == "/ui/catalog"
 
 
 def test_ui_machines_empty(client: TestClient) -> None:
@@ -79,8 +81,8 @@ def test_ui_machines_bind_form_bad_mac_silently_redirects(client: TestClient) ->
     assert "not-a-mac" not in body
 
 
-def test_ui_exports_and_machines_require_auth(client: TestClient) -> None:
-    for path in ("/ui/exports", "/ui/machines"):
+def test_ui_catalog_and_machines_require_auth(client: TestClient) -> None:
+    for path in ("/ui/catalog", "/ui/machines"):
         r = client.get(path, follow_redirects=False)
         assert r.status_code == 303
         assert r.headers["location"] == "/ui/login"
@@ -259,4 +261,4 @@ def test_ui_exports_delete_removes_missing_export_silently(client: TestClient) -
         follow_redirects=False,
     )
     assert r.status_code == 303
-    assert r.headers["location"] == "/ui/exports"
+    assert r.headers["location"] == "/ui/catalog"

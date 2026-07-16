@@ -390,12 +390,25 @@ def create_app() -> FastAPI:
         exports = [_refresh_row(e, nbd, exports_store) for e in exports_store.list()]
         machines = machines_store.list()
         events = events_log.list(limit=10)
+        # Split the catalog into disk-image entries (bindable = can be
+        # served over NBD for ramboot + flashed later) and netboot
+        # bundles (tar.gz of vmlinuz+initrd used as the kernel/initrd
+        # side of a ramboot). ``fetched`` counts the ones whose bytes
+        # are actually on disk. The operator wanted the dashboard to
+        # read as ``<fetched> / <total>`` per category instead of a
+        # bare single number.
+        images = [e for e in entries if getattr(e, "bindable", False)]
+        bundles = [e for e in entries if not getattr(e, "bindable", False)]
         stats = {
             "machines_total": len(machines),
             "machines_bound": sum(1 for m in machines if m.image_content_sha256),
             "machines_with_inventory": sum(1 for m in machines if m.inventory),
             "catalog_total": len(entries),
             "catalog_fetched": sum(1 for e in entries if getattr(e, "content_sha256", "")),
+            "catalog_images_total": len(images),
+            "catalog_images_fetched": sum(1 for e in images if e.content_sha256),
+            "catalog_bundles_total": len(bundles),
+            "catalog_bundles_fetched": sum(1 for e in bundles if e.content_sha256),
             "exports_total": len(exports),
             "exports_running": sum(1 for e in exports if e.status == "running"),
             "exports_error": sum(1 for e in exports if e.status == "error"),
@@ -417,41 +430,41 @@ def create_app() -> FastAPI:
         request: Request,
         _auth: None = Depends(_require_ui_auth),
     ) -> HTMLResponse:
-        fetch_states = request.app.state.fetch_states
+        """Catalog + exports in one view. Each disk-image entry
+        carries its NBD-serving state (port + status + nbdkit error);
+        netboot bundles just show their fetch state -- they are served
+        as HTTP artifacts from ``/artifacts/<sha>/{vmlinuz,initrd}``
+        rather than over NBD, so no port is meaningful for them."""
+        from pixie.exports._routes import _refresh_row
+
+        catalog = request.app.state.catalog_store
+        exports_store = request.app.state.exports_store
+        nbd_server = request.app.state.nbd_server
+        # Index runtime export state by content_sha256 so the per-row
+        # NBD status is a plain dict lookup in the template.
+        exports_by_sha: dict[str, Any] = {}
+        for row in exports_store.list():
+            refreshed = _refresh_row(row, nbd_server, exports_store)
+            exports_by_sha[refreshed.content_sha256] = refreshed
         return templates.TemplateResponse(
             request,
             "catalog.html",
             {
                 "version": pixie.__version__,
-                "entries": request.app.state.catalog_store.list_entries(),
-                "fetch_states": fetch_states,
+                "entries": catalog.list_entries(),
+                "fetch_states": request.app.state.fetch_states,
+                "exports_by_sha": exports_by_sha,
                 "authed": True,
                 "page": "catalog",
             },
         )
 
-    @app.get("/ui/exports", response_class=HTMLResponse)
-    def ui_exports(
-        request: Request,
-        _auth: None = Depends(_require_ui_auth),
-    ) -> HTMLResponse:
-        exports_store = request.app.state.exports_store
-        nbd_server = request.app.state.nbd_server
-        # Refresh runtime state per row on read so the operator sees a
-        # honest view when nbdkit died out of band.
-        from pixie.exports._routes import _refresh_row
-
-        exports = [_refresh_row(e, nbd_server, exports_store) for e in exports_store.list()]
-        return templates.TemplateResponse(
-            request,
-            "exports.html",
-            {
-                "version": pixie.__version__,
-                "exports": exports,
-                "authed": True,
-                "page": "exports",
-            },
-        )
+    @app.get("/ui/exports")
+    def ui_exports_redirect() -> RedirectResponse:
+        """Exports merged into the Catalog view. Keep the URL alive
+        as a permanent redirect so any operator bookmarks and any
+        older docs still land on the right place."""
+        return RedirectResponse(url="/ui/catalog", status_code=status.HTTP_308_PERMANENT_REDIRECT)
 
     @app.post("/ui/exports/delete")
     def ui_exports_delete(
@@ -461,7 +474,7 @@ def create_app() -> FastAPI:
     ) -> RedirectResponse:
         request.app.state.nbd_server.terminate(name)
         request.app.state.exports_store.delete(name)
-        return RedirectResponse(url="/ui/exports", status_code=status.HTTP_303_SEE_OTHER)
+        return RedirectResponse(url="/ui/catalog", status_code=status.HTTP_303_SEE_OTHER)
 
     @app.get("/ui/machines", response_class=HTMLResponse)
     def ui_machines(
@@ -609,9 +622,9 @@ def create_app() -> FastAPI:
     ) -> RedirectResponse:
         store = request.app.state.catalog_store
         if store.get_entry(name):
-            # 303 back to /ui/ silently on conflict; UI shows the row
-            # already exists.
-            return RedirectResponse(url="/ui/", status_code=status.HTTP_303_SEE_OTHER)
+            # 303 back to /ui/catalog silently on conflict; UI shows
+            # the row already exists.
+            return RedirectResponse(url="/ui/catalog", status_code=status.HTTP_303_SEE_OTHER)
         store.upsert(
             _Entry(
                 name=name.strip(),
@@ -623,7 +636,7 @@ def create_app() -> FastAPI:
                 added_at=_now_iso(),
             )
         )
-        return RedirectResponse(url="/ui/", status_code=status.HTTP_303_SEE_OTHER)
+        return RedirectResponse(url="/ui/catalog", status_code=status.HTTP_303_SEE_OTHER)
 
     @app.post("/ui/catalog/fetch")
     def ui_catalog_fetch(
@@ -634,11 +647,11 @@ def create_app() -> FastAPI:
         store = request.app.state.catalog_store
         entry = store.get_entry(name)
         if entry is None:
-            return RedirectResponse(url="/ui/", status_code=status.HTTP_303_SEE_OTHER)
+            return RedirectResponse(url="/ui/catalog", status_code=status.HTTP_303_SEE_OTHER)
 
         states = request.app.state.fetch_states
         if states.get(name, {}).get("state") == "fetching":
-            return RedirectResponse(url="/ui/", status_code=status.HTTP_303_SEE_OTHER)
+            return RedirectResponse(url="/ui/catalog", status_code=status.HTTP_303_SEE_OTHER)
         states[name] = {"state": "fetching", "started_at": _now_iso(), "error": None}
 
         def _run() -> None:
@@ -659,7 +672,7 @@ def create_app() -> FastAPI:
                 }
 
         request.app.state.fetch_pool.submit(_run)
-        return RedirectResponse(url="/ui/", status_code=status.HTTP_303_SEE_OTHER)
+        return RedirectResponse(url="/ui/catalog", status_code=status.HTTP_303_SEE_OTHER)
 
     @app.post("/ui/catalog/delete")
     def ui_catalog_delete(
@@ -670,7 +683,59 @@ def create_app() -> FastAPI:
         store = request.app.state.catalog_store
         store.delete(name)
         request.app.state.fetch_states.pop(name, None)
-        return RedirectResponse(url="/ui/", status_code=status.HTTP_303_SEE_OTHER)
+        return RedirectResponse(url="/ui/catalog", status_code=status.HTTP_303_SEE_OTHER)
+
+    @app.post("/ui/catalog/import")
+    def ui_catalog_import(
+        request: Request,
+        url: str = Form(...),
+        _auth: None = Depends(_require_ui_auth),
+    ) -> RedirectResponse:
+        """Fetch a catalog TOML from the given URL and upsert every
+        entry it declares. Matches the shape bty publishes at
+        ``GET /catalog.toml``: ``version = 1`` + ``[[images]]`` array
+        with ``name``/``src``/``format`` required, ``arch`` +
+        ``netboot_src`` + ``description`` optional. Existing rows are
+        overwritten by name; unfetched rows stay unfetched (import
+        stages entries only, doesn't fetch bytes)."""
+        import httpx
+
+        from pixie.catalog._schema import parse_catalog_toml
+
+        target_url = (url or "").strip()
+        if not target_url:
+            return RedirectResponse(url="/ui/catalog", status_code=status.HTTP_303_SEE_OTHER)
+        try:
+            r = httpx.get(target_url, timeout=15.0, follow_redirects=True)
+            r.raise_for_status()
+            entries = parse_catalog_toml(r.content)
+        except (httpx.HTTPError, ValueError, Exception) as exc:
+            log = getattr(request.app.state, "events_log", None)
+            if log is not None:
+                log.emit(
+                    "catalog.import.failed",
+                    subject_kind="catalog",
+                    subject_id=target_url,
+                    summary=f"import from {target_url} failed",
+                    details={"error": str(exc)[:200]},
+                )
+            return RedirectResponse(url="/ui/catalog", status_code=status.HTTP_303_SEE_OTHER)
+        store = request.app.state.catalog_store
+        added = 0
+        for entry in entries:
+            if not store.get_entry(entry.name):
+                added += 1
+            store.upsert(entry)
+        log = getattr(request.app.state, "events_log", None)
+        if log is not None:
+            log.emit(
+                "catalog.import.ok",
+                subject_kind="catalog",
+                subject_id=target_url,
+                summary=f"imported {len(entries)} entries from {target_url} ({added} new)",
+                details={"url": target_url, "count": len(entries), "new": added},
+            )
+        return RedirectResponse(url="/ui/catalog", status_code=status.HTTP_303_SEE_OTHER)
 
     # ---------- feature routers --------------------------------------
     #
