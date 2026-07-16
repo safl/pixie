@@ -149,6 +149,22 @@ class CatalogStore:
             cur = conn.execute("DELETE FROM catalog_entries WHERE name = ?", (name,))
             return cur.rowcount > 0
 
+    def mark_unfetched(self, name: str) -> None:
+        """Reverse of :meth:`mark_fetched`: clear the row's fetched
+        fields (content sha, size, timestamp) without deleting the
+        row itself. Used by the "delete blob but keep the entry"
+        path so a subsequent Fetch re-runs the pipeline instead of
+        needing the operator to re-Import the URL."""
+        with _DB_WRITE_LOCK, self._conn() as conn:
+            conn.execute(
+                """
+                UPDATE catalog_entries
+                SET content_sha256 = '', size_bytes = 0, fetched_at = ''
+                WHERE name = ?
+                """,
+                (name,),
+            )
+
     def mark_fetched(
         self,
         name: str,

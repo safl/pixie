@@ -105,8 +105,6 @@
         </p>
     </div>
     {% endif %}
-    {% if page_state.total > page_state.per_page %}
     {{ pagination(page_state, "/ui/machines", q, page_state.per_page) }}
-    {% endif %}
 </div>
 {% endblock %}
