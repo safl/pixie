@@ -966,6 +966,46 @@ def create_app() -> FastAPI:
     ) -> JSONResponse:
         return JSONResponse(dict(request.app.state.fetch_states))
 
+    # ---------- machines live refresh --------------------------------
+    #
+    # Compact JSON of the operator-visible per-machine fields the
+    # list + detail templates render live. The machines page + detail
+    # page poll this so a target booting into ramboot updates
+    # ``last_seen_at`` + ``last_seen_ip`` + inventory-disks count
+    # without a page reload. Keyed by MAC so the JS updates the
+    # matching row in place. Auth-required because the payload names
+    # machines by MAC.
+
+    @app.get("/ui/machines-live.json")
+    def ui_machines_live(
+        request: Request,
+        _auth: None = Depends(_require_ui_auth),
+    ) -> JSONResponse:
+        store: SettingsStore = request.app.state.settings_store
+        out: dict[str, dict[str, Any]] = {}
+        for m in request.app.state.machines_store.list():
+            disks = (m.inventory or {}).get("disks") or []
+            # Pre-formatted timestamps let the JS drop cells into the
+            # DOM verbatim + stay consistent with the server-rendered
+            # fmt_ts filter (same timezone + strftime picks from
+            # Settings). Raw ISO stays alongside in case the browser
+            # ever wants to compute "time since" on the client.
+            out[m.mac] = {
+                "boot_mode": m.boot_mode,
+                "image_content_sha256": m.image_content_sha256,
+                "labels": list(m.labels),
+                "last_seen_at": m.last_seen_at,
+                "last_seen_at_display": format_ts(m.last_seen_at, store),
+                "last_seen_ip": m.last_seen_ip,
+                "inventory_at": m.inventory_at or "",
+                "inventory_at_display": format_ts(m.inventory_at or "", store),
+                "disks_count": len(disks) if isinstance(disks, list) else 0,
+                "has_lshw": bool((m.inventory or {}).get("lshw")),
+                "sanboot_drive": m.sanboot_drive,
+                "target_disk_serial": m.target_disk_serial,
+            }
+        return JSONResponse(out)
+
     # ---------- ui: catalog admin forms ------------------------------
     #
     # These forms redirect back to /ui/ so an operator's browser stays
