@@ -39,8 +39,14 @@
                 </div>
                 <div class="display-6 fw-semibold">{{ stats.catalog_total }}</div>
                 <dl class="row small text-muted mb-0 mt-2">
-                    <dt class="col-6">Fetched</dt>
-                    <dd class="col-6 text-end">{{ stats.catalog_fetched }}</dd>
+                    <dt class="col-6">Disk images</dt>
+                    <dd class="col-6 text-end font-monospace">
+                        {{ stats.catalog_images_fetched }} / {{ stats.catalog_images_total }}
+                    </dd>
+                    <dt class="col-6">Netboot bundles</dt>
+                    <dd class="col-6 text-end font-monospace">
+                        {{ stats.catalog_bundles_fetched }} / {{ stats.catalog_bundles_total }}
+                    </dd>
                 </dl>
                 <a href="/ui/catalog" class="stretched-link small"></a>
             </div>
@@ -51,7 +57,7 @@
             <div class="card-body">
                 <div class="d-flex align-items-center mb-2">
                     <i class="bi bi-hdd-network fs-4 text-primary me-2"></i>
-                    <h2 class="h6 mb-0">Exports</h2>
+                    <h2 class="h6 mb-0">NBD serving</h2>
                 </div>
                 <div class="display-6 fw-semibold">{{ stats.exports_total }}</div>
                 <dl class="row small text-muted mb-0 mt-2">
@@ -60,7 +66,7 @@
                     <dt class="col-6"><span class="text-danger">Error</span></dt>
                     <dd class="col-6 text-end">{{ stats.exports_error }}</dd>
                 </dl>
-                <a href="/ui/exports" class="stretched-link small"></a>
+                <a href="/ui/catalog" class="stretched-link small"></a>
             </div>
         </div>
     </div>
