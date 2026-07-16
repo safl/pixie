@@ -104,8 +104,13 @@ def test_put_machine_ipxe_exit_roundtrip(client: TestClient) -> None:
 
 def test_put_machine_persists_labels_sanboot_target_serial(client: TestClient) -> None:
     """Extended binding fields round-trip through the JSON PUT + GET
-    pair and land on ``Machine.to_dict()``."""
+    pair and land on ``Machine.to_dict()``. Seeds an inventory with a
+    matching disk serial so the flash-mode guard passes."""
     c = _authed(client)
+    c.post(
+        "/pxe/aa:bb:cc:dd:ee:20/inventory",
+        json={"disks": [{"path": "/dev/nvme0n1", "size": "1T", "serial": "S679NX0R123456"}]},
+    )
     r = c.put(
         "/machines/aa:bb:cc:dd:ee:20",
         json={
@@ -125,6 +130,62 @@ def test_put_machine_persists_labels_sanboot_target_serial(client: TestClient) -
     assert row["labels"] == ["rack-3", "gmktec-g5"]
     assert row["sanboot_drive"] == "0x81"
     assert row["target_disk_serial"] == "S679NX0R123456"
+
+
+def test_put_machine_flash_requires_inventory(client: TestClient) -> None:
+    """Binding boot_mode=pixie-flash-once on a never-inventoried MAC
+    is rejected with 422 pointing at the missing prerequisite."""
+    c = _authed(client)
+    r = c.put(
+        "/machines/aa:bb:cc:dd:ee:24",
+        json={"boot_mode": "pixie-flash-once", "target_disk_serial": "SN1"},
+    )
+    assert r.status_code == 422
+    assert "no inventory" in r.text.lower()
+
+
+def test_put_machine_flash_requires_target_disk_serial(client: TestClient) -> None:
+    """Inventory reports a disk with a serial, but the bind omits
+    target_disk_serial -> 422 listing the picks."""
+    c = _authed(client)
+    c.post(
+        "/pxe/aa:bb:cc:dd:ee:25/inventory",
+        json={"disks": [{"path": "/dev/sda", "serial": "SN-ABC"}]},
+    )
+    r = c.put(
+        "/machines/aa:bb:cc:dd:ee:25",
+        json={"boot_mode": "pixie-flash-always"},
+    )
+    assert r.status_code == 422
+    assert "target_disk_serial" in r.text
+
+
+def test_put_machine_flash_rejects_unknown_target_serial(client: TestClient) -> None:
+    """Serial that doesn't match anything in the inventory -> 422 so
+    a stale value doesn't slip through when disks were swapped."""
+    c = _authed(client)
+    c.post(
+        "/pxe/aa:bb:cc:dd:ee:26/inventory",
+        json={"disks": [{"path": "/dev/sda", "serial": "SN-KEEP"}]},
+    )
+    r = c.put(
+        "/machines/aa:bb:cc:dd:ee:26",
+        json={"boot_mode": "pixie-flash-once", "target_disk_serial": "SN-STALE"},
+    )
+    assert r.status_code == 422
+    assert "not in this" in r.text.lower()
+
+
+def test_put_machine_non_flash_modes_skip_disk_guard(client: TestClient) -> None:
+    """ipxe-exit / ramboot / pixie-inventory / pixie-tui do not touch
+    the target disk; binding them without an inventory succeeds."""
+    c = _authed(client)
+    for mode in ("ipxe-exit", "ramboot", "pixie-inventory", "pixie-tui"):
+        r = c.put(
+            f"/machines/aa:bb:cc:dd:ee:{ord(mode[0]):02x}",
+            json={"boot_mode": mode},
+        )
+        assert r.status_code == 200, f"{mode} unexpectedly rejected: {r.text}"
 
 
 def test_put_machine_rejects_bad_sanboot_drive(client: TestClient) -> None:

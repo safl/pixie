@@ -28,8 +28,21 @@ def _authed(client: TestClient) -> TestClient:
 
 def _seed_machine(client: TestClient, mac: str, boot_mode: str) -> None:
     """Prime the machine store with a specific boot_mode. Uses the
-    JSON API so tests do not depend on the /ui/machines/bind form."""
-    r = _authed(client).put(f"/machines/{mac}", json={"boot_mode": boot_mode})
+    JSON API so tests do not depend on the /ui/machines/bind form.
+    Flash modes get a seed inventory + target_disk_serial to satisfy
+    the bind-time guard; other modes bind unconditionally."""
+    c = _authed(client)
+    if boot_mode in ("pixie-flash-once", "pixie-flash-always"):
+        c.post(
+            f"/pxe/{mac}/inventory",
+            json={"disks": [{"path": "/dev/sda", "serial": f"SN-{mac}"}]},
+        )
+        r = c.put(
+            f"/machines/{mac}",
+            json={"boot_mode": boot_mode, "target_disk_serial": f"SN-{mac}"},
+        )
+    else:
+        r = c.put(f"/machines/{mac}", json={"boot_mode": boot_mode})
     assert r.status_code == 200, r.text
 
 

@@ -90,6 +90,11 @@ CREATE INDEX IF NOT EXISTS idx_machines_image_content_sha
 # the ipxe-exit chain without further validation.
 _SANBOOT_DRIVE_RE = re.compile(r"^0x[0-9a-fA-F]{1,2}$")
 
+# Boot modes that write to the target disk. Binding these requires a
+# ``target_disk_serial`` chosen from the machine's inventory, so the
+# live env's flash pipeline has a concrete destination.
+_FLASH_MODES: frozenset[str] = frozenset({"pixie-flash-once", "pixie-flash-always"})
+
 # Bty's shape: alphanumeric-leading, alphanumeric + space + . _ - inside,
 # 64 chars max per label, 16 labels max per machine. Matches the CSS-safe
 # subset so a label can render as a ``.badge`` without escaping surprises.
@@ -242,6 +247,34 @@ class MachinesStore:
         now = now_iso()
         with _DB_WRITE_LOCK, self._conn() as conn:
             existing = conn.execute("SELECT * FROM machines WHERE mac = ?", (canon,)).fetchone()
+            # Flash modes need to know which disk to overwrite. The live
+            # env matches ``target_disk_serial`` against currently-attached
+            # disks at flash time; a bind that doesn't name one would
+            # either fall through to "flash /dev/sda blindly" (dangerous)
+            # or refuse (silent no-op). Reject early so the operator sees
+            # a 422 pointing at the missing prerequisite, and require the
+            # value be one of the serials on the machine's stored
+            # inventory so a hand-typed sha doesn't sneak past. New /
+            # never-inventoried MACs are told to run pixie-inventory
+            # first.
+            if boot_mode in _FLASH_MODES:
+                inv_disks = _inventory_disk_serials(existing)
+                if not inv_disks:
+                    raise ValueError(
+                        f"boot_mode={boot_mode!r} requires a target_disk_serial, "
+                        "but this machine has no inventory yet. "
+                        "Bind boot_mode=pixie-inventory + power-cycle first."
+                    )
+                if not target_serial:
+                    raise ValueError(
+                        f"boot_mode={boot_mode!r} requires target_disk_serial "
+                        f"(one of: {sorted(inv_disks)})"
+                    )
+                if target_serial not in inv_disks:
+                    raise ValueError(
+                        f"target_disk_serial={target_serial!r} is not in this "
+                        f"machine's inventory (known: {sorted(inv_disks)})"
+                    )
             if existing is None:
                 conn.execute(
                     """
@@ -353,6 +386,40 @@ class MachinesStore:
                 )
             row = conn.execute("SELECT * FROM machines WHERE mac = ?", (canon,)).fetchone()
         return _row(row)
+
+
+def _inventory_disk_serials(row: sqlite3.Row | None) -> set[str]:
+    """Pull the set of disk serials off a stored inventory blob. Used
+    to check ``target_disk_serial`` against the machine's reported
+    hardware at bind time. Returns an empty set when the row is
+    missing, the inventory blob is empty / malformed, or none of the
+    disks report a serial."""
+    import json as _json
+
+    if row is None:
+        return set()
+    with contextlib.suppress(IndexError, KeyError):
+        raw = row["inventory_json"] or ""
+        if not raw:
+            return set()
+        try:
+            parsed = _json.loads(raw)
+        except ValueError:
+            return set()
+        if not isinstance(parsed, dict):
+            return set()
+        disks = parsed.get("disks") or []
+        if not isinstance(disks, list):
+            return set()
+        out: set[str] = set()
+        for d in disks:
+            if not isinstance(d, dict):
+                continue
+            serial = str(d.get("serial") or "").strip()
+            if serial:
+                out.add(serial)
+        return out
+    return set()
 
 
 def _labels_to_json(labels: list[str]) -> str:
