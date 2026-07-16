@@ -1,107 +1,146 @@
 {% extends "layout.html" %}
-{% block title %}pixie machines{% endblock %}
+{% block title %}Machines - pixie{% endblock %}
+{% block subnav %}
+<div class="subnav-strip">
+    <div class="container">
+        <ul class="nav nav-pills me-auto">
+            <li class="nav-item">
+                <a class="nav-link active" href="#known">Known</a>
+            </li>
+            <li class="nav-item">
+                <a class="nav-link" href="#bind">Bind</a>
+            </li>
+        </ul>
+        <span class="text-muted small">
+            {{ machines|length }} machine{{ '' if machines|length == 1 else 's' }}
+        </span>
+    </div>
+</div>
+{% endblock %}
 {% block content %}
-<div class="card">
-    <h1>Machines</h1>
-    <p class="muted">
-        Every MAC pixie has seen (via <code>GET /pxe/&lt;mac&gt;</code>
-        discovery) or that an operator has bound to a catalog entry.
-        Change <code>boot_mode</code> to <code>ramboot</code> and set
-        the content sha to hand a target its image on next PXE.
-    </p>
-
-    <h2>Bind a machine</h2>
-    <form method="post" action="/ui/machines/bind" class="add-form">
-        <div class="row">
-            <label for="mac">MAC</label>
-            <input id="mac" name="mac" type="text" required placeholder="aa:bb:cc:dd:ee:ff">
-        </div>
-        <div class="row">
-            <label for="boot_mode">Boot mode</label>
-            <select id="boot_mode" name="boot_mode">
-                <option value="ipxe-exit">ipxe-exit (boot local disk)</option>
-                <option value="ramboot">ramboot (image over NBD)</option>
-            </select>
-        </div>
-        <div class="row">
-            <label for="image_content_sha256">Image content sha (optional)</label>
-            <input id="image_content_sha256" name="image_content_sha256" type="text"
-                   placeholder="64-char sha of a fetched catalog entry">
-        </div>
-        <div class="row">
-            <button type="submit">Bind</button>
-        </div>
-    </form>
-
-    <h2>Known machines ({{ machines|length }})</h2>
+<div class="card shadow-sm mb-4" id="known">
+    <div class="card-header bg-light d-flex align-items-center">
+        <h2 class="h5 mb-0"><i class="bi bi-pc-display me-2"></i>Known machines</h2>
+        <span class="text-muted small ms-auto">
+            Every MAC pixie has seen via <code>GET /pxe/&lt;mac&gt;</code> discovery, plus
+            operator-bound rows.
+        </span>
+    </div>
     {% if machines %}
-    <table>
-        <thead>
-            <tr>
-                <th>MAC</th>
-                <th>Boot mode</th>
-                <th>Image</th>
-                <th>Inventory</th>
-                <th>Last seen</th>
-                <th>Actions</th>
-            </tr>
-        </thead>
-        <tbody>
-            {% for m in machines %}
-            <tr>
-                <td><a href="/ui/machines/{{ m.mac }}"><code>{{ m.mac }}</code></a></td>
-                <td>{{ m.boot_mode }}</td>
-                <td>
-                    {% if m.image_content_sha256 %}
-                    <code title="{{ m.image_content_sha256 }}">
-                        {{ m.image_content_sha256[:12] }}
-                    </code>
-                    {% else %}
-                    <span class="muted">-</span>
-                    {% endif %}
-                </td>
-                <td>
-                    {% if m.inventory %}
-                    {% set d = m.inventory.get("disks") or [] %}
-                    <span class="small">{{ d|length }} disk{% if d|length != 1 %}s{% endif %}</span>
-                    {% if m.inventory.get("lshw") %}<span class="small muted"> + lshw</span>{% endif %}
-                    {% else %}
-                    <span class="muted">-</span>
-                    {% endif %}
-                </td>
-                <td class="small muted">
-                    {{ m.last_seen_at }}
-                    {% if m.last_seen_ip %}<br>{{ m.last_seen_ip }}{% endif %}
-                </td>
-                <td>
-                    <form method="post" action="/ui/machines/delete" style="display:inline">
-                        <input type="hidden" name="mac" value="{{ m.mac }}">
-                        <button type="submit" class="danger">Delete</button>
-                    </form>
-                </td>
-            </tr>
-            {% endfor %}
-        </tbody>
-    </table>
+    <div class="table-responsive">
+        <table class="table table-hover align-middle mb-0">
+            <thead>
+                <tr>
+                    <th scope="col">MAC</th>
+                    <th scope="col">Boot mode</th>
+                    <th scope="col">Image</th>
+                    <th scope="col">Inventory</th>
+                    <th scope="col">Last seen</th>
+                    <th scope="col" class="text-end">Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for m in machines %}
+                <tr>
+                    <td>
+                        <a href="/ui/machines/{{ m.mac }}" class="text-decoration-none">
+                            <code>{{ m.mac }}</code>
+                        </a>
+                    </td>
+                    <td>
+                        {% if m.boot_mode == 'ramboot' %}
+                        <span class="badge text-bg-primary">
+                            <i class="bi bi-hdd-network me-1"></i>ramboot
+                        </span>
+                        {% else %}
+                        <span class="badge text-bg-secondary">
+                            <i class="bi bi-box-arrow-right me-1"></i>{{ m.boot_mode }}
+                        </span>
+                        {% endif %}
+                    </td>
+                    <td>
+                        {% if m.image_content_sha256 %}
+                        <code title="{{ m.image_content_sha256 }}">{{ m.image_content_sha256[:12] }}</code>
+                        {% else %}
+                        <span class="text-muted small">-</span>
+                        {% endif %}
+                    </td>
+                    <td>
+                        {% if m.inventory %}
+                        {% set d = m.inventory.get("disks") or [] %}
+                        <span class="small">
+                            <i class="bi bi-hdd me-1"></i>{{ d|length }} disk{{ '' if d|length == 1 else 's' }}
+                        </span>
+                        {% if m.inventory.get("lshw") %}
+                        <span class="text-muted small">+ lshw</span>
+                        {% endif %}
+                        {% else %}
+                        <span class="text-muted small">-</span>
+                        {% endif %}
+                    </td>
+                    <td class="small text-muted">
+                        {{ m.last_seen_at }}
+                        {% if m.last_seen_ip %}<br><code>{{ m.last_seen_ip }}</code>{% endif %}
+                    </td>
+                    <td class="text-end text-nowrap">
+                        <a href="/ui/machines/{{ m.mac }}" class="btn btn-sm btn-outline-primary">
+                            <i class="bi bi-search"></i>
+                        </a>
+                        <form method="post" action="/ui/machines/delete" class="d-inline">
+                            <input type="hidden" name="mac" value="{{ m.mac }}">
+                            <button type="submit" class="btn btn-sm btn-outline-danger">
+                                <i class="bi bi-trash"></i>
+                            </button>
+                        </form>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
     {% else %}
-    <p class="muted">
-        No machines yet. Bind one above, or wait for a PXE-booting
-        target to hit <code>/pxe/&lt;mac&gt;</code> and auto-discover.
-    </p>
+    <div class="card-body">
+        <p class="text-muted mb-0">
+            <i class="bi bi-inbox me-1"></i>
+            No machines yet. Bind one below, or wait for a PXE-booting target to hit
+            <code>/pxe/&lt;mac&gt;</code> and auto-discover.
+        </p>
+    </div>
     {% endif %}
 </div>
-<style>
-    .add-form { display: grid; gap: 0.5rem; margin: 1rem 0; padding: 1rem;
-                background: #0f172a; border-radius: 6px; }
-    .add-form .row { display: grid; grid-template-columns: 12rem 1fr; align-items: center; gap: 1rem; }
-    .add-form input, .add-form select { padding: 0.4rem 0.5rem; background: #1e293b;
-                border: 1px solid #334155; border-radius: 4px; color: #e2e8f0; }
-    table { width: 100%; border-collapse: collapse; margin-top: 1rem; }
-    th, td { padding: 0.5rem; text-align: left; border-bottom: 1px solid #334155; }
-    th { color: #94a3b8; font-weight: 500; font-size: 0.875rem; }
-    button.danger { background: #7f1d1d; }
-    button.danger:hover { background: #991b1b; }
-    button { padding: 0.35rem 0.75rem; font-size: 0.875rem; }
-    .small { font-size: 0.75rem; }
-</style>
+
+<div class="card shadow-sm" id="bind">
+    <div class="card-header bg-light">
+        <h2 class="h5 mb-0"><i class="bi bi-link-45deg me-2"></i>Bind a machine</h2>
+    </div>
+    <div class="card-body">
+        <form method="post" action="/ui/machines/bind" class="row g-3">
+            <div class="col-md-4">
+                <label for="mac" class="form-label">MAC</label>
+                <input id="mac" name="mac" type="text" class="form-control font-monospace" required
+                       placeholder="aa:bb:cc:dd:ee:ff">
+            </div>
+            <div class="col-md-4">
+                <label for="boot_mode" class="form-label">Boot mode</label>
+                <select id="boot_mode" name="boot_mode" class="form-select">
+                    <option value="ipxe-exit">ipxe-exit (boot local disk)</option>
+                    <option value="ramboot">ramboot (image over NBD)</option>
+                </select>
+            </div>
+            <div class="col-md-4 d-flex align-items-end">
+                <button type="submit" class="btn btn-primary w-100">
+                    <i class="bi bi-link-45deg me-1"></i>Bind
+                </button>
+            </div>
+            <div class="col-12">
+                <label for="image_content_sha256" class="form-label">
+                    Image content sha <span class="text-muted small">(only for ramboot)</span>
+                </label>
+                <input id="image_content_sha256" name="image_content_sha256" type="text"
+                       class="form-control font-monospace"
+                       placeholder="64-char sha of a fetched catalog entry">
+            </div>
+        </form>
+    </div>
+</div>
 {% endblock %}

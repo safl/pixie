@@ -52,6 +52,7 @@ from pixie.web._auth import (
     SESSION_COOKIE,
     check_password,
     require_auth,
+    using_default_password,
 )
 
 _HERE = Path(__file__).resolve().parent
@@ -279,7 +280,13 @@ def create_app() -> FastAPI:
         return templates.TemplateResponse(
             request,
             "login.html",
-            {"version": pixie.__version__, "error": None, "authed": False, "page": "login"},
+            {
+                "version": pixie.__version__,
+                "error": None,
+                "authed": False,
+                "page": "login",
+                "using_default_password": using_default_password(),
+            },
         )
 
     @app.post("/ui/login", response_class=HTMLResponse)
@@ -293,6 +300,7 @@ def create_app() -> FastAPI:
                     "error": "Invalid password.",
                     "authed": False,
                     "page": "login",
+                    "using_default_password": using_default_password(),
                 },
                 status_code=status.HTTP_401_UNAUTHORIZED,
             )

@@ -1,133 +1,295 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>{% block title %}pixie{% endblock %}</title>
+    <link rel="icon" type="image/png" href="/static/pixie-favicon.png">
+    <link rel="stylesheet" href="/static/bootstrap.min.css">
+    <link rel="stylesheet" href="/static/bootstrap-icons.min.css">
     <style>
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
-                Oxygen-Sans, Ubuntu, Cantarell, "Helvetica Neue", sans-serif;
-            margin: 0;
-            padding: 0;
-            background: #0f172a;
-            color: #e2e8f0;
+        /* Palette anchor shared with bty / withcache / nbdmux (the three
+           services that pixie folds into one process). Bootstrap 5
+           exposes ``--bs-primary`` + a matching -rgb triplet used by
+           translucent variants (alerts, focus rings, .bg-*-subtle).
+           Overriding both here re-tints every stock component without
+           patching bootstrap.min.css. Navy stays as the primary tint
+           because pixie inherits bty's operator surface -- operators
+           coming from bty read the same colour as "the appliance
+           surface", not "a new product". */
+        :root {
+            --bs-primary: #0d3585;
+            --bs-primary-rgb: 13, 53, 133;
+            --bs-link-color: #0d3585;
+            --bs-link-hover-color: #0a2b6d;
         }
-        .container {
-            max-width: 960px;
-            margin: 2rem auto;
-            padding: 2rem;
+        .btn-primary {
+            --bs-btn-bg: #0d3585;
+            --bs-btn-border-color: #0d3585;
+            --bs-btn-hover-bg: #0a2b6d;
+            --bs-btn-hover-border-color: #0a2b6d;
+            --bs-btn-active-bg: #0a2b6d;
+            --bs-btn-active-border-color: #0a2b6d;
         }
-        .nav {
-            background: #1e293b;
-            padding: 1rem 2rem;
-            border-radius: 8px;
-            margin-bottom: 2rem;
-            display: flex;
-            gap: 1.5rem;
+        .bg-primary { --bs-bg-opacity: 1; background-color: #0d3585 !important; }
+        .text-primary { --bs-text-opacity: 1; color: #0d3585 !important; }
+        .border-primary { --bs-border-opacity: 1; border-color: #0d3585 !important; }
+        /* Brand strip: a thin gradient accent above the navbar.
+           Same navy -> dark-magenta -> magenta gradient as bty /
+           withcache / nbdmux so pixie reads as the fourth
+           surface in the same product family; when the trio is
+           folded into pixie the family strip stays as their
+           shared visual signature. */
+        .brand-accent {
+            height: 3px;
+            background: linear-gradient(90deg, #0d3585 0%, #8f1b71 50%, #d63384 100%);
+        }
+        .sticky-header {
+            position: sticky;
+            top: 0;
+            z-index: 1030;
+        }
+        html {
+            scroll-padding-top: 6.5rem;
+            scroll-behavior: smooth;
+        }
+        .navbar-brand {
+            border-radius: 0.5rem;
+            padding-left: 0.6rem;
+            padding-right: 0.6rem;
+            margin-right: 0.25rem;
+            transition: background-color 0.15s;
+        }
+        .navbar-brand.brand-active {
+            background-color: rgba(13, 53, 133, 0.85);
+        }
+        .navbar-brand:hover {
+            background-color: rgba(255, 255, 255, 0.06);
+        }
+        .navbar-brand.brand-active:hover {
+            background-color: rgba(13, 53, 133, 0.95);
+        }
+        .navbar-version {
+            color: rgba(255, 255, 255, 0.55);
+            font-weight: 400;
+            font-size: 0.85rem;
+            align-self: center;
+            white-space: nowrap;
+        }
+        .navbar-brand .brand-icon {
+            height: 1.05rem;
+            width: auto;
+            vertical-align: -0.15rem;
+        }
+        .navbar .nav-btn {
+            display: inline-flex;
             align-items: center;
-        }
-        .nav a {
-            color: #e2e8f0;
+            gap: 0.4rem;
+            padding: 0.4rem 0.8rem;
+            margin-right: 0.25rem;
+            border-radius: 0.5rem;
+            color: rgba(255, 255, 255, 0.85);
             text-decoration: none;
-            font-size: 0.9rem;
+            transition: background-color 0.15s;
         }
-        .nav a.active {
-            color: #60a5fa;
-            font-weight: 600;
+        .navbar .nav-btn:hover {
+            background-color: rgba(255, 255, 255, 0.10);
+            color: #fff;
         }
-        .nav a:hover {
-            color: #93c5fd;
+        .navbar .nav-btn.active {
+            background-color: #0d3585;
+            color: #fff;
+            box-shadow: 0 0 0 1px rgba(13, 53, 133, 0.6);
         }
-        .nav .brand {
-            font-weight: 600;
-            color: #cbd5e1;
-            margin-right: 0.5rem;
+        .navbar .nav-btn i {
+            font-size: 1.05rem;
         }
-        .nav .logout {
-            margin-left: auto;
-        }
-        .nav .logout button {
-            background: transparent;
-            padding: 0.25rem 0.75rem;
-            border: 1px solid #334155;
+        /* User-bar: a single pill; pixie has no per-operator account
+           surface yet so this is just a logout button styled to match
+           bty's user-bar. Extend later when accounts land. */
+        .user-bar {
+            display: inline-flex;
+            align-items: stretch;
+            border-radius: 999px;
+            background-color: rgba(255, 255, 255, 0.08);
+            border: 1px solid rgba(255, 255, 255, 0.12);
+            overflow: hidden;
             font-size: 0.85rem;
         }
-        .nav .logout button:hover {
-            background: #334155;
-        }
-        .card {
-            background: #1e293b;
-            border-radius: 8px;
-            padding: 2rem;
-            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
-        }
-        h1 {
-            margin-top: 0;
-            font-size: 1.75rem;
-        }
-        input[type="password"] {
-            padding: 0.5rem;
-            border: 1px solid #334155;
-            border-radius: 4px;
-            background: #0f172a;
-            color: #e2e8f0;
-            font-size: 1rem;
-            width: 100%;
-            box-sizing: border-box;
-        }
-        button {
-            padding: 0.5rem 1rem;
+        .user-bar-action {
+            display: inline-flex;
+            align-items: center;
+            padding: 0.35rem 0.7rem;
+            background: transparent;
             border: none;
-            border-radius: 4px;
-            background: #3b82f6;
-            color: white;
-            font-size: 1rem;
-            cursor: pointer;
+            color: rgba(255, 255, 255, 0.85);
+            text-decoration: none;
+            transition: background-color 0.15s, color 0.15s;
         }
-        button:hover {
-            background: #2563eb;
+        .user-bar-action:hover,
+        .user-bar-action:focus {
+            background-color: rgba(255, 255, 255, 0.10);
+            color: #fff;
+            outline: none;
         }
-        .error {
-            color: #f87171;
-            margin: 1rem 0;
+        .user-bar-logout:hover,
+        .user-bar-logout:focus {
+            background-color: rgba(220, 53, 69, 0.65);
+            color: #fff;
         }
-        .muted {
-            color: #94a3b8;
-            font-size: 0.875rem;
+        /* Sub-nav strip. Same layout contract as bty: pages with
+           per-section actions render their pill nav here so it
+           visually attaches to the main navbar above. */
+        .subnav-strip {
+            background-color: #495057;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.10);
+            padding-top: 0.25rem;
+            padding-bottom: 0.25rem;
+            font-size: 0.85rem;
+            line-height: 1.4;
         }
-        .version {
-            position: fixed;
-            bottom: 1rem;
-            right: 1rem;
-            color: #475569;
-            font-size: 0.75rem;
+        .subnav-strip > .container {
+            min-height: 2rem;
+            display: flex;
+            align-items: center;
+            gap: 0.6rem;
         }
-        code {
-            background: #0f172a;
-            padding: 0.125rem 0.375rem;
-            border-radius: 3px;
-            font-family: "SF Mono", Monaco, Consolas, monospace;
+        .subnav-strip .form-control-sm,
+        .subnav-strip .btn-sm,
+        .subnav-strip a,
+        .subnav-strip label,
+        .subnav-strip .small,
+        .subnav-strip small {
+            font-size: inherit;
+            line-height: inherit;
+        }
+        .subnav-strip .form-control-sm,
+        .subnav-strip .btn-sm {
+            padding-top: 0.15rem;
+            padding-bottom: 0.15rem;
+        }
+        .subnav-strip .nav-pills {
+            gap: 0.25rem;
+        }
+        .subnav-strip .nav-pills .nav-link {
+            color: rgba(255, 255, 255, 0.78);
+            padding: 0.15rem 0.55rem;
+        }
+        .subnav-strip .nav-pills .nav-link:hover {
+            color: #fff;
+            background-color: rgba(255, 255, 255, 0.10);
+        }
+        .subnav-strip .nav-pills .nav-link.active {
+            color: #fff;
+            background-color: #0d3585;
+        }
+        .subnav-strip .text-muted {
+            color: rgba(255, 255, 255, 0.55) !important;
+        }
+        .subnav-strip code {
+            color: rgba(255, 255, 255, 0.85);
+            background-color: transparent;
+        }
+        .subnav-strip a {
+            color: rgba(255, 255, 255, 0.78);
+        }
+        .subnav-strip a:hover {
+            color: #fff;
+        }
+        /* Surface shading ladder: card-header > thead > table body, each
+           step lighter going down. Same three-tone recipe bty uses so a
+           pixie machines / catalog table reads with the same depth cues
+           an operator learned on bty. */
+        .table {
+            --bs-table-bg: #eff2f6;
+        }
+        .table > thead {
+            --bs-table-bg: #e1e7ef;
+        }
+        .card > .card-header.bg-light {
+            background-color: #d2dbe6 !important;
         }
     </style>
-    {% block head %}{% endblock %}
+    <script src="/static/htmx.min.js"></script>
+    <script src="/static/sse.js"></script>
 </head>
-<body>
+<body class="bg-light">
+{# Sticky header: the accent strip, the main navbar, and the sub-nav
+   travel together and pin to the top so per-section nav stays
+   reachable while scrolling a long page. #}
+<div class="sticky-header">
+<div class="brand-accent"></div>
+<nav class="navbar navbar-expand-md bg-dark navbar-dark py-2">
     <div class="container">
+        {# Brand pill doubles as the dashboard link. The active state
+           on ``page == 'dashboard'`` is the "you are on the dashboard"
+           cue; a separate ``Dashboard`` nav-btn would just duplicate
+           the brand's click target. #}
+        <a class="navbar-brand fw-semibold {% if page == 'dashboard' %}brand-active{% endif %}"
+           href="/ui/">
+            <img src="/static/pixie-favicon.png" alt="pixie mascot" class="brand-icon me-1">PIXIE
+        </a>
         {% if authed %}
-        <nav class="nav">
-            <span class="brand">pixie</span>
-            <a href="/ui/" class="{{ 'active' if page == 'dashboard' else '' }}">Catalog</a>
-            <a href="/ui/exports" class="{{ 'active' if page == 'exports' else '' }}">Exports</a>
-            <a href="/ui/machines" class="{{ 'active' if page == 'machines' else '' }}">Machines</a>
-            <a href="/ui/events" class="{{ 'active' if page == 'events' else '' }}">Events</a>
-            <form method="post" action="/ui/logout" class="logout">
-                <button type="submit">Sign out</button>
-            </form>
-        </nav>
+        <div class="d-flex flex-grow-1 align-items-center flex-wrap">
+            <div class="me-auto d-flex flex-wrap">
+                <a class="nav-btn {% if page == 'machines' %}active{% endif %}" href="/ui/machines">
+                    <i class="bi bi-pc-display"></i>Machines
+                </a>
+                <a class="nav-btn {% if page == 'exports' %}active{% endif %}" href="/ui/exports">
+                    <i class="bi bi-hdd-network"></i>Exports
+                </a>
+                <a class="nav-btn {% if page == 'events' %}active{% endif %}" href="/ui/events">
+                    <i class="bi bi-clock-history"></i>Events
+                </a>
+            </div>
+            <span class="navbar-version me-2">v{{ version }}</span>
+            <div class="user-bar mt-2 mt-md-0"
+                 title="Session (session cookie, one operator).">
+                <span class="user-bar-action">
+                    <i class="bi bi-person-circle me-1"></i>admin
+                </span>
+                <form action="/ui/logout" method="post" class="m-0 d-inline-flex">
+                    <button type="submit" class="user-bar-action user-bar-logout"
+                            title="Sign out">
+                        <i class="bi bi-box-arrow-right"></i>
+                    </button>
+                </form>
+            </div>
+        </div>
         {% endif %}
-        {% block content %}{% endblock %}
     </div>
-    <div class="version">pixie v{{ version }}</div>
+</nav>
+
+{# Sub-nav strip. Pages with per-section actions render their pill
+   nav in the ``subnav`` block; pages without leave it empty and
+   the main content flows straight up to the main navbar. #}
+{% block subnav %}{% endblock %}
+</div>{# /.sticky-header #}
+
+<main class="container py-4">
+    {% if flash %}
+    <div class="alert alert-{{ flash_kind or 'info' }}">{{ flash }}</div>
+    {% endif %}
+    {% block intro %}{% endblock %}
+    {% block content %}{% endblock %}
+</main>
+
+<script>
+// Keep ``scroll-padding-top`` in lockstep with the sticky header's
+// actual height so in-page ``#anchor`` jumps land BELOW the header
+// rather than under it. Same pattern bty uses; measure on load and
+// on resize so window shrinks that wrap the subnav onto two lines
+// also stay correct.
+(function () {
+    function syncScrollPadding() {
+        var header = document.querySelector(".sticky-header");
+        if (!header) return;
+        document.documentElement.style.scrollPaddingTop = (header.offsetHeight + 6) + "px";
+    }
+    syncScrollPadding();
+    window.addEventListener("resize", syncScrollPadding);
+    document.body.addEventListener("htmx:afterSwap", syncScrollPadding);
+})();
+</script>
 </body>
 </html>
