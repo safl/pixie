@@ -37,8 +37,8 @@
             </thead>
             <tbody>
                 {% for m in machines %}
-                <tr>
-                    <td>
+                <tr data-machine-row="{{ m.mac }}">
+                    <td data-cell="mac-labels">
                         <a href="/ui/machines/{{ m.mac }}" class="text-decoration-none">
                             <code>{{ m.mac }}</code>
                         </a>
@@ -50,7 +50,7 @@
                         </div>
                         {% endif %}
                     </td>
-                    <td>
+                    <td data-cell="boot-mode">
                         {% if m.boot_mode == 'ramboot' %}
                         <span class="badge text-bg-primary">
                             <i class="bi bi-hdd-network me-1"></i>ramboot
@@ -61,14 +61,14 @@
                         </span>
                         {% endif %}
                     </td>
-                    <td>
+                    <td data-cell="image">
                         {% if m.image_content_sha256 %}
                         <code title="{{ m.image_content_sha256 }}">{{ m.image_content_sha256[:12] }}</code>
                         {% else %}
                         <span class="text-muted small">-</span>
                         {% endif %}
                     </td>
-                    <td>
+                    <td data-cell="inventory">
                         {% if m.inventory %}
                         {% set d = m.inventory.get("disks") or [] %}
                         <span class="small">
@@ -81,7 +81,7 @@
                         <span class="text-muted small">-</span>
                         {% endif %}
                     </td>
-                    <td class="small text-muted">
+                    <td class="small text-muted" data-cell="last-seen">
                         {{ m.last_seen_at | fmt_ts }}
                         {% if m.last_seen_ip %}<br><code>{{ m.last_seen_ip }}</code>{% endif %}
                     </td>
@@ -116,4 +116,62 @@
     </div>
     {% endif %}
 </div>
+
+<script>
+// Live refresh: every 5 s hit /ui/machines-live.json and update the
+// per-machine cells (boot_mode badge, image sha, inventory count,
+// last_seen_at + IP). Only rows currently on the page get updated
+// (rows on other pagination pages aren't visible; a full poll of
+// them would just churn the state dict). A new MAC that shows up
+// server-side but wasn't rendered here does NOT get injected --
+// pagination + sort would be wrong without a re-render; the
+// operator sees it on their next page load.
+(function () {
+    const POLL_MS = 5000;
+    const rows = document.querySelectorAll("[data-machine-row]");
+    if (!rows.length) return;
+
+    function bootBadge(mode) {
+        if (mode === "ramboot") {
+            return `<span class="badge text-bg-primary"><i class="bi bi-hdd-network me-1"></i>ramboot</span>`;
+        }
+        return `<span class="badge text-bg-secondary"><i class="bi bi-box-arrow-right me-1"></i>${mode}</span>`;
+    }
+
+    async function poll() {
+        try {
+            const r = await fetch("/ui/machines-live.json", {credentials: "same-origin"});
+            if (!r.ok) return;
+            const rowsData = await r.json();
+            rows.forEach((tr) => {
+                const mac = tr.getAttribute("data-machine-row");
+                const d = rowsData[mac];
+                if (!d) return;
+                const setCell = (key, html) => {
+                    const cell = tr.querySelector(`[data-cell="${key}"]`);
+                    if (cell && cell.innerHTML !== html) cell.innerHTML = html;
+                };
+                setCell("boot-mode", bootBadge(d.boot_mode));
+                setCell("image", d.image_content_sha256
+                    ? `<code title="${d.image_content_sha256}">${d.image_content_sha256.slice(0,12)}</code>`
+                    : `<span class="text-muted small">-</span>`);
+                let inv;
+                if (d.inventory_at) {
+                    const disks = d.disks_count || 0;
+                    inv = `<span class="small"><i class="bi bi-hdd me-1"></i>${disks} disk${disks === 1 ? "" : "s"}</span>`;
+                    if (d.has_lshw) inv += ` <span class="text-muted small">+ lshw</span>`;
+                } else {
+                    inv = `<span class="text-muted small">-</span>`;
+                }
+                setCell("inventory", inv);
+                let seen = d.last_seen_at_display || d.last_seen_at || "-";
+                if (d.last_seen_ip) seen += `<br><code>${d.last_seen_ip}</code>`;
+                setCell("last-seen", seen);
+            });
+        } catch (e) { /* swallow; try again next tick */ }
+    }
+    poll();
+    setInterval(poll, POLL_MS);
+})();
+</script>
 {% endblock %}

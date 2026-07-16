@@ -279,3 +279,34 @@ def test_pxe_plan_ramboot_without_bound_image_falls_back(client: TestClient) -> 
     assert r.text.startswith("#!ipxe")
     assert "exit" in r.text
     assert "no image bound" in r.text
+
+
+def test_ui_machines_live_reflects_current_row_shape(client: TestClient) -> None:
+    """The /ui/machines-live.json endpoint returns a dict keyed by MAC
+    with the fields the JS refresh needs: boot_mode, image sha, labels,
+    last_seen_at (raw + display), inventory count, has_lshw."""
+    c = _authed(client)
+    # Seed a row via discovery + a bind + an inventory post.
+    mac = "aa:bb:cc:dd:ee:fe"
+    c.get(f"/pxe/{mac}")  # discovery
+    c.put(f"/machines/{mac}", json={"boot_mode": "ipxe-exit", "labels": ["rack-9"]})
+    c.post(
+        f"/pxe/{mac}/inventory",
+        json={"disks": [{"path": "/dev/sda", "serial": "SN"}], "lshw": {"class": "system"}},
+    )
+    r = c.get("/ui/machines-live.json")
+    assert r.status_code == 200
+    body = r.json()
+    row = body[mac]
+    assert row["boot_mode"] == "ipxe-exit"
+    assert row["labels"] == ["rack-9"]
+    assert row["disks_count"] == 1
+    assert row["has_lshw"] is True
+    assert row["last_seen_at"]  # raw ISO
+    assert row["last_seen_at_display"]  # server-formatted
+
+
+def test_ui_machines_live_requires_auth(client: TestClient) -> None:
+    r = client.get("/ui/machines-live.json", follow_redirects=False)
+    assert r.status_code == 303
+    assert r.headers["location"] == "/ui/login"

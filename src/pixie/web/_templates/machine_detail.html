@@ -45,9 +45,9 @@
             <dt class="col-sm-3 text-muted small">Discovered at</dt>
             <dd class="col-sm-9 small text-muted">{{ machine.discovered_at | fmt_ts }}</dd>
             <dt class="col-sm-3 text-muted small">Last seen</dt>
-            <dd class="col-sm-9 small text-muted">{{ machine.last_seen_at | fmt_ts }}</dd>
+            <dd class="col-sm-9 small text-muted" data-live="last-seen">{{ machine.last_seen_at | fmt_ts }}</dd>
             <dt class="col-sm-3 text-muted small">Last seen IP</dt>
-            <dd class="col-sm-9 small">
+            <dd class="col-sm-9 small" data-live="last-seen-ip">
                 {% if machine.last_seen_ip %}<code>{{ machine.last_seen_ip }}</code>
                 {% else %}<span class="text-muted">-</span>{% endif %}
             </dd>
@@ -536,6 +536,33 @@
     applyUsage();
     applyRambootGate();
     applyFlashGuard();
+})();
+
+// Live poll: refresh the ``Last seen`` / ``Last seen IP`` cells
+// every 5 s so an operator watching a target boot into the live
+// env sees the ``last_seen_at`` bump when the initrd's iPXE
+// chain hits /pxe/<mac>. Same JSON endpoint the machines list
+// poll uses so the two views stay in lockstep.
+(function () {
+    const MAC = "{{ machine.mac }}";
+    async function poll() {
+        try {
+            const r = await fetch("/ui/machines-live.json", {credentials: "same-origin"});
+            if (!r.ok) return;
+            const rows = await r.json();
+            const d = rows[MAC];
+            if (!d) return;
+            const seen = document.querySelector('[data-live="last-seen"]');
+            if (seen) seen.textContent = d.last_seen_at_display || d.last_seen_at || "-";
+            const ip = document.querySelector('[data-live="last-seen-ip"]');
+            if (ip) {
+                ip.innerHTML = d.last_seen_ip
+                    ? `<code>${d.last_seen_ip}</code>`
+                    : `<span class="text-muted">-</span>`;
+            }
+        } catch (e) { /* swallow */ }
+    }
+    setInterval(poll, 5000);
 })();
 </script>
 {% endblock %}
