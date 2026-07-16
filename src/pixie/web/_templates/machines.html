@@ -1,35 +1,37 @@
 {% extends "layout.html" %}
-{% from "_partials/table_helpers.html" import search_form, pagination %}
+{% from "_partials/table_helpers.html" import search_input, sort_header, pagination_inline %}
 {% block title %}Machines - pixie{% endblock %}
 {% block subnav %}
 <nav class="navbar subnav-strip" aria-label="Section sub-navigation">
     <div class="container">
+        {# LEFT: anchor links to in-page sections. Don't repeat the
+           top-nav label ("Machines"); use section-specific verbs. #}
         <span class="subnav-jumps d-flex align-items-center flex-wrap">
-            <a href="#known">Machines</a>
+            <a href="#list">List</a>
         </span>
-        {{ search_form("/ui/machines", q, page_state.per_page) }}
+        {# RIGHT: no inline actions on this page. Bindings are edited
+           per-machine on the detail page. #}
     </div>
 </nav>
 {% endblock %}
 {% block content %}
-<div class="card shadow-sm mb-4" id="known">
-    <div class="card-header bg-light d-flex align-items-center">
-        <h2 class="h5 mb-0"><i class="bi bi-pc-display me-2"></i>Known machines</h2>
-        <span class="text-muted small ms-auto">
-            Every MAC pixie has seen via <code>GET /pxe/&lt;mac&gt;</code> discovery, plus
-            operator-bound rows.
-        </span>
+<div class="card" id="list">
+    <div class="card-header bg-light fw-semibold d-flex flex-wrap align-items-center gap-3 py-2">
+        <span class="text-nowrap"><i class="bi bi-pc-display me-1"></i>Machines</span>
+        <span class="vr"></span>
+        {{ search_input('/ui/machines', q, preserved, 'MAC / boot mode / sha / last IP') }}
+        {{ pagination_inline(page_state, preserved, label='machines') }}
     </div>
     {% if machines %}
     <div class="table-responsive">
         <table class="table table-hover align-middle mb-0">
-            <thead>
+            <thead class="table-light">
                 <tr>
-                    <th scope="col">MAC</th>
-                    <th scope="col">Boot mode</th>
+                    {{ sort_header('MAC', 'mac', sort, preserved) }}
+                    {{ sort_header('Boot mode', 'boot_mode', sort, preserved) }}
                     <th scope="col">Image</th>
                     <th scope="col">Inventory</th>
-                    <th scope="col">Last seen</th>
+                    {{ sort_header('Last seen', 'last_seen_at', sort, preserved) }}
                     <th scope="col" class="text-end">Actions</th>
                 </tr>
             </thead>
@@ -105,6 +107,5 @@
         </p>
     </div>
     {% endif %}
-    {{ pagination(page_state, "/ui/machines", q, page_state.per_page) }}
 </div>
 {% endblock %}

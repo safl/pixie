@@ -1,13 +1,15 @@
 {% extends "layout.html" %}
-{% from "_partials/table_helpers.html" import search_form, pagination %}
+{% from "_partials/table_helpers.html" import search_input, sort_header, pagination_inline %}
 {% block title %}Catalog - pixie{% endblock %}
 {% block subnav %}
 <nav class="navbar subnav-strip" aria-label="Section sub-navigation">
     <div class="container">
+        {# LEFT: relative anchor links to in-page sections. #}
         <span class="subnav-jumps d-flex align-items-center flex-wrap">
-            <a href="#catalog">Catalog</a>
+            <a href="#entries">Entries</a>
         </span>
-        {{ search_form("/ui/catalog", q, page_state.per_page) }}
+        {# RIGHT: inline action form. Import a catalog.toml URL and
+           upsert every entry. #}
         <form method="post" action="/ui/catalog/import"
               class="subnav-actions d-flex align-items-center gap-1 m-0 ms-auto">
             <label for="catalog_url" class="text-white-50 small mb-0 flex-shrink-0"
@@ -27,21 +29,23 @@
 </nav>
 {% endblock %}
 {% block content %}
-<div class="card shadow-sm">
-    <div class="card-header bg-light d-flex align-items-center">
-        <h2 class="h5 mb-0"><i class="bi bi-collection me-2"></i>Catalog</h2>
-        <span class="text-muted small ms-auto">
-            Every image pixie can serve. Disk images ship as ramboot / flash
-            targets over NBD; netboot bundles ship as vmlinuz + initrd over HTTP.
-        </span>
+<div class="card" id="entries">
+    {# Card header: title/label on the left, filter form inline in
+       the middle, pagination + per-page on the right -- same
+       toolbar shape bty uses on /ui/events. #}
+    <div class="card-header bg-light fw-semibold d-flex flex-wrap align-items-center gap-3 py-2">
+        <span class="text-nowrap"><i class="bi bi-collection me-1"></i>Catalog</span>
+        <span class="vr"></span>
+        {{ search_input('/ui/catalog', q, preserved, 'name / src / arch / format / description') }}
+        {{ pagination_inline(page_state, preserved, label='entries') }}
     </div>
     {% if entries %}
     <div class="table-responsive">
         <table class="table table-hover align-middle mb-0">
-            <thead>
+            <thead class="table-light">
                 <tr>
-                    <th scope="col">Entry</th>
-                    <th scope="col">Type</th>
+                    {{ sort_header('Entry', 'name', sort, preserved) }}
+                    {{ sort_header('Type', 'format', sort, preserved) }}
                     <th scope="col">Fetch state</th>
                     <th scope="col">NBD</th>
                     <th scope="col" class="text-end">Actions</th>
@@ -210,6 +214,5 @@
         </p>
     </div>
     {% endif %}
-    {{ pagination(page_state, "/ui/catalog", q, page_state.per_page) }}
 </div>
 {% endblock %}

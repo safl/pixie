@@ -42,6 +42,34 @@ _NUMBERED_WINDOW = 2
 
 
 @dataclass(frozen=True)
+class SortState:
+    """Parsed ``?sort=<col>&dir=asc|desc``.
+
+    ``column`` is one of the caller-supplied allowlist keys (the
+    URL-visible name, not necessarily the SQL identifier).
+    ``direction`` is ``"asc"`` or ``"desc"``. ``key_expr`` is
+    whatever the allowlist mapped the column to -- typically an
+    attribute name for in-memory sort, or a SQL fragment for the
+    events-table SQL path. Kept schema-agnostic so pixie's
+    in-memory sort and a later SQL-side sort share the parser.
+    """
+
+    column: str
+    direction: str  # "asc" | "desc"
+    key_expr: str
+
+    def is_active(self, column: str) -> bool:
+        return self.column == column
+
+    def next_direction(self, column: str) -> str:
+        """For a header link on ``column``: the direction the click
+        should send. Clicking the currently-active column flips
+        direction; clicking any other column starts at ``asc``.
+        """
+        return "desc" if self.is_active(column) and self.direction == "asc" else "asc"
+
+
+@dataclass(frozen=True)
 class PageState:
     """Parsed ``?page=<N>&per_page=<N>`` + computed totals."""
 
@@ -123,6 +151,48 @@ def parse_pagination(
 
     offset = (page - 1) * per_page
     return PageState(page=page, per_page=per_page, total=total, offset=offset, limit=per_page)
+
+
+def parse_sort(
+    params: Mapping[str, str],
+    *,
+    allowed: Mapping[str, str],
+    default_column: str,
+    default_direction: str = "asc",
+) -> SortState:
+    """Parse ``?sort=...&dir=...`` against a per-page column allowlist.
+
+    ``allowed`` maps the column-key the operator sees in the URL to
+    whatever the caller wants to sort on -- an attribute path for
+    in-memory sort, or a SQL fragment for SQL-side sort. Anything
+    not in ``allowed`` falls back to ``default_column``. The
+    allowlist is the safety guard: no operator-controlled string
+    ever flows into an eval / SQL context.
+    """
+    if default_column not in allowed:
+        raise ValueError(
+            f"default_column {default_column!r} must be in the allowlist {sorted(allowed)!r}"
+        )
+    raw_col = params.get("sort") or ""
+    column = raw_col if raw_col in allowed else default_column
+    raw_dir = (params.get("dir") or "").lower()
+    direction = raw_dir if raw_dir in ("asc", "desc") else default_direction
+    return SortState(column=column, direction=direction, key_expr=allowed[column])
+
+
+def sort_rows(rows: Iterable[Any], sort: SortState) -> list[Any]:
+    """In-memory sort helper: pull the value at ``sort.key_expr`` (a
+    dotted attribute path via :func:`_resolve`) off each row and
+    order by it. Missing / None values sort as an empty string so a
+    row with a blank field lands consistently rather than raising."""
+
+    def _key(row: Any) -> tuple[int, str]:
+        val = _resolve(row, sort.key_expr)
+        if val is None:
+            return (1, "")  # missing values sort after present ones on asc
+        return (0, str(val).lower())
+
+    return sorted(rows, key=_key, reverse=(sort.direction == "desc"))
 
 
 def _resolve(row: Any, path: str) -> Any:
