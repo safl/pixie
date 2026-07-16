@@ -123,6 +123,80 @@
                 </div>
                 {% endif %}
             </div>
+
+            {# The three fields below are GENERAL config a boot mode
+               may or may not consume; the JS gate on ``data-policy-
+               relevant`` dims them and appends "(not used by <mode>)"
+               when the current mode ignores them, so operator picks
+               calibrated under one mode survive a mode flip. #}
+            <div class="col-md-4" data-policy-relevant="ipxe-exit pixie-flash-once pixie-flash-always">
+                <label for="sanboot_drive" class="form-label">
+                    Sanboot drive
+                    <span class="policy-usage small text-muted fw-normal ms-1"></span>
+                </label>
+                <input type="text" id="sanboot_drive" name="sanboot_drive"
+                       class="form-control font-monospace"
+                       value="{{ machine.sanboot_drive or '' }}"
+                       placeholder="0x80"
+                       pattern="^0x[0-9a-fA-F]{1,2}$"
+                       title="iPXE BIOS drive slug: 0x80 = first disk, 0x81 = second, ...">
+                <div class="form-text">
+                    Which local disk iPXE boots when the ipxe-exit chain fires
+                    (also the one-shot disk boot after a flash). Blank leaves
+                    it up to iPXE's default (typically 0x80).
+                </div>
+            </div>
+            <div class="col-md-4" data-policy-relevant="pixie-flash-once pixie-flash-always">
+                <label for="target_disk_serial" class="form-label">
+                    Target disk
+                    <span class="policy-usage small text-muted fw-normal ms-1"></span>
+                </label>
+                {% set disks = (machine.inventory or {}).get("disks") or [] %}
+                {% if disks %}
+                <select id="target_disk_serial" name="target_disk_serial" class="form-select">
+                    <option value="">- none picked (flash will refuse) -</option>
+                    {% for d in disks %}
+                    {% set serial = d.get("serial") or "" %}
+                    {% if serial %}
+                    <option value="{{ serial }}"
+                            {% if serial == machine.target_disk_serial %}selected{% endif %}>
+                        {{ d.get("path") or "?" }} | {{ d.get("size") or "?" }}{% if d.get("model") %} | {{ d.get("model") }}{% endif %} | serial: {{ serial }}
+                    </option>
+                    {% else %}
+                    <option disabled>
+                        {{ d.get("path") or "?" }} | (no serial; cannot flash-target)
+                    </option>
+                    {% endif %}
+                    {% endfor %}
+                </select>
+                <div class="form-text">
+                    Live env matches the SERIAL against current disks at flash
+                    time; a swapped or renumbered drive refuses the flash rather
+                    than risking the wrong disk.
+                </div>
+                {% else %}
+                <input type="hidden" name="target_disk_serial"
+                       value="{{ machine.target_disk_serial or '' }}">
+                <div class="alert alert-warning small mb-0">
+                    No inventory posted yet. Set boot_mode=<code>pixie-inventory</code>
+                    and power-cycle the machine; the live env will report its disks
+                    and this picker will populate.
+                </div>
+                {% endif %}
+            </div>
+            <div class="col-md-4">
+                <label for="labels" class="form-label">Labels</label>
+                <input type="text" id="labels" name="labels"
+                       class="form-control"
+                       value="{{ machine.labels | join(', ') }}"
+                       placeholder="rack-3, noisy, gmktec-g5">
+                <div class="form-text">
+                    Comma-separated tags for grouping / search. Cosmetic; not
+                    consumed by the boot chain. Alnum-leading; a-z / 0-9 /
+                    space / <code>.</code> <code>_</code> <code>-</code>; max
+                    64 chars per tag, 16 tags per machine.
+                </div>
+            </div>
             <div class="col-12">
                 <button type="submit" class="btn btn-primary">
                     <i class="bi bi-check2 me-1"></i>Update binding

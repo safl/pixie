@@ -102,6 +102,87 @@ def test_put_machine_ipxe_exit_roundtrip(client: TestClient) -> None:
     assert r2.json()["boot_mode"] == "ipxe-exit"
 
 
+def test_put_machine_persists_labels_sanboot_target_serial(client: TestClient) -> None:
+    """Extended binding fields round-trip through the JSON PUT + GET
+    pair and land on ``Machine.to_dict()``."""
+    c = _authed(client)
+    r = c.put(
+        "/machines/aa:bb:cc:dd:ee:20",
+        json={
+            "boot_mode": "pixie-flash-once",
+            "labels": ["rack-3", "gmktec-g5"],
+            "sanboot_drive": "0x81",
+            "target_disk_serial": "S679NX0R123456",
+        },
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["labels"] == ["rack-3", "gmktec-g5"]
+    assert body["sanboot_drive"] == "0x81"
+    assert body["target_disk_serial"] == "S679NX0R123456"
+
+    row = c.get("/machines/aa:bb:cc:dd:ee:20").json()
+    assert row["labels"] == ["rack-3", "gmktec-g5"]
+    assert row["sanboot_drive"] == "0x81"
+    assert row["target_disk_serial"] == "S679NX0R123456"
+
+
+def test_put_machine_rejects_bad_sanboot_drive(client: TestClient) -> None:
+    """Malformed iPXE drive slug (not ``0x<hex1-2>``) returns 422."""
+    c = _authed(client)
+    r = c.put(
+        "/machines/aa:bb:cc:dd:ee:21",
+        json={"boot_mode": "ipxe-exit", "sanboot_drive": "80h"},
+    )
+    assert r.status_code == 422
+
+
+def test_put_machine_rejects_bad_label(client: TestClient) -> None:
+    """Labels reject anything outside the alnum-leading char set."""
+    c = _authed(client)
+    r = c.put(
+        "/machines/aa:bb:cc:dd:ee:22",
+        json={"boot_mode": "ipxe-exit", "labels": [" nope!bang"]},
+    )
+    assert r.status_code == 422
+
+
+def test_parse_labels_dedupes_and_normalises() -> None:
+    from pixie.machines._store import parse_labels
+
+    out = parse_labels(" rack-3 , noisy,  rack-3 , gmktec-g5 ")
+    assert out == ["rack-3", "noisy", "gmktec-g5"]
+
+
+def test_parse_labels_enforces_count_limit() -> None:
+    from pixie.machines._store import parse_labels
+
+    with pytest.raises(ValueError, match="at most 16 labels"):
+        parse_labels(", ".join(f"label{i}" for i in range(17)))
+
+
+def test_ui_machines_bind_form_persists_extended_fields(client: TestClient) -> None:
+    c = _authed(client)
+    r = c.post(
+        "/ui/machines/bind",
+        data={
+            "mac": "aa:bb:cc:dd:ee:23",
+            "boot_mode": "ipxe-exit",
+            "labels": "rack-3, noisy",
+            "sanboot_drive": "0x80",
+        },
+        follow_redirects=False,
+    )
+    assert r.status_code == 303
+    body = c.get("/ui/machines").text
+    assert "rack-3" in body
+    assert "noisy" in body
+
+    row = c.get("/machines/aa:bb:cc:dd:ee:23").json()
+    assert row["labels"] == ["rack-3", "noisy"]
+    assert row["sanboot_drive"] == "0x80"
+
+
 def test_pxe_bootstrap_serves_ipxe_prefix(client: TestClient) -> None:
     """The bootstrap route never fails on a first contact (a fresh
     target has no machine row yet, and the bootstrap doesn't touch

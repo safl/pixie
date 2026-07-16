@@ -715,7 +715,15 @@ def create_app() -> FastAPI:
         filtered = filter_rows(
             all_machines,
             q,
-            fields=("mac", "boot_mode", "image_content_sha256", "last_seen_ip"),
+            fields=(
+                "mac",
+                "boot_mode",
+                "image_content_sha256",
+                "last_seen_ip",
+                "labels",
+                "sanboot_drive",
+                "target_disk_serial",
+            ),
         )
         sort_state = parse_sort(
             dict(request.query_params),
@@ -813,19 +821,27 @@ def create_app() -> FastAPI:
         mac: str = Form(...),
         boot_mode: str = Form(...),
         image_content_sha256: str = Form(""),
+        labels: str = Form(""),
+        sanboot_drive: str = Form(""),
+        target_disk_serial: str = Form(""),
         _auth: None = Depends(_require_ui_auth),
     ) -> RedirectResponse:
         import contextlib as _contextlib
 
-        from pixie.machines._store import BadMac
+        from pixie.machines._store import BadMac, parse_labels
 
         # UI-side: silently redirect back on invalid input; a full
-        # field-error flash chain lands in a follow-up.
+        # field-error flash chain lands in a follow-up. ``labels`` is a
+        # comma-separated string in the form; parse_labels enforces the
+        # same shape the JSON PUT path does.
         with _contextlib.suppress(BadMac, ValueError):
             request.app.state.machines_store.upsert_binding(
                 mac,
                 boot_mode=boot_mode,
                 image_content_sha256=image_content_sha256.strip().lower(),
+                labels=parse_labels(labels),
+                sanboot_drive=sanboot_drive,
+                target_disk_serial=target_disk_serial,
             )
         return RedirectResponse(url="/ui/machines", status_code=status.HTTP_303_SEE_OTHER)
 
