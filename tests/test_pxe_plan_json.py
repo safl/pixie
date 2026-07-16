@@ -41,7 +41,7 @@ def _seed_machine(client: TestClient, mac: str, boot_mode: str) -> None:
         ("pixie-flash-once", "interactive"),
         ("pixie-flash-always", "interactive"),
         ("ipxe-exit", "exit"),
-        ("ramboot", "exit"),
+        ("ramboot", "interactive"),
     ],
 )
 def test_plan_json_maps_boot_mode(client: TestClient, boot_mode: str, expected_mode: str) -> None:

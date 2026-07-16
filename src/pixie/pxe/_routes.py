@@ -205,6 +205,18 @@ def pxe_plan_json(request: Request, mac: str) -> dict[str, Any]:
         # than a broken auto-flash dispatch. A follow-up PR grows
         # ``target_disk_serial`` + returns ``mode=flash`` here.
         return {"mode": "interactive"}
-    # ipxe-exit / ramboot / unknown -> nothing to do from the live
-    # env's side.
+    if mode == "ramboot":
+        # ramboot targets normally boot the image's own kernel +
+        # initrd -- no pixie CLI in the picture -- so this branch
+        # only fires under the ramboot chain test, which pivots
+        # through the pixie live env as a stand-in. Return
+        # ``interactive`` (not ``exit``): ``exit`` triggers a
+        # ``sys.exit(0)`` inside the CLI that races the
+        # daemon-thread inventory post, so an ``exit`` here
+        # occasionally kills the CLI before inventory reaches
+        # pixie. ``interactive`` keeps the CLI up (wizard on
+        # tty1) which is harmless in the test and never runs
+        # on a real ramboot boot.
+        return {"mode": "interactive"}
+    # ipxe-exit / unknown -> nothing to do from the live env's side.
     return {"mode": "exit"}
