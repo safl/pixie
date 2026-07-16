@@ -12,6 +12,55 @@
 </nav>
 {% endblock %}
 {% block content %}
+{% if warn_delete_blob %}
+<div class="alert alert-warning d-flex align-items-start" role="alert">
+    <i class="bi bi-exclamation-triangle-fill me-2 mt-1"></i>
+    <div class="flex-grow-1">
+        <strong>Blob is in use.</strong>
+        <div class="mt-1 small">
+            The bytes for <code>{{ entry.name }}</code>
+            (sha <code>{{ entry.content_sha256[:12] }}</code>)
+            are referenced by:
+            {% if blob_using_machines %}
+            <div class="mt-1">
+                <span class="text-muted">Machines bound to this image:</span>
+                <ul class="mb-0">
+                    {% for mac in blob_using_machines %}
+                    <li><a href="/ui/machines/{{ mac }}"><code>{{ mac }}</code></a></li>
+                    {% endfor %}
+                </ul>
+            </div>
+            {% endif %}
+            {% if blob_running_exports %}
+            <div class="mt-1">
+                <span class="text-muted">Running NBD exports:</span>
+                <ul class="mb-0">
+                    {% for name in blob_running_exports %}
+                    <li><code>{{ name }}</code></li>
+                    {% endfor %}
+                </ul>
+            </div>
+            {% endif %}
+            <div class="mt-2">
+                Change those machines' bindings on the
+                <a href="/ui/machines">Machines</a> page (or bind them to a
+                different image) before deleting the blob, or click
+                "Delete blob anyway" -- pixie will stop the running exports
+                and drop the file.
+            </div>
+        </div>
+        <form method="post" action="/ui/catalog/delete-blob" class="mt-2 d-inline">
+            <input type="hidden" name="name" value="{{ entry.name }}">
+            <input type="hidden" name="force" value="1">
+            <button type="submit" class="btn btn-sm btn-warning">
+                <i class="bi bi-eraser me-1"></i>Delete blob anyway
+            </button>
+        </form>
+        <a href="/ui/catalog/{{ entry.name }}"
+           class="btn btn-sm btn-outline-secondary ms-1">Cancel</a>
+    </div>
+</div>
+{% endif %}
 {% if warn_delete %}
 <div class="alert alert-warning d-flex align-items-start" role="alert">
     <i class="bi bi-exclamation-triangle-fill me-2 mt-1"></i>
@@ -136,10 +185,19 @@
                 {% endif %}
             </button>
         </form>
-        <form method="post" action="/ui/catalog/delete" class="d-inline">
+        <form method="post" action="/ui/catalog/delete-blob" class="d-inline"
+              title="{% if already_fetched %}delete the on-disk bytes for this entry; the row stays so a Fetch re-runs the pipeline{% else %}no blob on disk yet{% endif %}">
+            <input type="hidden" name="name" value="{{ entry.name }}">
+            <button type="submit" class="btn btn-sm btn-outline-warning"
+                    {% if not already_fetched %}disabled{% endif %}>
+                <i class="bi bi-eraser me-1"></i>Delete blob
+            </button>
+        </form>
+        <form method="post" action="/ui/catalog/delete" class="d-inline"
+              title="delete this catalog entry (the row); on-disk bytes are not touched here -- use Delete blob for that">
             <input type="hidden" name="name" value="{{ entry.name }}">
             <button type="submit" class="btn btn-sm btn-outline-danger">
-                <i class="bi bi-trash me-1"></i>Delete
+                <i class="bi bi-trash me-1"></i>Delete entry
             </button>
         </form>
     </div>

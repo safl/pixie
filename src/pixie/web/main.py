@@ -561,12 +561,25 @@ def create_app() -> FastAPI:
                 "disk_image_users": backward,
                 "export": exp,
                 "warn_delete": bool(request.query_params.get("warn_delete")),
+                "warn_delete_blob": bool(request.query_params.get("warn_delete_blob")),
                 "orphans_bundle_name": (
                     forward.name
                     if (forward is not None and entry.bindable and forward.fetched)
                     else None
                 ),
                 "breaks_ramboot_for": [e.name for e in backward] if not entry.bindable else [],
+                "blob_using_machines": [
+                    m.mac
+                    for m in request.app.state.machines_store.list()
+                    if entry.content_sha256 and m.image_content_sha256 == entry.content_sha256
+                ],
+                "blob_running_exports": [
+                    e.name
+                    for e in request.app.state.exports_store.list()
+                    if entry.content_sha256
+                    and e.content_sha256 == entry.content_sha256
+                    and e.status == "running"
+                ],
                 "authed": True,
                 "page": "catalog",
             },
@@ -875,6 +888,79 @@ def create_app() -> FastAPI:
         store.delete(name)
         request.app.state.fetch_states.pop(name, None)
         return RedirectResponse(url="/ui/catalog", status_code=status.HTTP_303_SEE_OTHER)
+
+    @app.post("/ui/catalog/delete-blob")
+    def ui_catalog_delete_blob(
+        request: Request,
+        name: str = Form(...),
+        force: str = Form(""),
+        _auth: None = Depends(_require_ui_auth),
+    ) -> RedirectResponse:
+        """Delete the on-disk BYTES for an entry (blob file + artifact
+        dir if any) while keeping the catalog row. The row's
+        content_sha256 + size + fetched_at are cleared so Fetch runs
+        the full pipeline again next time.
+
+        Relation-aware: if any machine has ``image_content_sha256 ==
+        entry.content_sha256`` (i.e. is bound to ramboot for this
+        entry) OR a running NBD export serves the blob, bounce to
+        the entry's detail page with ``warn_delete_blob=1`` so the
+        operator can either point the machine at a different image
+        or explicitly confirm the delete via a hidden ``force=1``
+        input on that warning banner."""
+        import shutil
+
+        store = request.app.state.catalog_store
+        entry = store.get_entry(name)
+        if entry is None or not entry.content_sha256:
+            return RedirectResponse(url="/ui/catalog", status_code=status.HTTP_303_SEE_OTHER)
+        sha = entry.content_sha256
+        if not force:
+            using_machines = [
+                m.mac
+                for m in request.app.state.machines_store.list()
+                if m.image_content_sha256 == sha
+            ]
+            running_exports = [
+                e.name
+                for e in request.app.state.exports_store.list()
+                if e.content_sha256 == sha and e.status == "running"
+            ]
+            if using_machines or running_exports:
+                return RedirectResponse(
+                    url=f"/ui/catalog/{name}?warn_delete_blob=1",
+                    status_code=status.HTTP_303_SEE_OTHER,
+                )
+        # Force path (or unused blob): stop any nbdkit process serving
+        # the blob first so the file handle drops, then remove bytes.
+        for exp in request.app.state.exports_store.list():
+            if exp.content_sha256 == sha:
+                request.app.state.nbd_server.terminate(exp.name)
+                request.app.state.exports_store.delete(exp.name)
+        blob = store.blob_path(sha)
+        with contextlib_suppress(FileNotFoundError, OSError):
+            blob.unlink()
+            # Best-effort remove the enclosing ``<sha>/`` dir when
+            # empty. Content-addressed storage means other entries
+            # could share the same sha; the rmdir call only succeeds
+            # when we're the last reference.
+            with contextlib_suppress(OSError):
+                blob.parent.rmdir()
+        artifact_dir = store.artifact_dir(sha)
+        with contextlib_suppress(FileNotFoundError, OSError):
+            shutil.rmtree(artifact_dir)
+        store.mark_unfetched(name)
+        request.app.state.fetch_states.pop(name, None)
+        log = getattr(request.app.state, "events_log", None)
+        if log is not None:
+            log.emit(
+                "catalog.blob.deleted",
+                subject_kind="entry",
+                subject_id=name,
+                summary=f"blob deleted for {name} (sha {sha[:12]})",
+                details={"sha": sha, "forced": bool(force)},
+            )
+        return RedirectResponse(url=f"/ui/catalog/{name}", status_code=status.HTTP_303_SEE_OTHER)
 
     @app.post("/ui/catalog/import")
     def ui_catalog_import(
