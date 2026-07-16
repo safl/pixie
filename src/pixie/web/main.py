@@ -950,6 +950,22 @@ def create_app() -> FastAPI:
     ) -> dict[str, Any]:
         return {"pong": True, "version": pixie.__version__}
 
+    # ---------- live fetch progress ---------------------------------
+    #
+    # Small JSON echo of ``app.state.fetch_states``. The catalog page
+    # polls this while any row is in flight so the operator sees
+    # ``downloading 42 / 512 MiB`` -> ``decompressing`` -> ``unpacking``
+    # -> ``done`` without a full page reload. Auth-required because
+    # the payload names catalog entries; not sensitive by itself but
+    # part of the admin-only surface.
+
+    @app.get("/ui/fetch-states.json")
+    def ui_catalog_fetch_states(
+        request: Request,
+        _auth: None = Depends(_require_ui_auth),
+    ) -> JSONResponse:
+        return JSONResponse(dict(request.app.state.fetch_states))
+
     # ---------- ui: catalog admin forms ------------------------------
     #
     # These forms redirect back to /ui/ so an operator's browser stays
@@ -1051,9 +1067,27 @@ def create_app() -> FastAPI:
                 details={"src": entry.src, "update": is_update},
             )
 
+        def _report(payload: dict[str, Any]) -> None:
+            # Merge each phase transition into the row's live state so
+            # the UI polling endpoint (/ui/catalog/fetch-states.json)
+            # sees ``phase`` + ``bytes_downloaded`` / ``total_bytes``
+            # (during downloading) or ``format`` (during
+            # decompressing). We keep ``state=='fetching'`` throughout
+            # so existing "is this row in flight?" checks (the button-
+            # disable in catalog.html, the fresh-fetch guard above)
+            # still fire while the phase spins through its stages.
+            row = states.get(name) or {}
+            merged: dict[str, Any] = {
+                "state": "fetching",
+                "started_at": row.get("started_at"),
+                "error": None,
+            }
+            merged.update(payload)
+            states[name] = merged
+
         def _run() -> None:
             try:
-                result = _fetch(entry, store)
+                result = _fetch(entry, store, progress=_report)
                 states[name] = {"state": "done", "started_at": states[name].get("started_at")}
                 if events is not None:
                     events.emit(

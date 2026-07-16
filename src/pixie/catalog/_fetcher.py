@@ -29,8 +29,10 @@ import tarfile
 import tempfile
 import urllib.error
 import urllib.request
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 from pixie import oras
 from pixie._util import CHUNK, now_iso
@@ -38,6 +40,13 @@ from pixie.catalog._schema import CatalogEntry
 from pixie.catalog._store import CatalogStore
 
 _log = logging.getLogger(__name__)
+
+# Progress callback: the fetch pipeline invokes this at each phase
+# transition + periodically during long streaming loops. The dict
+# payload is JSON-serialisable (str / int / None) so a route can echo
+# it straight back to the UI. Callers pass ``None`` when they don't
+# care about progress; the fetcher handles that as a no-op.
+ProgressReporter = Callable[[dict[str, Any]], None] | None
 
 
 class FetchError(Exception):
@@ -85,6 +94,7 @@ def _stream_to_tmpfile(
     url: str,
     headers: dict[str, str],
     dest_dir: Path,
+    progress: ProgressReporter = None,
 ) -> tuple[Path, str, int]:
     """Download bytes from ``url`` into ``dest_dir/<uuid>.inflight``,
     streaming sha256 alongside. Returns (path, sha256, size).
@@ -93,6 +103,12 @@ def _stream_to_tmpfile(
     body. Callers pass a ``dest_dir`` that lives on the same
     filesystem as the final blob path so the ``os.replace`` at commit
     time is atomic.
+
+    ``progress`` is called at start (``phase='downloading'`` +
+    ``total_bytes``) then throttled to at most one call per 500 ms
+    while bytes stream in, and once again on completion. The payload
+    always carries ``phase`` + ``bytes_downloaded`` + ``total_bytes``
+    (``None`` when the server omits Content-Length).
     """
     dest_dir.mkdir(parents=True, exist_ok=True)
     fd, tmp_name = tempfile.mkstemp(prefix="fetch-", suffix=".inflight", dir=str(dest_dir))
@@ -106,8 +122,22 @@ def _stream_to_tmpfile(
 
     sha = hashlib.sha256()
     written = 0
+    last_emit = 0.0
     try:
         with urllib.request.urlopen(req, timeout=60) as resp, open(tmp_path, "wb") as out:
+            total_bytes: int | None
+            try:
+                total_bytes = int(resp.headers.get("Content-Length") or 0) or None
+            except ValueError:
+                total_bytes = None
+            if progress is not None:
+                progress(
+                    {
+                        "phase": "downloading",
+                        "bytes_downloaded": 0,
+                        "total_bytes": total_bytes,
+                    }
+                )
             while True:
                 chunk = resp.read(CHUNK)
                 if not chunk:
@@ -115,6 +145,29 @@ def _stream_to_tmpfile(
                 out.write(chunk)
                 sha.update(chunk)
                 written += len(chunk)
+                # Throttled progress emit: at most every 500 ms so a
+                # gigabit-line download doesn't hammer the state dict.
+                # ``time.monotonic`` is safe for interval comparisons
+                # (unaffected by clock jumps).
+                if progress is not None:
+                    now = _monotonic()
+                    if now - last_emit >= 0.5:
+                        progress(
+                            {
+                                "phase": "downloading",
+                                "bytes_downloaded": written,
+                                "total_bytes": total_bytes,
+                            }
+                        )
+                        last_emit = now
+        if progress is not None:
+            progress(
+                {
+                    "phase": "downloading",
+                    "bytes_downloaded": written,
+                    "total_bytes": total_bytes,
+                }
+            )
     except (urllib.error.URLError, OSError) as exc:
         tmp_path.unlink(missing_ok=True)
         raise FetchError(f"download failed for {url}: {exc}") from exc
@@ -126,12 +179,25 @@ def _stream_to_tmpfile(
     return tmp_path, sha.hexdigest(), written
 
 
+def _monotonic() -> float:
+    """Indirection so tests can freeze / step the clock without
+    touching ``time`` globally. Kept trivial so mypy still sees it
+    as ``() -> float``."""
+    import time as _time
+
+    return _time.monotonic()
+
+
 # ------------------------------------------------------------------------
 # Fetch verb: one call per catalog entry
 # ------------------------------------------------------------------------
 
 
-def fetch(entry: CatalogEntry, store: CatalogStore) -> FetchResult:
+def fetch(
+    entry: CatalogEntry,
+    store: CatalogStore,
+    progress: ProgressReporter = None,
+) -> FetchResult:
     """Download + sha256 + (for tar.gz) unpack. Idempotent: if the
     entry is already fetched AND its blob still exists on disk, this
     returns the existing FetchResult immediately.
@@ -142,6 +208,12 @@ def fetch(entry: CatalogEntry, store: CatalogStore) -> FetchResult:
     computes sha256, then extracts vmlinuz + initrd + manifest.json
     into ``artifacts/<sha>/``. The tmpfile is discarded (bundles are
     only useful unpacked; the tar.gz itself is not served).
+
+    ``progress`` is a live-status callback the routes layer wires to
+    ``app.state.fetch_states[entry.name]``. Called at every phase
+    transition (``downloading`` -> ``decompressing`` -> ``unpacking``
+    -> done) so the operator UI can render a live status pill without
+    polling the disk.
 
     Raises :class:`FetchError` on any failure. Catalog row is updated
     with content_sha + size + fetched_at only on success.
@@ -170,10 +242,14 @@ def fetch(entry: CatalogEntry, store: CatalogStore) -> FetchResult:
 
     url, headers = _resolve_fetch_url(entry.src)
     _log.info("fetch %r: streaming from %s", entry.name, url)
-    tmp_path, sha256, size = _stream_to_tmpfile(url, headers, store.state_dir / "tmp")
+    tmp_path, sha256, size = _stream_to_tmpfile(
+        url, headers, store.state_dir / "tmp", progress=progress
+    )
 
     try:
         if entry.format == "tar.gz":
+            if progress is not None:
+                progress({"phase": "unpacking"})
             artifact_dir = store.artifact_dir(sha256)
             _unpack_netboot_bundle(tmp_path, artifact_dir)
             artifacts = _list_artifact_files(artifact_dir)
@@ -188,6 +264,8 @@ def fetch(entry: CatalogEntry, store: CatalogStore) -> FetchResult:
             # mountable disk image. Content-address on the RAW sha
             # (post-decompression) so /pxe/<mac> plans + NBD exports
             # stay stable across recompressions of the same source.
+            if progress is not None:
+                progress({"phase": "decompressing", "format": entry.format})
             decompressed_tmp, sha256, size = _decompress_to_tmpfile(
                 tmp_path, entry.format, store.state_dir / "tmp"
             )
