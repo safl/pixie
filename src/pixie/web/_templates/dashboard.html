@@ -26,7 +26,11 @@
                     <dt class="col-6">Inventoried</dt>
                     <dd class="col-6 text-end">{{ stats.machines_with_inventory }}</dd>
                 </dl>
-                <a href="/ui/machines" class="stretched-link small"></a>
+            </div>
+            <div class="card-footer bg-light border-top-0 py-2">
+                <a href="/ui/machines" class="text-decoration-none small">
+                    Open <i class="bi bi-arrow-right"></i>
+                </a>
             </div>
         </div>
     </div>
@@ -48,7 +52,11 @@
                         {{ stats.catalog_bundles_fetched }} / {{ stats.catalog_bundles_total }}
                     </dd>
                 </dl>
-                <a href="/ui/catalog" class="stretched-link small"></a>
+            </div>
+            <div class="card-footer bg-light border-top-0 py-2">
+                <a href="/ui/catalog" class="text-decoration-none small">
+                    Open <i class="bi bi-arrow-right"></i>
+                </a>
             </div>
         </div>
     </div>
@@ -66,7 +74,11 @@
                     <dt class="col-6"><span class="text-danger">Error</span></dt>
                     <dd class="col-6 text-end">{{ stats.exports_error }}</dd>
                 </dl>
-                <a href="/ui/catalog" class="stretched-link small"></a>
+            </div>
+            <div class="card-footer bg-light border-top-0 py-2">
+                <a href="/ui/catalog" class="text-decoration-none small">
+                    Open <i class="bi bi-arrow-right"></i>
+                </a>
             </div>
         </div>
     </div>

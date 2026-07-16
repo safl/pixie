@@ -54,6 +54,7 @@ from pixie.web._auth import (
     require_auth,
     using_default_password,
 )
+from pixie.web._table_state import DEFAULT_PER_PAGE
 
 _HERE = Path(__file__).resolve().parent
 _TEMPLATES_DIR = _HERE / "_templates"
@@ -305,6 +306,12 @@ def create_app() -> FastAPI:
     )
 
     templates = Jinja2Templates(directory=str(_TEMPLATES_DIR))
+    # Register the table-helpers query-string builder as a Jinja
+    # global so the pagination + search macros can compose links
+    # without every template having to reach into ``request.url``.
+    from pixie.web._table_state import build_query_string as _qs_helper
+
+    templates.env.globals["_qs"] = _qs_helper
     if _STATIC_DIR.is_dir():
         app.mount("/static", StaticFiles(directory=str(_STATIC_DIR)), name="static")
 
@@ -428,6 +435,9 @@ def create_app() -> FastAPI:
     @app.get("/ui/catalog", response_class=HTMLResponse)
     def ui_catalog(
         request: Request,
+        q: str = "",
+        page: int = 1,
+        per_page: int = DEFAULT_PER_PAGE,
         _auth: None = Depends(_require_ui_auth),
     ) -> HTMLResponse:
         """Catalog + exports in one view. Each disk-image entry
@@ -436,24 +446,88 @@ def create_app() -> FastAPI:
         as HTTP artifacts from ``/artifacts/<sha>/{vmlinuz,initrd}``
         rather than over NBD, so no port is meaningful for them."""
         from pixie.exports._routes import _refresh_row
+        from pixie.web._table_state import filter_rows, parse_pagination
 
         catalog = request.app.state.catalog_store
         exports_store = request.app.state.exports_store
         nbd_server = request.app.state.nbd_server
-        # Index runtime export state by content_sha256 so the per-row
-        # NBD status is a plain dict lookup in the template.
         exports_by_sha: dict[str, Any] = {}
         for row in exports_store.list():
             refreshed = _refresh_row(row, nbd_server, exports_store)
             exports_by_sha[refreshed.content_sha256] = refreshed
+        all_entries = catalog.list_entries()
+        # Freeform text filter across the fields an operator most
+        # often greps by: display name, source URL, sibling netboot
+        # URL, arch, format tag, description.
+        filtered = filter_rows(
+            all_entries,
+            q,
+            fields=("name", "src", "netboot_src", "arch", "format", "description"),
+        )
+        page_state = parse_pagination(dict(request.query_params), total=len(filtered))
+        page_entries = filtered[page_state.offset : page_state.offset + page_state.per_page]
         return templates.TemplateResponse(
             request,
             "catalog.html",
             {
                 "version": pixie.__version__,
-                "entries": catalog.list_entries(),
+                "entries": page_entries,
                 "fetch_states": request.app.state.fetch_states,
                 "exports_by_sha": exports_by_sha,
+                "q": q,
+                "page_state": page_state,
+                "total_entries": len(all_entries),
+                "authed": True,
+                "page": "catalog",
+            },
+        )
+
+    @app.get("/ui/catalog/{name}", response_model=None)
+    def ui_catalog_detail(
+        request: Request,
+        name: str,
+        _auth: None = Depends(_require_ui_auth),
+    ) -> HTMLResponse | RedirectResponse:
+        """Per-entry detail: description + sibling relations. A
+        disk-image entry with a ``netboot_src`` URL surfaces its
+        netboot-bundle sibling (if the operator has imported it); a
+        netboot-bundle entry surfaces every disk-image entry pointing
+        at its ``src`` via ``netboot_src``. Falls through to
+        /ui/catalog on an unknown name."""
+        from pixie.exports._routes import _refresh_row
+
+        catalog = request.app.state.catalog_store
+        entry = catalog.get_entry(name)
+        if entry is None:
+            return RedirectResponse(url="/ui/catalog", status_code=status.HTTP_303_SEE_OTHER)
+        all_entries = catalog.list_entries()
+        # Forward relation: this entry's netboot_src -> sibling bundle.
+        forward = None
+        if entry.netboot_src:
+            forward = next((e for e in all_entries if e.src == entry.netboot_src), None)
+        # Reverse relation: any disk image whose netboot_src == entry.src.
+        backward = [e for e in all_entries if e.netboot_src == entry.src] if entry.src else []
+        # NBD export state for the entry itself (disk images only).
+        exp = None
+        if entry.bindable and entry.content_sha256:
+            for row in request.app.state.exports_store.list():
+                if row.content_sha256 == entry.content_sha256:
+                    exp = _refresh_row(
+                        row,
+                        request.app.state.nbd_server,
+                        request.app.state.exports_store,
+                    )
+                    break
+        return templates.TemplateResponse(
+            request,
+            "catalog_detail.html",
+            {
+                "version": pixie.__version__,
+                "entry": entry,
+                "fetch_state": (request.app.state.fetch_states.get(entry.name) or {}),
+                "netboot_sibling": forward,
+                "disk_image_users": backward,
+                "export": exp,
                 "authed": True,
                 "page": "catalog",
             },
@@ -479,15 +553,30 @@ def create_app() -> FastAPI:
     @app.get("/ui/machines", response_class=HTMLResponse)
     def ui_machines(
         request: Request,
+        q: str = "",
+        page: int = 1,
+        per_page: int = DEFAULT_PER_PAGE,
         _auth: None = Depends(_require_ui_auth),
     ) -> HTMLResponse:
-        machines = request.app.state.machines_store.list()
+        from pixie.web._table_state import filter_rows, parse_pagination
+
+        all_machines = request.app.state.machines_store.list()
+        filtered = filter_rows(
+            all_machines,
+            q,
+            fields=("mac", "boot_mode", "image_content_sha256", "last_seen_ip"),
+        )
+        page_state = parse_pagination(dict(request.query_params), total=len(filtered))
+        page_machines = filtered[page_state.offset : page_state.offset + page_state.per_page]
         return templates.TemplateResponse(
             request,
             "machines.html",
             {
                 "version": pixie.__version__,
-                "machines": machines,
+                "machines": page_machines,
+                "q": q,
+                "page_state": page_state,
+                "total_machines": len(all_machines),
                 "authed": True,
                 "page": "machines",
             },
@@ -575,15 +664,33 @@ def create_app() -> FastAPI:
     @app.get("/ui/events", response_class=HTMLResponse)
     def ui_events(
         request: Request,
+        q: str = "",
+        page: int = 1,
+        per_page: int = DEFAULT_PER_PAGE,
         _auth: None = Depends(_require_ui_auth),
     ) -> HTMLResponse:
-        events = request.app.state.events_log.list(limit=200)
+        from pixie.web._table_state import filter_rows, parse_pagination
+
+        # Cap the pull at 2000 so a very long events log doesn't
+        # blow up in-memory filtering. Post-pagination we still
+        # only render one page.
+        all_events = request.app.state.events_log.list(limit=2000)
+        filtered = filter_rows(
+            all_events,
+            q,
+            fields=("kind", "subject_kind", "subject_id", "summary", "ts"),
+        )
+        page_state = parse_pagination(dict(request.query_params), total=len(filtered))
+        page_events = filtered[page_state.offset : page_state.offset + page_state.per_page]
         return templates.TemplateResponse(
             request,
             "events.html",
             {
                 "version": pixie.__version__,
-                "events": events,
+                "events": page_events,
+                "q": q,
+                "page_state": page_state,
+                "total_events": len(all_events),
                 "authed": True,
                 "page": "events",
             },
