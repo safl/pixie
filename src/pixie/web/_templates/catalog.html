@@ -91,11 +91,44 @@
                             {% if e.arch %}<span class="ms-1">{{ e.arch }}</span>{% endif %}
                         </div>
                     </td>
-                    <td>
+                    <td data-fetch-cell="{{ e.name }}">
                         {% if st.state == "fetching" %}
+                        {# Live phase pill: server-rendered starting
+                           state; the poll script below rewrites this
+                           cell's inner HTML every 2s when there's an
+                           in-flight fetch. Phases in the sub-state
+                           dict: ``downloading`` (+bytes_downloaded /
+                           total_bytes), ``decompressing`` (+format),
+                           ``unpacking`` (netboot bundles). #}
+                        {% if st.phase == "downloading" %}
+                        <span class="badge text-bg-primary">
+                            <i class="bi bi-cloud-download me-1"></i>downloading
+                        </span>
+                        {% if st.total_bytes %}
+                        <div class="text-muted small font-monospace">
+                            {{ st.bytes_downloaded or 0 }} / {{ st.total_bytes }} bytes
+                        </div>
+                        {% elif st.bytes_downloaded %}
+                        <div class="text-muted small font-monospace">
+                            {{ st.bytes_downloaded }} bytes so far
+                        </div>
+                        {% endif %}
+                        {% elif st.phase == "decompressing" %}
+                        <span class="badge text-bg-primary">
+                            <i class="bi bi-box-arrow-in-down me-1"></i>decompressing
+                        </span>
+                        {% if st.format %}
+                        <div class="text-muted small">{{ st.format }}</div>
+                        {% endif %}
+                        {% elif st.phase == "unpacking" %}
+                        <span class="badge text-bg-primary">
+                            <i class="bi bi-box2 me-1"></i>unpacking
+                        </span>
+                        {% else %}
                         <span class="badge text-bg-primary">
                             <i class="bi bi-arrow-down-circle me-1"></i>fetching&hellip;
                         </span>
+                        {% endif %}
                         {% if st.started_at %}
                         <div class="text-muted small">since {{ st.started_at | fmt_ts }}</div>
                         {% endif %}
@@ -216,4 +249,93 @@
     </div>
     {% endif %}
 </div>
+
+<script>
+// Live fetch-state poller. As long as any row in the current view has
+// a data-fetch-cell whose innerHTML contains "fetching" / "downloading"
+// / "decompressing" / "unpacking", poll /ui/catalog/fetch-states.json
+// every 2 s and rewrite the cells in place. Stops polling when nothing
+// in the current view is in flight anymore -- an operator on a full
+// catalog page with 200 rows won't churn network for rows that are
+// already done. A completed row (state=='done' or 'error') triggers
+// one full-page reload so the fetched/error pill + Actions column
+// reflect the terminal state without hand-crafted templating here.
+(function () {
+    const POLL_MS = 2000;
+    const cells = document.querySelectorAll("[data-fetch-cell]");
+    if (!cells.length) return;
+
+    function fmtBytes(n) {
+        if (n == null) return "";
+        if (n < 1024) return n + " B";
+        if (n < 1024 * 1024) return (n / 1024).toFixed(1) + " KiB";
+        if (n < 1024 * 1024 * 1024) return (n / (1024 * 1024)).toFixed(1) + " MiB";
+        return (n / (1024 * 1024 * 1024)).toFixed(2) + " GiB";
+    }
+
+    function renderCell(cell, state) {
+        if (!state || state.state !== "fetching") return false;
+        let icon = "bi-arrow-down-circle", label = "fetching…";
+        let sub = "";
+        if (state.phase === "downloading") {
+            icon = "bi-cloud-download"; label = "downloading";
+            const done = state.bytes_downloaded || 0;
+            if (state.total_bytes) {
+                const pct = Math.floor((done / state.total_bytes) * 100);
+                sub = `${fmtBytes(done)} / ${fmtBytes(state.total_bytes)} (${pct}%)`;
+            } else if (done) {
+                sub = `${fmtBytes(done)} so far`;
+            }
+        } else if (state.phase === "decompressing") {
+            icon = "bi-box-arrow-in-down"; label = "decompressing";
+            if (state.format) sub = state.format;
+        } else if (state.phase === "unpacking") {
+            icon = "bi-box2"; label = "unpacking";
+        }
+        let html = `<span class="badge text-bg-primary"><i class="bi ${icon} me-1"></i>${label}</span>`;
+        if (sub) html += `<div class="text-muted small font-monospace">${sub}</div>`;
+        cell.innerHTML = html;
+        return true;
+    }
+
+    let interval = null;
+    async function poll() {
+        try {
+            const r = await fetch("/ui/fetch-states.json", {credentials: "same-origin"});
+            if (!r.ok) return;
+            const states = await r.json();
+            let anyInFlight = false;
+            let anyJustFinished = false;
+            cells.forEach((cell) => {
+                const name = cell.getAttribute("data-fetch-cell");
+                const st = states[name];
+                if (st && st.state === "fetching") {
+                    renderCell(cell, st);
+                    anyInFlight = true;
+                } else if (cell.textContent.match(/fetching|downloading|decompressing|unpacking/i)) {
+                    // Was in-flight last render; the server-side state
+                    // moved on. Trigger one reload so the terminal
+                    // pill + Actions column show the correct state.
+                    anyJustFinished = true;
+                }
+            });
+            if (anyJustFinished) {
+                window.location.reload();
+            } else if (!anyInFlight && interval) {
+                clearInterval(interval);
+                interval = null;
+            }
+        } catch (e) { /* swallow; try again next tick */ }
+    }
+
+    // Only spin up polling when a row starts life "in flight".
+    const hasInFlightRow = Array.from(cells).some((c) =>
+        c.textContent.match(/fetching|downloading|decompressing|unpacking/i)
+    );
+    if (hasInFlightRow) {
+        poll();
+        interval = setInterval(poll, POLL_MS);
+    }
+})();
+</script>
 {% endblock %}
