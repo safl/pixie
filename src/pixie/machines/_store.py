@@ -37,6 +37,7 @@ BOOT_MODES: frozenset[str] = frozenset(
         "pixie-flash-once",
         "pixie-flash-always",
         "pixie-inventory",
+        "pixie-tui",
         "ramboot",
     }
 )

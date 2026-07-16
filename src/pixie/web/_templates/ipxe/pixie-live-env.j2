@@ -1,0 +1,28 @@
+#!ipxe
+# pixie plan for {{ mac }} - boot_mode={{ boot_mode }}
+#
+# Boot pixie's own live env. The netboot-pc bake produced vmlinuz +
+# initrd + squashfs artifacts; the pixie deploy staged them under
+# ``$PIXIE_LIVE_ENV_DIR`` and this HTTP process exposes them at
+# ``/boot/pixie-live-env/``. Debian live-boot cmdline shape:
+#
+#   boot=live components fetch=<squashfs URL>
+#
+# handles the initrd -> squashfs pivot. ``pixie.server`` +
+# ``pixie.mac`` are the two knobs pixie-on-tty1.service reads on
+# every live-env boot; the pixie CLI then GETs
+# ``<server>/pxe/<mac>/plan`` and dispatches (auto-flash,
+# inventory + reboot, interactive wizard, or exit).
+#
+# ``ip=dhcp`` mirrors the ramboot template's cmdline: the initrd's
+# network module (Debian live-boot, in this case) needs an explicit
+# DHCP directive to bring the primary NIC up before pixie CLI tries
+# to reach ``$pixie-server``. ``console=`` chain matches ramboot too
+# so a target with a serial console reads output on both tty0 and
+# ttyS0/1 -- most bench-side debugging happens on serial.
+
+set pixie-base http://{{ host }}:{{ port }}
+
+kernel ${pixie-base}/boot/pixie-live-env/vmlinuz boot=live components ip=dhcp fetch=${pixie-base}/boot/pixie-live-env/squashfs console=tty0 console=ttyS1,115200 console=ttyS0,115200 earlyprintk=ttyS0,115200 pixie.server=${pixie-base} pixie.mac={{ mac }} bty.server=${pixie-base} bty.mac={{ mac }}
+initrd ${pixie-base}/boot/pixie-live-env/initrd
+boot

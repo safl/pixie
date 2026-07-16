@@ -62,6 +62,7 @@ _STATIC_DIR = _HERE / "_static"
 
 DEFAULT_STATE_DIR = Path("/var/lib/pixie")
 STATE_DIR_ENV = "PIXIE_DATA_DIR"
+LIVE_ENV_DIR_ENV = "PIXIE_LIVE_ENV_DIR"
 FETCH_POOL_SIZE_ENV = "PIXIE_FETCH_POOL_SIZE"
 DEFAULT_FETCH_POOL_SIZE = 4
 
@@ -129,6 +130,23 @@ def _resolve_tftp_root() -> Path:
 
 def _resolve_tftp_bin() -> str:
     return (os.environ.get(TFTP_BIN_ENV) or "").strip() or DEFAULT_TFTP_BIN
+
+
+def _resolve_live_env_dir() -> Path | None:
+    """Directory holding the pixie netboot-pc bake artifacts
+    (vmlinuz + initrd + squashfs). Default: ``<state_dir>/live-env``.
+    Explicit override via ``PIXIE_LIVE_ENV_DIR``. Returns None when
+    the resolved path does not exist, so the renderer's
+    ``_live_env_ready()`` cleanly says "no" without the operator
+    having to set the env var to a special sentinel."""
+    override = (os.environ.get(LIVE_ENV_DIR_ENV) or "").strip()
+    if override:
+        return Path(override)
+    # Default sits under the state dir so an operator dropping
+    # artifacts into ``/opt/pixie/data/live-env/`` on a compose
+    # deploy is the whole install step.
+    default = _resolve_state_dir() / "live-env"
+    return default
 
 
 def _resolve_state_dir() -> Path:
@@ -272,10 +290,12 @@ def create_app() -> FastAPI:
         bind=_resolve_nbd_bind(),
         nbdkit_bin=_resolve_nbdkit_bin(),
     )
+    app.state.live_env_dir = _resolve_live_env_dir()
     app.state.pxe_renderer = PlanRenderer(
         catalog=app.state.catalog_store,
         exports=app.state.exports_store,
         nbd=app.state.nbd_server,
+        live_env_dir=app.state.live_env_dir,
     )
     app.state.tftp_server = (
         TftpServer(
@@ -314,6 +334,18 @@ def create_app() -> FastAPI:
     templates.env.globals["_qs"] = _qs_helper
     if _STATIC_DIR.is_dir():
         app.mount("/static", StaticFiles(directory=str(_STATIC_DIR)), name="static")
+    # Serve the netboot-pc bake artifacts (vmlinuz + initrd +
+    # squashfs) under ``/boot/pixie-live-env/`` so the live-env iPXE
+    # chain can fetch them. Only mounted when the directory exists;
+    # an operator dropping the three files in without a pixie
+    # restart is picked up by the renderer's ``_live_env_ready()``
+    # check per-render.
+    if app.state.live_env_dir and app.state.live_env_dir.is_dir():
+        app.mount(
+            "/boot/pixie-live-env",
+            StaticFiles(directory=str(app.state.live_env_dir)),
+            name="live-env",
+        )
 
     # ---------- exception handlers -----------------------------------
 

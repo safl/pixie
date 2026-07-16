@@ -154,3 +154,69 @@ def pxe_plan(request: Request, mac: str) -> PlainTextResponse:
     # Always ``text/plain`` per bty's convention; iPXE parses on
     # bytes, not on Content-Type.
     return PlainTextResponse(body, media_type="text/plain")
+
+
+@router.get("/pxe/{mac}/plan")
+def pxe_plan_json(request: Request, mac: str) -> dict[str, Any]:
+    """JSON plan the LIVE-ENV pixie CLI GETs after boot.
+
+    Distinct from ``GET /pxe/{mac}`` (which returns iPXE): once the
+    live env has booted and the pixie CLI is up on tty1, it GETs
+    THIS endpoint to figure out what to do:
+
+      ``mode=exit``        -> nothing to do here, exit cleanly.
+      ``mode=inventory``   -> POST /pxe/{mac}/inventory + reboot.
+      ``mode=interactive`` -> drop the operator into the wizard.
+      ``mode=flash``       -> auto-flash the bound image (requires
+                              ``image_content_sha256`` + a target
+                              disk on the machine row).
+
+    The mapping mirrors bty's shape so the ported pixie CLI needs
+    zero cmdline changes. For the minimal live-env slice landing
+    here we only surface ``inventory`` + ``exit`` -- the flash path
+    lands with a follow-up PR that adds the target-disk fields on
+    the machine row + the ``POST /pxe/{mac}/done`` endpoint that
+    flips ``pixie-flash-once`` observers to see the machine as
+    flashed."""
+    try:
+        canon = normalise_mac(mac)
+    except BadMac as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    machines = _get_machines(request)
+    row = machines.get(canon)
+    if row is None:
+        # A GET /plan without a prior discovery hit is unusual (the
+        # target would already have iPXE'd via /pxe/{mac}) but
+        # possible during testing. Fall through to ``exit``: the CLI
+        # will POST inventory anyway (that path does not touch the
+        # machine row).
+        return {"mode": "exit"}
+
+    mode = row.boot_mode
+    if mode == "pixie-inventory":
+        return {"mode": "inventory"}
+    if mode == "pixie-tui":
+        return {"mode": "interactive"}
+    if mode in ("pixie-flash-once", "pixie-flash-always"):
+        # Flash mode wanted, but pixie does not yet carry the
+        # target-disk selector on the machine row; surface as
+        # ``interactive`` so the operator gets the wizard rather
+        # than a broken auto-flash dispatch. A follow-up PR grows
+        # ``target_disk_serial`` + returns ``mode=flash`` here.
+        return {"mode": "interactive"}
+    if mode == "ramboot":
+        # ramboot targets normally boot the image's own kernel +
+        # initrd -- no pixie CLI in the picture -- so this branch
+        # only fires under the ramboot chain test, which pivots
+        # through the pixie live env as a stand-in. Return
+        # ``interactive`` (not ``exit``): ``exit`` triggers a
+        # ``sys.exit(0)`` inside the CLI that races the
+        # daemon-thread inventory post, so an ``exit`` here
+        # occasionally kills the CLI before inventory reaches
+        # pixie. ``interactive`` keeps the CLI up (wizard on
+        # tty1) which is harmless in the test and never runs
+        # on a real ramboot boot.
+        return {"mode": "interactive"}
+    # ipxe-exit / unknown -> nothing to do from the live env's side.
+    return {"mode": "exit"}
