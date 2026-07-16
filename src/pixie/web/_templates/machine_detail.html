@@ -147,6 +147,101 @@
             <code>lsblk</code> + <code>lshw</code>.
         </p>
         {% if machine.inventory %}
+        {# Best-effort render of the machine hardware summary. The
+           live env's ``pixie`` CLI writes whichever sections it can
+           enumerate; each block below is guarded so a partial payload
+           still renders the sections that DID come through. Raw lshw
+           JSON sits collapsed at the bottom as the always-available
+           fallback for a section the summary render doesn't cover. #}
+        {% set system = machine.inventory.get("system") or {} %}
+        {% if system %}
+        <h3 class="h6 mt-3">System</h3>
+        <dl class="row small mb-3">
+            {% if system.get("vendor") %}
+            <dt class="col-sm-3 text-muted">Vendor</dt>
+            <dd class="col-sm-9">{{ system.get("vendor") }}</dd>
+            {% endif %}
+            {% if system.get("model") %}
+            <dt class="col-sm-3 text-muted">Model</dt>
+            <dd class="col-sm-9">{{ system.get("model") }}</dd>
+            {% endif %}
+            {% if system.get("serial") %}
+            <dt class="col-sm-3 text-muted">Serial</dt>
+            <dd class="col-sm-9 font-monospace">{{ system.get("serial") }}</dd>
+            {% endif %}
+            {% if system.get("firmware") %}
+            <dt class="col-sm-3 text-muted">Firmware</dt>
+            <dd class="col-sm-9 small">{{ system.get("firmware") }}</dd>
+            {% endif %}
+        </dl>
+        {% endif %}
+
+        {% set cpu = machine.inventory.get("cpu") or {} %}
+        {% if cpu %}
+        <h3 class="h6 mt-3">CPU</h3>
+        <dl class="row small mb-3">
+            {% if cpu.get("model") %}
+            <dt class="col-sm-3 text-muted">Model</dt>
+            <dd class="col-sm-9">{{ cpu.get("model") }}</dd>
+            {% endif %}
+            {% if cpu.get("cores") %}
+            <dt class="col-sm-3 text-muted">Cores</dt>
+            <dd class="col-sm-9">{{ cpu.get("cores") }}{% if cpu.get("threads") %} ({{ cpu.get("threads") }} threads){% endif %}</dd>
+            {% endif %}
+            {% if cpu.get("arch") %}
+            <dt class="col-sm-3 text-muted">Arch</dt>
+            <dd class="col-sm-9"><code>{{ cpu.get("arch") }}</code></dd>
+            {% endif %}
+        </dl>
+        {% endif %}
+
+        {% set memory = machine.inventory.get("memory") or {} %}
+        {% if memory %}
+        <h3 class="h6 mt-3">Memory</h3>
+        <dl class="row small mb-3">
+            {% if memory.get("total") %}
+            <dt class="col-sm-3 text-muted">Total</dt>
+            <dd class="col-sm-9 font-monospace">{{ memory.get("total") }}</dd>
+            {% endif %}
+            {% if memory.get("modules") %}
+            <dt class="col-sm-3 text-muted">Modules</dt>
+            <dd class="col-sm-9">{{ memory.get("modules") }}</dd>
+            {% endif %}
+        </dl>
+        {% endif %}
+
+        {% set nics = machine.inventory.get("nics") or [] %}
+        {% if nics %}
+        <h3 class="h6 mt-3">Network ({{ nics|length }})</h3>
+        <div class="table-responsive mb-3">
+            <table class="table table-sm table-hover align-middle mb-0">
+                <thead>
+                    <tr>
+                        <th scope="col">Interface</th>
+                        <th scope="col">MAC</th>
+                        <th scope="col">Vendor / Driver</th>
+                        <th scope="col">Link</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for n in nics %}
+                    <tr>
+                        <td class="font-monospace small">{{ n.get("name") or "-" }}</td>
+                        <td><code>{{ n.get("mac") or "-" }}</code></td>
+                        <td class="small">
+                            {{ n.get("vendor") or "-" }}
+                            {% if n.get("driver") %}<br><span class="text-muted">{{ n.get("driver") }}</span>{% endif %}
+                        </td>
+                        <td class="small">
+                            {% if n.get("speed") %}<code>{{ n.get("speed") }}</code>{% else %}-{% endif %}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% endif %}
+
         {% set disks = machine.inventory.get("disks") or [] %}
         {% if disks %}
         <h3 class="h6 mt-3">Disks ({{ disks|length }})</h3>

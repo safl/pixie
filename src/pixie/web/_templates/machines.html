@@ -82,7 +82,8 @@
                         <a href="/ui/machines/{{ m.mac }}" class="btn btn-sm btn-outline-primary">
                             <i class="bi bi-search"></i>
                         </a>
-                        <form method="post" action="/ui/machines/delete" class="d-inline">
+                        <form method="post" action="/ui/machines/delete" class="d-inline"
+                              onsubmit="return confirm('Delete machine record for {{ m.mac }}? Inventory + binding will be lost.');">
                             <input type="hidden" name="mac" value="{{ m.mac }}">
                             <button type="submit" class="btn btn-sm btn-outline-danger">
                                 <i class="bi bi-trash"></i>

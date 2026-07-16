@@ -236,7 +236,8 @@
             </button>
         </form>
         <form method="post" action="/ui/catalog/delete-blob" class="d-inline"
-              title="{% if already_fetched %}delete the on-disk bytes for this entry; the row stays so a Fetch re-runs the pipeline{% else %}no blob on disk yet{% endif %}">
+              title="{% if already_fetched %}delete the on-disk bytes for this entry; the row stays so a Fetch re-runs the pipeline{% else %}no blob on disk yet{% endif %}"
+              onsubmit="return confirm('Delete the on-disk blob for {{ entry.name }}? The catalog row stays; a Fetch re-runs the pipeline.');">
             <input type="hidden" name="name" value="{{ entry.name }}">
             <button type="submit" class="btn btn-sm btn-outline-warning"
                     {% if not already_fetched %}disabled{% endif %}>
@@ -244,7 +245,8 @@
             </button>
         </form>
         <form method="post" action="/ui/catalog/delete" class="d-inline"
-              title="delete this catalog entry (the row); on-disk bytes are not touched here -- use Delete blob for that">
+              title="delete this catalog entry (the row); on-disk bytes are not touched here -- use Delete blob for that"
+              onsubmit="return confirm('Delete catalog entry {{ entry.name }}? The on-disk blob (if any) stays; use Delete blob for the bytes.');">
             <input type="hidden" name="name" value="{{ entry.name }}">
             <button type="submit" class="btn btn-sm btn-outline-danger">
                 <i class="bi bi-trash me-1"></i>Delete entry

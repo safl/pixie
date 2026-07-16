@@ -842,12 +842,15 @@ def create_app() -> FastAPI:
     def ui_events(
         request: Request,
         q: str = "",
+        kind: str = "",
+        subject_kind: str = "",
         page: int = 1,
         per_page: int = DEFAULT_PER_PAGE,
         sort: str = "",
         dir: str = "",
         _auth: None = Depends(_require_ui_auth),
     ) -> HTMLResponse:
+        from pixie.events._kinds import KNOWN_EVENT_KINDS
         from pixie.web._table_state import (
             filter_rows,
             parse_pagination,
@@ -856,6 +859,22 @@ def create_app() -> FastAPI:
         )
 
         all_events = request.app.state.events_log.list(limit=2000)
+        # Kind + subject_kind dropdowns are strict-equality filters
+        # applied BEFORE the freeform ``q`` search, so a "delete all
+        # entries" query narrowed to ``kind=catalog.entry.deleted`` doesn't
+        # also drag in the ``catalog.import.ok`` rows whose summary
+        # mentions "delete". Values are allowlisted against the event
+        # kind registry + observed subject_kinds so an operator can't
+        # accidentally hit the page with a bogus ``?kind=nope`` value
+        # and see "0 of 0" without knowing why.
+        kind_choices = sorted(KNOWN_EVENT_KINDS)
+        subject_kind_choices = sorted({e.subject_kind for e in all_events if e.subject_kind})
+        kind_selected = kind if kind in kind_choices else ""
+        subject_kind_selected = subject_kind if subject_kind in subject_kind_choices else ""
+        if kind_selected:
+            all_events = [e for e in all_events if e.kind == kind_selected]
+        if subject_kind_selected:
+            all_events = [e for e in all_events if e.subject_kind == subject_kind_selected]
         filtered = filter_rows(
             all_events,
             q,
@@ -878,6 +897,8 @@ def create_app() -> FastAPI:
             k: v
             for k, v in {
                 "q": q,
+                "kind": kind_selected,
+                "subject_kind": subject_kind_selected,
                 "sort": sort_state.column if sort_state.column != "ts" else "",
                 "dir": sort_state.direction if sort_state.direction != "desc" else "",
                 "per_page": str(page_state.per_page)
@@ -893,6 +914,10 @@ def create_app() -> FastAPI:
                 "version": pixie.__version__,
                 "events": page_events,
                 "q": q,
+                "kind_choices": kind_choices,
+                "kind_selected": kind_selected,
+                "subject_kind_choices": subject_kind_choices,
+                "subject_kind_selected": subject_kind_selected,
                 "sort": sort_state,
                 "page_state": page_state,
                 "preserved": preserved,
