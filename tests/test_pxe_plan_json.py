@@ -117,6 +117,49 @@ def test_plan_json_returns_flash_for_pixie_flash_once(client: TestClient) -> Non
     assert body["image"].endswith(f"/b/{sha}/ready")
 
 
+def test_plan_json_flash_url_quotes_entry_name(client: TestClient) -> None:
+    """nosi's published entry names carry spaces + parens ("nosi
+    debian-13-headless (x86_64, 2026.W29)"). The plan-JSON image URL
+    must URL-quote the name so the live env's ``urllib.request``
+    parser doesn't drop the path segment; leaving raw whitespace in
+    the URL was observed in CI to make the CLI HEAD the bare host,
+    which pixie 405s and the auto-flash stalls."""
+    from pixie.catalog._schema import CatalogEntry
+
+    c = _authed(client)
+    mac = "aa:bb:cc:dd:ee:34"
+    catalog = c.app.state.catalog_store  # type: ignore[attr-defined]
+    catalog.upsert(
+        CatalogEntry(
+            name="nosi debian-13-headless (x86_64, 2026.W29)",
+            src="oras://x/y:z",
+            format="img.gz",
+        )
+    )
+    sha = "c" * 64
+    catalog.mark_fetched(
+        "nosi debian-13-headless (x86_64, 2026.W29)", content_sha256=sha, size_bytes=1
+    )
+    c.post(f"/pxe/{mac}/inventory", json={"disks": [{"path": "/dev/sda", "serial": "SN-x"}]})
+    c.put(
+        f"/machines/{mac}",
+        json={
+            "boot_mode": "pixie-flash-once",
+            "image_content_sha256": sha,
+            "target_disk_serial": "SN-x",
+        },
+    )
+    body = client.get(f"/pxe/{mac}/plan").json()
+    # Path segment carries no raw whitespace or unescaped parens; the
+    # decoded ``name`` field still reads normally for logging.
+    assert " " not in body["image"], body["image"]
+    assert "(" not in body["image"], body["image"]
+    assert body["image"].endswith(
+        "/b/" + sha + "/nosi%20debian-13-headless%20%28x86_64%2C%202026.W29%29"
+    )
+    assert body["name"] == "nosi debian-13-headless (x86_64, 2026.W29)"
+
+
 def test_plan_json_flash_falls_back_when_image_missing(client: TestClient) -> None:
     """A pixie-flash-* bind without an image_content_sha256 falls
     back to interactive so the operator can pick manually."""

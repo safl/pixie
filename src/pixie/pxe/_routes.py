@@ -318,7 +318,21 @@ def pxe_plan_json(request: Request, mac: str) -> dict[str, Any]:
         if entry is None:
             return {"mode": "interactive"}
         ctx = _render_context(request)
-        image_url = f"http://{ctx.host}:{ctx.port}/b/{row.image_content_sha256}/{entry.name}"
+        # URL-quote the entry name for the image URL path segment:
+        # nosi's operator-facing names contain spaces + parens
+        # ("nosi debian-13-headless (x86_64, 2026.W29)") and pushing
+        # them through the client's ``urllib.request.urlopen`` on
+        # the live env drops the path from the URL entirely (parser
+        # rejects raw whitespace in a URL). The blob route serves
+        # by sha only, so the display name is decorative; encode it
+        # for safe transport, leave the top-level ``name`` field
+        # decoded for operator-readable logging on the client side.
+        import urllib.parse as _urlparse
+
+        image_url = (
+            f"http://{ctx.host}:{ctx.port}"
+            f"/b/{row.image_content_sha256}/{_urlparse.quote(entry.name, safe='')}"
+        )
         plan: dict[str, Any] = {
             "mode": "flash",
             "image": image_url,
