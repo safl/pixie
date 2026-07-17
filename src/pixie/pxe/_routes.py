@@ -73,8 +73,22 @@ def _render_context(request: Request) -> RenderContext:
     port = request.url.port or 8080
     nbd_host = (os.environ.get("PIXIE_NBD_PUBLIC_HOST") or "").strip() or host
     # PIXIE_LIVE_ENV_EXTRA_CMDLINE lets an operator pin hardware-
-    # specific kernel workarounds without rebaking the live env
-    # (observed: GIGABYTE MC12-LE0 igb NIC needs pci=nommconf).
+    # specific kernel workarounds without rebaking the live env.
+    # Known-good values by hardware (build up as we hit more):
+    #
+    #   GIGABYTE MC12-LE0 (Ryzen server board, BIOS F06+):
+    #       PIXIE_LIVE_ENV_EXTRA_CMDLINE=pci=realloc=on,nocrs
+    #     BIOS has a "ROM BAR overlap defect" that leaves no MMIO
+    #     space for the two Intel i210 NICs; Linux's igb driver
+    #     then reports ``probe with driver igb failed with error
+    #     -5`` and the live-boot initrd has no NIC to fetch the
+    #     squashfs through. ``pci=nocrs`` tells the kernel to
+    #     ignore ACPI's PCI root-bus resource windows and compute
+    #     its own; ``pci=realloc=on`` then rebalances every
+    #     device's BARs into the (now larger) usable window. The
+    #     kernel logs ``pci 0000:xx:xx.0: working around ROM BAR
+    #     overlap defect`` when the workaround kicks in.
+    #
     # Trailing/leading whitespace stripped; the template drops a
     # single space between the base cmdline and this string when
     # non-empty, so an empty value is a legal no-op.

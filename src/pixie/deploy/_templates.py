@@ -47,6 +47,12 @@ services:
       PIXIE_ADMIN_PASSWORD: ${{PIXIE_ADMIN_PASSWORD:-{admin_password}}}
       PIXIE_PUBLIC_HOST: ${{PIXIE_HOST_ADDR:-127.0.0.1}}
       PIXIE_NBD_PUBLIC_HOST: ${{PIXIE_HOST_ADDR:-127.0.0.1}}
+      # Optional per-target kernel workarounds appended to the
+      # pixie-live-env cmdline. Empty by default. Known-good values
+      # for specific hardware live in the src/pixie/pxe/_routes.py
+      # docstring; set here if any of your PXE targets need one.
+      # Example (GIGABYTE MC12-LE0): pci=realloc=on,nocrs
+      PIXIE_LIVE_ENV_EXTRA_CMDLINE: ${{PIXIE_LIVE_ENV_EXTRA_CMDLINE:-}}
     volumes:
       - ./data:/var/lib/pixie:Z
     # Container HEALTHCHECK is baked in the Containerfile; compose
@@ -68,6 +74,18 @@ PIXIE_HOST_ADDR=
 # Session-auth password for the operator UI + write routes.
 # Default is public knowledge; set your own.
 PIXIE_ADMIN_PASSWORD={admin_password}
+
+# Per-target kernel workarounds appended to the pixie-live-env
+# cmdline. Empty by default; set on a target-by-target basis.
+#
+# Known-good values:
+#   GIGABYTE MC12-LE0 (Ryzen server board):
+#     PIXIE_LIVE_ENV_EXTRA_CMDLINE=pci=realloc=on,nocrs
+#   That board's BIOS has a ROM BAR overlap defect that leaves no
+#   MMIO space for the Intel i210 NICs; without the workaround the
+#   live env boots with no working network, live-boot never fetches
+#   the squashfs, and boot hangs silently.
+PIXIE_LIVE_ENV_EXTRA_CMDLINE=
 """
 
 README_MD = """\
