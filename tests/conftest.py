@@ -25,3 +25,11 @@ def client(monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
     app = create_app()
     with TestClient(app) as c:
         yield c
+
+
+def authed(client: TestClient) -> TestClient:
+    """POST /ui/login with the shared TEST_ADMIN_PASSWORD, return the
+    same client so callers chain ``authed(client).get(...)``. Every
+    test module was reimplementing this three-liner; consolidate."""
+    client.post("/ui/login", data={"password": TEST_ADMIN_PASSWORD})
+    return client

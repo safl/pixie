@@ -18,12 +18,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from tests.conftest import TEST_ADMIN_PASSWORD
-
-
-def _authed(client: TestClient) -> TestClient:
-    client.post("/ui/login", data={"password": TEST_ADMIN_PASSWORD})
-    return client
+from tests.conftest import authed as _authed
 
 
 def _seed_machine(client: TestClient, mac: str, boot_mode: str) -> None:

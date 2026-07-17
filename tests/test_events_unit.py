@@ -12,12 +12,7 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 
 from pixie.events import EventsLog
-from tests.conftest import TEST_ADMIN_PASSWORD
-
-
-def _authed(client: TestClient) -> TestClient:
-    client.post("/ui/login", data={"password": TEST_ADMIN_PASSWORD})
-    return client
+from tests.conftest import authed as _authed
 
 
 def test_emit_and_list_roundtrip(tmp_path: Path) -> None:
