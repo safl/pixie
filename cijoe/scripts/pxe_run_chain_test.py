@@ -271,14 +271,23 @@ def main(args, cijoe) -> int:
             _dump_container_logs()
             return errno.EPROTO
 
-        # Ramboot + inventory both prove the server-side inventory
-        # roundtrip: the live env's pixie CLI POSTs the blob after
-        # boot; here we GET it back from pixie's state.db and assert
-        # it holds a non-empty disks list. Different chain shape (NBD
-        # for ramboot vs static live-env for inventory) hits the same
-        # inventory POST code path. Flash mode has its own post-chain
-        # assertions (mode flip + written marker) instead.
-        if mode in ("ramboot", "inventory"):
+        # ``inventory``: pixie's live env boots + its CLI POSTs
+        # inventory back; GET it from state.db and assert a non-empty
+        # disks list. Different chain shape (static live-env) hits
+        # the same inventory POST code path pixie-tui + pixie-flash-*
+        # rely on.
+        #
+        # ``ramboot`` used to pivot into pixie's own live env and
+        # POST inventory that way; the real-nosi rework boots into
+        # Debian userspace which does not run pixie's CLI. The
+        # ramboot-specific coverage there is the chain markers
+        # (kernel + systemd + "Debian" in the console banner) --
+        # nothing to verify server-side.
+        #
+        # ``flash`` + ``tui`` have their own dedicated post-chain
+        # asserts (mode flip + marker read for flash, no-flip guard
+        # for tui).
+        if mode == "inventory":
             inv_err = _verify_server_inventory(seed_base, cfg["client_mac"])
             if inv_err:
                 _dump_container_logs()
