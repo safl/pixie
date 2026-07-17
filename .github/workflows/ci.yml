@@ -223,39 +223,31 @@ jobs:
 
   test-pxe-ramboot:
     name: PXE ramboot chain test (containerized pixie + client QEMU VM)
-    # Depends on the netboot-pc bake because the ramboot payload
-    # is assembled from that variant's vmlinuz + initrd. The
-    # ``build-media`` matrix job produces both variants; ``needs``
-    # waits for the whole matrix but that's fine (both finish in
-    # 25-40 min side by side).
-    needs: build-media
+    # No build-media dependency: this test no longer uses pixie's own
+    # netboot-pc bake. It fetches a real nosi netboot bundle + disk
+    # image via oras from ghcr.io -- kernel/initrd from nosi's
+    # netboot bundle, root disk from nosi's img.gz -- and asserts a
+    # real Debian userspace comes up over NBD.
+    #
+    # 60 min timeout for the same reasons as test-pxe-flash: the real
+    # oras pull (~2.6 GiB compressed) + img.gz decompression to
+    # pixie's blob store dominates wall clock.
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v6
 
-      - name: Install host tools (qemu, dnsmasq, ipxe, bridge, rootfs)
+      - name: Install host tools (qemu, dnsmasq, ipxe, bridge)
         run: |
           set -eu
           sudo apt-get update
-          # e2fsprogs (mkfs.ext4) + util-linux (sfdisk + losetup +
-          # mount + umount) + rsync + squashfs-tools (unsquashfs) are
-          # needed by pxe_ramboot_stage to convert the netboot-pc
-          # squashfs into a bootable ext4 disk image. Ramboot then
-          # pivots into the real pixie live env (systemd + pixie-on-
-          # tty1 + the ported pixie CLI), which POSTs inventory back
-          # via its own code path -- no busybox/wget shim.
           sudo apt-get install -y --no-install-recommends \
             qemu-system-x86 \
             qemu-utils \
             dnsmasq \
             ipxe \
             bridge-utils \
-            iproute2 \
-            e2fsprogs \
-            util-linux \
-            rsync \
-            squashfs-tools
+            iproute2
           sudo chmod a+rw /dev/kvm
           ls -la /dev/kvm
 
@@ -264,23 +256,6 @@ jobs:
 
       - name: Install uv
         uses: astral-sh/setup-uv@v8.1.0
-
-      - name: Download netboot-pc bake artifacts
-        uses: actions/download-artifact@v7
-        with:
-          name: pixie-netboot-pc-x86_64
-          path: ~/system_imaging/disk/
-
-      - name: Show downloaded artifact contents
-        run: |
-          set -eu
-          # GHA download-artifact preserves paths from the upload;
-          # bty's precedent uses absolute-shape upload globs so files
-          # land flat under ~/system_imaging/disk/, but if the upload
-          # kept the parent tree we want to see it here rather than
-          # discovering it downstream via a 404.
-          echo "--- ~/system_imaging/disk (recursive) ---"
-          find ~/system_imaging/disk -maxdepth 5 -print
 
       - name: Run PXE ramboot chain test
         run: make test-pxe-ramboot

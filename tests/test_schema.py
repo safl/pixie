@@ -48,26 +48,64 @@ def test_parse_and_serialise_roundtrip_preserves_known_fields() -> None:
     assert b"netboot_ref" not in out
 
 
-def test_legacy_netboot_ref_is_ignored_with_warning(caplog: pytest.LogCaptureFixture) -> None:
-    """Older nosi tags shipped ``netboot_ref = <name-string>``. Pixie
-    reads them, logs a warning, and drops the field on write."""
+def test_legacy_netboot_ref_resolves_when_target_present(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Older nosi tags (and the current 2026.W29 release) ship
+    ``netboot_ref = <name-string>`` alongside the URL-based
+    ``netboot_src`` some tags carry. When the referenced entry is
+    in the same catalog batch, the parser resolves the name to its
+    src URL + populates ``netboot_src`` -- without this the ramboot
+    plan renderer refuses ("no netboot_src") and pixie-tui, pixie-
+    inventory + pixie-flash-* all still work but ramboot bind is
+    unusable."""
     caplog.set_level(logging.WARNING, logger="pixie.catalog._schema")
     toml = b"""
 version = 1
 
 [[images]]
-name = "legacy"
-src = "https://example.com/legacy.img.gz"
+name = "distro headless"
+src = "oras://example/distro-headless:tag"
 format = "img.gz"
-netboot_ref = "legacy netboot bundle (x86_64, 2025.W01)"
+netboot_ref = "distro headless netboot bundle"
+
+[[images]]
+name = "distro headless netboot bundle"
+src = "oras://example/distro-headless-netboot:tag"
+format = "tar.gz"
+"""
+    entries = parse_catalog_toml(toml)
+    by_name = {e.name: e for e in entries}
+    assert by_name["distro headless"].netboot_src == "oras://example/distro-headless-netboot:tag"
+    # Bundle entry itself gets no netboot_src (no back-ref).
+    assert by_name["distro headless netboot bundle"].netboot_src == ""
+    # Serialise emits netboot_src (URL), not netboot_ref (name).
+    out = serialise_catalog(entries)
+    assert b"netboot_src = " in out
+    assert b"netboot_ref" not in out
+    # No warning emitted -- resolution succeeded.
+    assert not any("netboot_ref" in rec.message for rec in caplog.records)
+
+
+def test_legacy_netboot_ref_orphan_warns(caplog: pytest.LogCaptureFixture) -> None:
+    """A netboot_ref that names an absent entry cannot resolve to a
+    URL; leave netboot_src empty + log a warning. The ramboot plan
+    render will surface "no netboot_src" -- readable failure, not a
+    silent orphan."""
+    caplog.set_level(logging.WARNING, logger="pixie.catalog._schema")
+    toml = b"""
+version = 1
+
+[[images]]
+name = "lonely"
+src = "https://example.com/lonely.img.gz"
+format = "img.gz"
+netboot_ref = "sibling that never was"
 """
     entries = parse_catalog_toml(toml)
     assert len(entries) == 1
     assert entries[0].netboot_src == ""
-    # Serialise doesn't round-trip the legacy field.
-    out = serialise_catalog(entries)
-    assert b"netboot_ref" not in out
-    assert any("netboot_ref" in rec.message for rec in caplog.records)
+    assert any("netboot_ref" in rec.message and "no entry" in rec.message for rec in caplog.records)
 
 
 def test_parse_drops_incomplete_rows(caplog: pytest.LogCaptureFixture) -> None:

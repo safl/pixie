@@ -34,14 +34,10 @@ Retargetable: False
 from __future__ import annotations
 
 import errno
-import functools
-import http.server
 import json
 import logging as log
 import shutil
-import socketserver
 import subprocess
-import threading
 import time
 import urllib.error
 import urllib.parse
@@ -60,10 +56,9 @@ HEALTHZ_TIMEOUT = 120
 # adds ~10 min. Keep the base short-mode timeout as-is and let
 # ``mode=flash`` bump its own budget.
 CHAIN_TIMEOUT = 300
-CHAIN_TIMEOUT_FLASH = 1800  # 30 min for the real-nosi flash pipeline
-FETCH_TIMEOUT = 120  # ramboot / tui: local http fetch of the catalog payload
+CHAIN_TIMEOUT_FLASH = 1800  # 30 min for the real-nosi flash / ramboot pipeline
+FETCH_TIMEOUT = 120  # short-mode default (unused by the real-nosi tests)
 FETCH_TIMEOUT_ORAS = 900  # 15 min for the real-nosi oras pull + blob write
-WORKSPACE_HTTP_PORT = 8000  # test-side http server hosting workspace files on the bridge
 # QEMU virtio-blk serial the test binds pixie-flash-once to. Chosen
 # to be a plain-ASCII no-punctuation string because the pixie CLI's
 # ``disks.list_disks`` reads serials via lsblk + they must round-trip
@@ -96,6 +91,13 @@ NOSI_FLASH_ENTRY_NAME = f"nosi debian-13-headless (x86_64, {NOSI_FLASH_TAG})"
 NOSI_FLASH_FORMAT = "img.gz"
 NOSI_TUI_ENTRY_NAME = f"nosi debian-13-headless netboot bundle (x86_64, {NOSI_FLASH_TAG})"
 NOSI_TUI_FORMAT = "tar.gz"
+# Ramboot binds a real nosi disk image + its paired netboot bundle.
+# The bundle is what iPXE fetches (kernel + initrd); the disk image
+# is what pixie's NBD export serves as the guest's root. Same pinned
+# tag as flash + tui so a bump moves all three tests together. The
+# names must match nosi's catalog.toml verbatim.
+NOSI_RAMBOOT_DISK_ENTRY_NAME = NOSI_FLASH_ENTRY_NAME
+NOSI_RAMBOOT_BUNDLE_ENTRY_NAME = NOSI_TUI_ENTRY_NAME
 # Bigger backing store than the other tests (which use 8 GiB and
 # never populate more than ~64 KiB) so the real debian-13-headless
 # image can dd into it without hitting qcow2 grow-and-write errors
@@ -135,7 +137,6 @@ def main(args, cijoe) -> int:
 
     container = None
     dnsmasq = None
-    workspace_http = None
     client = None
     net_up = False
     try:
@@ -188,12 +189,16 @@ def main(args, cijoe) -> int:
                 _dump_container_logs()
                 return seed_err
         elif mode == "ramboot":
-            workspace_http = _start_workspace_http_server(
-                workspace, cfg["server_pxe_ip"], required=("bundle.tar.gz", "disk.img")
+            # No workspace HTTP server: ramboot's disk image + netboot
+            # bundle come from the real nosi catalog via oras through
+            # pixie's own fetcher. Netboot bundle (~70 MiB tar.gz) is
+            # fast; the disk image (~2.6 GiB img.gz -> ~10 GiB
+            # decompressed to blob) dominates fetch wall clock.
+            log.info(
+                "Seeding pixie catalog + binding machine to ramboot "
+                f"(real nosi catalog: {NOSI_CATALOG_URL}, disk: "
+                f"{NOSI_RAMBOOT_DISK_ENTRY_NAME!r})"
             )
-            if workspace_http is None:
-                return errno.ENOENT  # error already logged
-            log.info("Seeding pixie catalog + binding machine to ramboot")
             seed_err = _seed_ramboot_and_bind(seed_base, admin_password, cfg)
             if seed_err:
                 log.error(f"ramboot seed failed: rc={seed_err}")
@@ -240,9 +245,13 @@ def main(args, cijoe) -> int:
         markers = _build_markers(cfg)
         # ``mode=flash`` runs the full real-image pipeline (oras
         # pull + img.gz decompress + dd of ~10 GiB) inside the live
-        # env; every other mode finishes well within the 5 min
-        # short-mode budget.
-        chain_deadline = CHAIN_TIMEOUT_FLASH if mode == "flash" else CHAIN_TIMEOUT
+        # env; ``mode=ramboot`` also pulls the real nosi image but
+        # serves it over NBD so guest writes go to nbdkit's cow
+        # overlay in RAM instead of the guest disk -- most of the
+        # wall clock there is the oras pull + decompress to pixie's
+        # blob store, similar order of magnitude. Everything else
+        # finishes well within the 5 min short-mode budget.
+        chain_deadline = CHAIN_TIMEOUT_FLASH if mode in ("flash", "ramboot") else CHAIN_TIMEOUT
         seen = _wait_for_chain_markers(client_log, markers, chain_deadline)
         missing = [k for k, ok in seen.items() if not ok]
         if missing:
@@ -293,9 +302,6 @@ def main(args, cijoe) -> int:
         _stop_container(container)
         if dnsmasq is not None:
             _terminate(dnsmasq, "dnsmasq", sudo=True)
-        if workspace_http is not None:
-            workspace_http.shutdown()
-            workspace_http.server_close()
         if net_up:
             _teardown_network(cfg)
 
@@ -683,63 +689,23 @@ def _terminate(proc, what: str, sudo: bool = False) -> None:
         proc.kill()
 
 
-# ---------- ramboot / flash mode: workspace HTTP server + seeding ----------
-
-
-class _WorkspaceFilesHandler(http.server.SimpleHTTPRequestHandler):
-    """Serves any file from the workspace's ``_build/test-pxe/``
-    directory. Only ramboot uses this (``bundle.tar.gz`` +
-    ``disk.img`` assembled from the netboot-pc bake); flash + tui
-    fetch their catalog payloads via ``oras://`` through pixie's
-    own fetcher and need no local http shim."""
-
-    def log_message(self, format: str, *args: object) -> None:
-        del format, args
-
-
-class _ReusableThreadingHTTPServer(socketserver.ThreadingTCPServer):
-    allow_reuse_address = True
-    daemon_threads = True
-
-
-def _start_workspace_http_server(workspace: Path, bind_ip: str, *, required: tuple[str, ...]):
-    """Serve ``_build/test-pxe/`` on the bridge IP so pixie's catalog
-    fetch can reach the payload files (they're not on any real HTTP
-    source; a stage step assembled them locally). ``required`` names
-    the files whose presence we assert before starting the server;
-    returns None on any missing file (already logged)."""
-    # Dump the workspace contents so a missing payload is immediately
-    # diagnosable without a second CI iteration.
-    log.error(f"workspace http server: workspace={workspace}")
-    if workspace.is_dir():
-        for p in sorted(workspace.iterdir()):
-            log.error(f"  {p.name} ({p.stat().st_size} bytes)")
-    missing = [name for name in required if not (workspace / name).is_file()]
-    if missing:
-        log.error(f"workspace payload missing: {missing} under {workspace}")
-        return None
-    # SimpleHTTPRequestHandler reads ``directory`` from ``__init__``
-    # kwargs, not from a class attribute -- bind via functools.partial
-    # so ThreadingTCPServer's ``handler(*args, **kwargs)`` construction
-    # supplies it. (Setting ``directory`` on the class silently falls
-    # back to os.getcwd(), which is why the first run returned 404
-    # for every URL: cwd was cijoe/, not cijoe/_build/test-pxe/.)
-    handler = functools.partial(_WorkspaceFilesHandler, directory=str(workspace))
-    server = _ReusableThreadingHTTPServer((bind_ip, WORKSPACE_HTTP_PORT), handler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    log.info(f"Workspace HTTP server listening on http://{bind_ip}:{WORKSPACE_HTTP_PORT}")
-    return server
-
-
 def _seed_ramboot_and_bind(seed_base: str, admin_password: str, cfg) -> int:
-    """Login, POST + fetch two catalog entries (netboot bundle + disk
-    image), wait for content_sha256, then PUT /machines/<mac> with
-    boot_mode=ramboot bound to the disk sha. Returns 0 on success,
-    an errno on any failure (already logged)."""
-    server_ip = cfg["server_pxe_ip"]
-    bundle_url = f"http://{server_ip}:{WORKSPACE_HTTP_PORT}/bundle.tar.gz"
-    disk_url = f"http://{server_ip}:{WORKSPACE_HTTP_PORT}/disk.img"
+    """Import the real nosi catalog, trigger fetch on the paired
+    disk-image + netboot-bundle entries, wait for both content_sha256
+    values, then PUT /machines/<mac> with boot_mode=ramboot bound to
+    the disk sha. Returns 0 on success, an errno on any failure
+    (already logged).
+
+    The disk-image entry's ``netboot_src`` is set by
+    ``parse_catalog_toml`` at import time via the two-pass netboot_ref
+    (name) -> src (URL) resolution -- pixie's ramboot render then
+    resolves the sibling bundle by that URL without the test doing
+    anything special. On real hardware this is exactly the operator's
+    flow: import catalog, Download bundle + disk, bind ramboot."""
+    catalog_url = str(cfg.get("nosi_catalog_url", NOSI_CATALOG_URL))
+    disk_entry = str(cfg.get("nosi_ramboot_disk_entry_name", NOSI_RAMBOOT_DISK_ENTRY_NAME))
+    bundle_entry = str(cfg.get("nosi_ramboot_bundle_entry_name", NOSI_RAMBOOT_BUNDLE_ENTRY_NAME))
+    mac = cfg["client_mac"]
 
     try:
         cookie = _login(seed_base, admin_password)
@@ -747,27 +713,44 @@ def _seed_ramboot_and_bind(seed_base: str, admin_password: str, cfg) -> int:
         log.error(f"login failed: {exc}")
         return errno.EACCES
 
-    if err := _add_and_fetch(seed_base, cookie, "test-bundle", bundle_url, "tar.gz"):
+    if err := _import_catalog(seed_base, cookie, catalog_url):
         return err
-    if err := _add_and_fetch(
-        seed_base, cookie, "test-disk", disk_url, "img", netboot_src=bundle_url
-    ):
+    for name in (disk_entry, bundle_entry):
+        if not _catalog_has_entry(seed_base, name):
+            log.error(
+                f"catalog import from {catalog_url!r} did not surface expected entry "
+                f"{name!r}; nosi published entry names for tag "
+                f"{NOSI_FLASH_TAG!r} may have drifted from what this test expects."
+            )
+            return errno.ENOENT
+
+    # Fetch the netboot bundle first so pixie has the artifact
+    # directory before the ramboot renderer needs it, then the disk
+    # image (the slow leg -- ~2.6 GiB oras pull + img.gz decompress
+    # to blob).
+    if err := _fetch_entry(seed_base, cookie, bundle_entry):
+        return err
+    if err := _fetch_entry(seed_base, cookie, disk_entry):
         return err
 
+    log.info(
+        f"Waiting up to {FETCH_TIMEOUT_ORAS}s for pixie to pull "
+        f"the nosi bundle + disk image from ghcr.io"
+    )
     try:
-        bundle_sha = _wait_content_sha(seed_base, "test-bundle")
-        disk_sha = _wait_content_sha(seed_base, "test-disk")
+        bundle_sha = _wait_content_sha(seed_base, bundle_entry, timeout=FETCH_TIMEOUT_ORAS)
+        disk_sha = _wait_content_sha(seed_base, disk_entry, timeout=FETCH_TIMEOUT_ORAS)
     except TimeoutError as exc:
         log.error(str(exc))
         return errno.ETIMEDOUT
 
     log.info(f"Bundle sha={bundle_sha[:12]}...; disk sha={disk_sha[:12]}...")
     try:
-        _bind_machine(seed_base, cookie, cfg["client_mac"], disk_sha)
+        _bind_machine(seed_base, cookie, mac, disk_sha)
     except Exception as exc:
         log.error(f"machine bind failed: {exc}")
         return errno.EPROTO
-    log.info(f"Machine {cfg['client_mac']} bound to boot_mode=ramboot")
+    log.info(f"Machine {mac} bound to boot_mode=ramboot (real nosi disk + bundle)")
     return 0
 
 
@@ -796,45 +779,6 @@ def _login(base: str, password: str) -> str:
             if head.startswith("pixie-token="):
                 return head
     raise RuntimeError("no pixie-token cookie in login response")
-
-
-def _add_and_fetch(
-    base: str, cookie: str, name: str, src: str, fmt: str, *, netboot_src: str = ""
-) -> int:
-    body: dict[str, object] = {"name": name, "src": src, "format": fmt}
-    if netboot_src:
-        body["netboot_src"] = netboot_src
-    data = json.dumps(body).encode("utf-8")
-    req = urllib.request.Request(
-        f"{base}/catalog/entries",
-        data=data,
-        method="POST",
-        headers={"Content-Type": "application/json", "Cookie": cookie},
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=15) as resp:
-            if resp.status != 201:
-                log.error(f"POST /catalog/entries returned {resp.status}")
-                return errno.EPROTO
-    except urllib.error.HTTPError as exc:
-        log.error(f"POST /catalog/entries {name}: HTTP {exc.code}")
-        return errno.EPROTO
-    fetch_req = urllib.request.Request(
-        f"{base}/catalog/entries/{name}/fetch",
-        data=b"",
-        method="POST",
-        headers={"Content-Type": "application/json", "Cookie": cookie},
-    )
-    try:
-        with urllib.request.urlopen(fetch_req, timeout=15) as resp:
-            if resp.status != 202:
-                log.error(f"POST /catalog/entries/{name}/fetch returned {resp.status}")
-                return errno.EPROTO
-    except urllib.error.HTTPError as exc:
-        log.error(f"POST /catalog/entries/{name}/fetch: HTTP {exc.code}")
-        return errno.EPROTO
-    log.info(f"Fetch triggered for {name}")
-    return 0
 
 
 def _wait_content_sha(base: str, name: str, timeout: float = FETCH_TIMEOUT) -> str:

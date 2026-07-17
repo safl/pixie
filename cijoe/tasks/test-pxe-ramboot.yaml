@@ -2,46 +2,41 @@ doc: |
   pixie PXE ramboot chain test
   =============================
 
-  End-to-end proof that the FULL ramboot chain reaches the
-  initramfs's ramboot script on a real QEMU client:
+  End-to-end proof that a real nosi ramboot works on a QEMU client
+  through pixie:
 
   1. ``pxe_prepare``: build the ``pixie:pxetest`` container image
      from this checkout.
-  2. ``pxe_ramboot_stage``: assemble a real netboot bundle from
-     the ``pixie-netboot-pc-x86_64`` bake artifacts (looked up
-     under ``~/system_imaging/disk`` or ``$PIXIE_NETBOOT_ARTIFACT_DIR``)
-     plus a 64 MiB synthetic disk image, both under
-     ``_build/test-pxe/``.
-  3. ``pxe_run_chain_test`` with ``mode = "ramboot"``: brings up
-     pixie, starts a test-side HTTP server on the bridge IP hosting
-     the staged bundle + disk, POSTs both to pixie's catalog +
-     triggers fetch, waits for content_sha256, PUTs the client MAC
-     to ``boot_mode=ramboot``, then PXE-boots the QEMU client and
-     asserts every marker in ``[test.pxe.chain_markers]`` shows up.
+  2. ``pxe_run_chain_test`` with ``mode = "ramboot"``: brings up
+     pixie, POSTs ``/ui/catalog/import`` with the pinned nosi
+     catalog URL, triggers fetch on the paired
+     ``debian-13-headless-netboot`` bundle + ``debian-13-headless``
+     disk image, waits for both content_sha256 values (~15 min
+     budget for the disk-image oras pull + img.gz decompress),
+     PUTs the client MAC to ``boot_mode=ramboot`` bound to the
+     disk sha, then PXE-boots the QEMU client and asserts every
+     marker in ``[test.pxe.chain_markers]`` shows up on the client
+     serial log -- iPXE loaded, artifacts fetched, kernel booted,
+     Debian userspace up.
 
-  What's covered here: PXE firmware -> DHCP -> TFTP -> iPXE ->
-  HTTP re-DHCP -> ``chain http://pixie:8080/pxe-bootstrap.ipxe``
-  -> per-MAC ramboot plan fetch -> kernel + initrd download from
-  ``/artifacts/<bundle-sha>/`` -> initramfs starts -> ramboot
-  script sources -> nbd-client connects to pixie's per-machine
-  NBD export.
+  What's covered here: real catalog retrieval + real oras pulls +
+  real img.gz decompression to pixie's blob store + pixie's NBD
+  export spawn + iPXE ramboot chain + real Debian pivot into
+  userspace served over NBD. No test-side HTTP shim, no
+  locally-assembled bundle, no synthetic ext4 disk.
 
-  What's NOT covered (needs a real bootable rootfs on the disk
-  image, out of scope for this test): the OS pivot_root and
-  userspace bring-up.
+  What's NOT covered: an OS-level post-boot task (cloud-init
+  runthrough, sshd bring-up, etc.) -- the ramboot pipeline is
+  proved once systemd + Debian userspace come up; further
+  assertions would need a scripted terminal driver.
 
   Requires: podman, qemu-system-x86, dnsmasq, ipxe,
-  bridge-utils / iproute2, KVM, passwordless sudo, AND a prior
-  ``pixie-netboot-pc-x86_64`` bake staged under
-  ``~/system_imaging/disk/`` (in CI, downloaded from the
-  ``build-media`` job's ``pixie-netboot-pc-x86_64`` artifact).
+  bridge-utils / iproute2, KVM, passwordless sudo, and internet
+  access to ghcr.io + github.com/safl/nosi.
 
 steps:
 - name: pxe_prepare
   uses: pxe_prepare
-
-- name: pxe_ramboot_stage
-  uses: pxe_ramboot_stage
 
 - name: pxe_run_chain_test
   uses: pxe_run_chain_test
