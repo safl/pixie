@@ -1,0 +1,47 @@
+doc: |
+  pixie PXE tui chain test
+  ==========================
+
+  End-to-end proof that a pixie-tui bind reaches the interactive
+  wizard's image-picker screen on a real QEMU client:
+
+  1. ``pxe_prepare``: build the ``pixie:pxetest`` container image.
+  2. ``pxe_flash_stage``: same live-env media + synthetic image
+     the flash test uses. The image lets the wizard's picker
+     render a real row instead of the empty-catalog panel.
+  3. ``pxe_run_chain_test`` with ``mode = "tui"``: brings up pixie
+     with live-env bind-mounted, POSTs + fetches the synthetic
+     image into the catalog, PUTs the client MAC to
+     ``boot_mode=pixie-tui``, PXE-boots the QEMU client, then
+     asserts every marker in ``[test.pxe.chain_markers]`` shows up,
+     including the new ``pixie: wizard select_image`` marker that
+     fires when the CLI's SELECT_IMAGE screen enters. Post-chain
+     GET ``/machines/<mac>`` asserts ``boot_mode`` still reads
+     ``pixie-tui`` (server did not spuriously rewrite the bind).
+
+  What's covered here: the pieces test-pxe-inventory covers PLUS
+  server-side plan JSON dispatch to ``mode=interactive``, CLI's
+  ``_fetch_and_dispatch_plan`` honoring that, ``<server>/catalog.toml``
+  serving what the wizard's parser expects, and the wizard's
+  catalog-load path (``tui_catalog.load_source``).
+
+  What's NOT covered: driving the wizard through image-pick +
+  disk-pick + confirm + flash. That needs a QMP send-key harness;
+  everything downstream of the pick shares code with the auto-flash
+  path already covered by test-pxe-flash.
+
+  Requires: podman, qemu-system-x86, dnsmasq, ipxe,
+  bridge-utils / iproute2, KVM, passwordless sudo, AND a prior
+  ``pixie-netboot-pc-x86_64`` bake staged under
+  ``~/system_imaging/disk/`` (in CI, downloaded from the
+  ``build-media`` job's ``pixie-netboot-pc-x86_64`` artifact).
+
+steps:
+- name: pxe_prepare
+  uses: pxe_prepare
+
+- name: pxe_flash_stage
+  uses: pxe_flash_stage
+
+- name: pxe_run_chain_test
+  uses: pxe_run_chain_test
