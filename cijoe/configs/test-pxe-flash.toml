@@ -1,0 +1,97 @@
+# pixie PXE flash chain test: containerized pixie + a bridged QEMU
+# client booting into pixie's own live env (netboot-pc bake) and
+# auto-flashing a small synthetic image via a boot_mode=pixie-flash-once
+# bind.
+#
+# Usage:
+#   cijoe tasks/test-pxe-flash.yaml --monitor -c configs/test-pxe-flash.toml
+#
+# Pre-conditions:
+# - podman, qemu-system-x86_64, qemu-utils, dnsmasq, ipxe (NBPs under
+#   /usr/lib/ipxe), iproute2 on PATH.
+# - passwordless sudo (bridge/tap/dnsmasq).
+# - KVM accessible.
+# - ``pixie-netboot-pc-x86_64`` bake artifacts staged under
+#   ``~/system_imaging/disk/`` (or override
+#   ``PIXIE_NETBOOT_ARTIFACT_DIR``).
+
+[pixie]
+variant = "test-pxe-flash"
+
+[cijoe.workflow]
+fail_fast = true
+
+[test.pxe]
+mode = "flash"
+
+# pixie container image tag (built by pxe_prepare from this checkout).
+pixie_image = "pixie:pxetest"
+
+# Admin password set on the container; the test uses it to POST the
+# catalog entry + PUT the machine binding.
+admin_password = "test-admin-pw"
+
+# Client VM firmware: "bios" (SeaBIOS + NIC option ROM) or "uefi" (OVMF).
+client_firmware = "bios"
+client_mac = "52:54:00:11:22:66"
+
+# Must match the ``serial=`` on the QEMU virtio-blk device (see
+# pxe_run_chain_test._start_client_vm). Bindings that name a serial not
+# on the machine's inventory get rejected at bind time.
+target_disk_serial = "PIXIETEST"
+
+# Host bridge for the synthetic PXE segment. server_pxe_ip is where
+# pixie is reachable and where the client's HTTP fetch for
+# vmlinuz + initrd + squashfs lands, plus the workspace HTTP server
+# that hosts the flash-target.img.
+bridge = "br-ipxe"
+tap_iface = "tap-ipxe"
+server_pxe_ip = "192.168.99.1"
+pxe_netmask = "255.255.255.0"
+dhcp_range_lo = "192.168.99.50"
+dhcp_range_hi = "192.168.99.150"
+
+# Chain markers. Same PXE-boot + live-env sequence as inventory,
+# plus the pixie CLI's auto-flash console markers.
+[[test.pxe.chain_markers]]
+key = "ipxe-loaded"
+needle = "iPXE"
+
+[[test.pxe.chain_markers]]
+key = "ipxe-fetch-bootstrap"
+needle = "pxe-bootstrap.ipxe"
+
+[[test.pxe.chain_markers]]
+key = "live-env-vmlinuz"
+needle = "/boot/pixie-live-env/vmlinuz"
+
+[[test.pxe.chain_markers]]
+key = "live-env-initrd"
+needle = "/boot/pixie-live-env/initrd"
+
+[[test.pxe.chain_markers]]
+key = "live-env-squashfs"
+needle = "/boot/pixie-live-env/live.squashfs"
+
+[[test.pxe.chain_markers]]
+key = "kernel-boot"
+needle = "Linux version"
+
+[[test.pxe.chain_markers]]
+key = "systemd-started"
+needle = "systemd["
+
+# pixie-on-tty1.service ran the ported pixie CLI + it entered auto
+# mode (plan.mode == "flash"). The CLI emits a ``pixie:
+# auto-flash starting`` console marker before it touches the disk;
+# see _emit_console_marker in src/pixie/tui/_app.py.
+[[test.pxe.chain_markers]]
+key = "pixie-auto-flash-start"
+needle = "pixie: auto-flash starting"
+
+# The CLI emits a terminal marker after write + verify succeed but
+# before rebooting -- catches the case where the flash writes but
+# then errors before /done posts.
+[[test.pxe.chain_markers]]
+key = "pixie-flash-complete"
+needle = "pixie: flash complete"

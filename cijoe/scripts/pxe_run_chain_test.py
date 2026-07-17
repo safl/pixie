@@ -53,8 +53,13 @@ CONTAINER_NAME = "pixie-pxe-test"
 CONTAINER_TAG = "pixie:pxetest"
 HEALTHZ_TIMEOUT = 120
 CHAIN_TIMEOUT = 300
-FETCH_TIMEOUT = 120  # ramboot mode: catalog fetch of the netboot bundle + disk image
-RAMBOOT_HTTP_PORT = 8000  # test-side http server hosting bundle + disk on the bridge
+FETCH_TIMEOUT = 120  # ramboot / flash: catalog fetch of the payload
+WORKSPACE_HTTP_PORT = 8000  # test-side http server hosting workspace files on the bridge
+# QEMU virtio-blk serial the test binds pixie-flash-once to. Chosen
+# to be a plain-ASCII no-punctuation string because the pixie CLI's
+# ``disks.list_disks`` reads serials via lsblk + they must round-trip
+# through JSON with no escapes.
+FLASH_TARGET_SERIAL = "PIXIETEST"
 
 
 def add_args(parser: ArgumentParser) -> None:
@@ -80,15 +85,16 @@ def main(args, cijoe) -> int:
         client_log.unlink()
 
     mode = str(cfg.get("mode", "bootstrap")).lower()
-    if mode not in ("bootstrap", "ramboot", "inventory"):
+    if mode not in ("bootstrap", "ramboot", "inventory", "flash"):
         log.error(
-            f"unknown [test.pxe] mode={mode!r}; expected 'bootstrap', 'ramboot', or 'inventory'"
+            f"unknown [test.pxe] mode={mode!r}; expected "
+            "'bootstrap', 'ramboot', 'inventory', or 'flash'"
         )
         return errno.EINVAL
 
     container = None
     dnsmasq = None
-    ramboot_http = None
+    workspace_http = None
     client = None
     net_up = False
     try:
@@ -96,12 +102,14 @@ def main(args, cijoe) -> int:
         net_up = True
         dnsmasq = _start_dnsmasq(cfg, tftproot, workspace)
 
-        # ``inventory`` needs pixie's own live-env media staged
-        # inside the container; nothing else does. Verify the caller's
-        # workspace has the three files before we start podman so a
-        # missing bake fails fast rather than mid-boot on the client.
+        # ``inventory`` + ``flash`` both need pixie's own live-env
+        # media staged inside the container (they boot into the pixie
+        # live env before the CLI can post inventory or auto-flash);
+        # nothing else does. Verify the caller's workspace has the
+        # three files before we start podman so a missing bake fails
+        # fast rather than mid-boot on the client.
         live_env_dir: Path | None = None
-        if mode == "inventory":
+        if mode in ("inventory", "flash"):
             live_env_dir = workspace / "live-env"
             missing = [
                 name
@@ -109,9 +117,10 @@ def main(args, cijoe) -> int:
                 if not (live_env_dir / name).is_file()
             ]
             if missing:
+                stage_step = "pxe_inventory_stage" if mode == "inventory" else "pxe_flash_stage"
                 log.error(
-                    f"mode=inventory needs live-env media at {live_env_dir}; "
-                    f"missing: {missing}. Run pxe_inventory_stage first."
+                    f"mode={mode} needs live-env media at {live_env_dir}; "
+                    f"missing: {missing}. Run {stage_step} first."
                 )
                 return errno.ENOENT
 
@@ -130,13 +139,27 @@ def main(args, cijoe) -> int:
                 _dump_container_logs()
                 return seed_err
         elif mode == "ramboot":
-            ramboot_http = _start_ramboot_http_server(workspace, cfg["server_pxe_ip"])
-            if ramboot_http is None:
+            workspace_http = _start_workspace_http_server(
+                workspace, cfg["server_pxe_ip"], required=("bundle.tar.gz", "disk.img")
+            )
+            if workspace_http is None:
                 return errno.ENOENT  # error already logged
             log.info("Seeding pixie catalog + binding machine to ramboot")
             seed_err = _seed_ramboot_and_bind(seed_base, admin_password, cfg)
             if seed_err:
                 log.error(f"ramboot seed failed: rc={seed_err}")
+                _dump_container_logs()
+                return seed_err
+        elif mode == "flash":
+            workspace_http = _start_workspace_http_server(
+                workspace, cfg["server_pxe_ip"], required=("flash-target.img",)
+            )
+            if workspace_http is None:
+                return errno.ENOENT  # error already logged
+            log.info("Seeding pixie catalog + binding machine to pixie-flash-once")
+            seed_err = _seed_flash_and_bind(seed_base, admin_password, cfg)
+            if seed_err:
+                log.error(f"flash seed failed: rc={seed_err}")
                 _dump_container_logs()
                 return seed_err
 
@@ -172,12 +195,18 @@ def main(args, cijoe) -> int:
         # boot; here we GET it back from pixie's state.db and assert
         # it holds a non-empty disks list. Different chain shape (NBD
         # for ramboot vs static live-env for inventory) hits the same
-        # inventory POST code path.
+        # inventory POST code path. Flash mode has its own post-chain
+        # assertions (mode flip + written marker) instead.
         if mode in ("ramboot", "inventory"):
             inv_err = _verify_server_inventory(seed_base, cfg["client_mac"])
             if inv_err:
                 _dump_container_logs()
                 return inv_err
+        elif mode == "flash":
+            flash_err = _verify_flash_effects(seed_base, cfg["client_mac"], workspace)
+            if flash_err:
+                _dump_container_logs()
+                return flash_err
 
         log.info(f"PXE {mode} chain test PASSED (all markers seen)")
         return 0
@@ -187,9 +216,9 @@ def main(args, cijoe) -> int:
         _stop_container(container)
         if dnsmasq is not None:
             _terminate(dnsmasq, "dnsmasq", sudo=True)
-        if ramboot_http is not None:
-            ramboot_http.shutdown()
-            ramboot_http.server_close()
+        if workspace_http is not None:
+            workspace_http.shutdown()
+            workspace_http.server_close()
         if net_up:
             _teardown_network(cfg)
 
@@ -568,14 +597,14 @@ def _terminate(proc, what: str, sudo: bool = False) -> None:
         proc.kill()
 
 
-# ---------- ramboot mode: HTTP server + catalog seeding + machine bind -----
+# ---------- ramboot / flash mode: workspace HTTP server + seeding ----------
 
 
-class _RambootFilesHandler(http.server.SimpleHTTPRequestHandler):
-    """Serves ``bundle.tar.gz`` + ``disk.img`` from the workspace's
-    ``_build/test-pxe/`` directory. Both files must exist by the time
-    pixie POSTs a fetch, or the fetch returns error and the test
-    fails fast."""
+class _WorkspaceFilesHandler(http.server.SimpleHTTPRequestHandler):
+    """Serves any file from the workspace's ``_build/test-pxe/``
+    directory. Ramboot uses ``bundle.tar.gz`` + ``disk.img``; flash
+    uses ``flash-target.img``. The staging step drops files into the
+    workspace before we boot; the server just exposes them."""
 
     def log_message(self, format: str, *args: object) -> None:
         del format, args
@@ -586,27 +615,21 @@ class _ReusableThreadingHTTPServer(socketserver.ThreadingTCPServer):
     daemon_threads = True
 
 
-def _start_ramboot_http_server(workspace: Path, bind_ip: str):
-    """Serve ``_build/test-pxe/{bundle.tar.gz,disk.img}`` on the bridge
-    IP so pixie's catalog fetch can reach them (they're not on any
-    real HTTP source; the ``pxe_ramboot_stage`` step assembled them
-    locally). Returns None if either file is missing."""
-    bundle = workspace / "bundle.tar.gz"
-    disk = workspace / "disk.img"
+def _start_workspace_http_server(workspace: Path, bind_ip: str, *, required: tuple[str, ...]):
+    """Serve ``_build/test-pxe/`` on the bridge IP so pixie's catalog
+    fetch can reach the payload files (they're not on any real HTTP
+    source; a stage step assembled them locally). ``required`` names
+    the files whose presence we assert before starting the server;
+    returns None on any missing file (already logged)."""
     # Dump the workspace contents so a missing payload is immediately
     # diagnosable without a second CI iteration.
-    log.error(f"ramboot http server: workspace={workspace}")
+    log.error(f"workspace http server: workspace={workspace}")
     if workspace.is_dir():
         for p in sorted(workspace.iterdir()):
             log.error(f"  {p.name} ({p.stat().st_size} bytes)")
-    if not bundle.is_file() or not disk.is_file():
-        log.error(
-            "ramboot payload missing: bundle=%s (exists=%s), disk=%s (exists=%s)",
-            bundle,
-            bundle.exists(),
-            disk,
-            disk.exists(),
-        )
+    missing = [name for name in required if not (workspace / name).is_file()]
+    if missing:
+        log.error(f"workspace payload missing: {missing} under {workspace}")
         return None
     # SimpleHTTPRequestHandler reads ``directory`` from ``__init__``
     # kwargs, not from a class attribute -- bind via functools.partial
@@ -614,11 +637,11 @@ def _start_ramboot_http_server(workspace: Path, bind_ip: str):
     # supplies it. (Setting ``directory`` on the class silently falls
     # back to os.getcwd(), which is why the first run returned 404
     # for every URL: cwd was cijoe/, not cijoe/_build/test-pxe/.)
-    handler = functools.partial(_RambootFilesHandler, directory=str(workspace))
-    server = _ReusableThreadingHTTPServer((bind_ip, RAMBOOT_HTTP_PORT), handler)
+    handler = functools.partial(_WorkspaceFilesHandler, directory=str(workspace))
+    server = _ReusableThreadingHTTPServer((bind_ip, WORKSPACE_HTTP_PORT), handler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
-    log.info(f"Ramboot HTTP server listening on http://{bind_ip}:{RAMBOOT_HTTP_PORT}")
+    log.info(f"Workspace HTTP server listening on http://{bind_ip}:{WORKSPACE_HTTP_PORT}")
     return server
 
 
@@ -628,8 +651,8 @@ def _seed_ramboot_and_bind(seed_base: str, admin_password: str, cfg) -> int:
     boot_mode=ramboot bound to the disk sha. Returns 0 on success,
     an errno on any failure (already logged)."""
     server_ip = cfg["server_pxe_ip"]
-    bundle_url = f"http://{server_ip}:{RAMBOOT_HTTP_PORT}/bundle.tar.gz"
-    disk_url = f"http://{server_ip}:{RAMBOOT_HTTP_PORT}/disk.img"
+    bundle_url = f"http://{server_ip}:{WORKSPACE_HTTP_PORT}/bundle.tar.gz"
+    disk_url = f"http://{server_ip}:{WORKSPACE_HTTP_PORT}/disk.img"
 
     try:
         cookie = _login(seed_base, admin_password)
@@ -855,4 +878,185 @@ def _bind_inventory(seed_base: str, admin_password: str, cfg) -> int:
         log.error(f"PUT /machines/{cfg['client_mac']}: HTTP {exc.code}")
         return errno.EPROTO
     log.info(f"Machine {cfg['client_mac']} bound to boot_mode=pixie-inventory")
+    return 0
+
+
+# ---------- flash mode: seed synthetic image + bind pixie-flash-once -------
+
+
+# The synthetic image ``pxe_flash_stage`` writes into the workspace
+# starts with this marker so the post-chain assertion can grep the
+# QEMU-side disk (byte-for-byte compare on the first ~64 bytes) to
+# prove the flash actually wrote the disk. Kept in sync with the
+# constant in ``pxe_flash_stage.py``; they are the two ends of the
+# same contract.
+_FLASH_MARKER = b"PIXIE-FLASH-TARGET-MARKER-v1\n"
+
+
+def _post_flash_inventory(seed_base: str, mac: str, disk_serial: str) -> int:
+    """The pixie-flash bind refuses unless the machine already has an
+    inventory entry naming ``disk_serial``. Live-env clients POST that
+    themselves on first boot; here we seed it directly via the open
+    ``POST /pxe/<mac>/inventory`` endpoint so the bind PUT that
+    follows passes the ``target_disk_serial in inventory`` check. This
+    row will be overwritten by the real live-env POST later, so the
+    seeded disks list is purely a pre-bind formality."""
+    body = json.dumps(
+        {"disks": [{"path": "/dev/sda", "serial": disk_serial}], "lshw": None}
+    ).encode("utf-8")
+    req = urllib.request.Request(
+        f"{seed_base}/pxe/{mac}/inventory",
+        data=body,
+        method="POST",
+        headers={"Content-Type": "application/json"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            if resp.status != 204:
+                log.error(f"POST /pxe/{mac}/inventory returned {resp.status}")
+                return errno.EPROTO
+    except urllib.error.HTTPError as exc:
+        log.error(f"POST /pxe/{mac}/inventory: HTTP {exc.code}")
+        return errno.EPROTO
+    return 0
+
+
+def _seed_flash_and_bind(seed_base: str, admin_password: str, cfg) -> int:
+    """Login, POST + fetch the synthetic flash image, wait for its
+    content_sha256, seed a matching inventory disk on the machine,
+    then PUT /machines/<mac> with boot_mode=pixie-flash-once +
+    image_content_sha256 + target_disk_serial=PIXIETEST. Returns 0
+    on success, an errno on any failure (already logged)."""
+    server_ip = cfg["server_pxe_ip"]
+    image_url = f"http://{server_ip}:{WORKSPACE_HTTP_PORT}/flash-target.img"
+    mac = cfg["client_mac"]
+    disk_serial = str(cfg.get("target_disk_serial", FLASH_TARGET_SERIAL))
+
+    try:
+        cookie = _login(seed_base, admin_password)
+    except Exception as exc:
+        log.error(f"login failed: {exc}")
+        return errno.EACCES
+
+    if err := _add_and_fetch(seed_base, cookie, "flash-target", image_url, "img"):
+        return err
+
+    try:
+        image_sha = _wait_content_sha(seed_base, "flash-target")
+    except TimeoutError as exc:
+        log.error(str(exc))
+        return errno.ETIMEDOUT
+
+    log.info(f"Flash-target sha={image_sha[:12]}...")
+
+    if err := _post_flash_inventory(seed_base, mac, disk_serial):
+        return err
+
+    body = {
+        "boot_mode": "pixie-flash-once",
+        "image_content_sha256": image_sha,
+        "target_disk_serial": disk_serial,
+    }
+    data = json.dumps(body).encode("utf-8")
+    req = urllib.request.Request(
+        f"{seed_base}/machines/{mac}",
+        data=data,
+        method="PUT",
+        headers={"Content-Type": "application/json", "Cookie": cookie},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            if resp.status != 200:
+                log.error(f"PUT /machines/{mac} returned {resp.status}")
+                return errno.EPROTO
+    except urllib.error.HTTPError as exc:
+        # 422 here means the bind guard rejected -- the most likely
+        # cause is that the inventory seed step above did not stick
+        # (row create race). Print the body so the operator can see
+        # which validator fired.
+        log.error(
+            f"PUT /machines/{mac}: HTTP {exc.code}: "
+            f"{exc.read().decode('utf-8', errors='replace')!r}"
+        )
+        return errno.EPROTO
+    log.info(
+        f"Machine {mac} bound to boot_mode=pixie-flash-once "
+        f"(image_sha={image_sha[:12]}..., target_disk_serial={disk_serial})"
+    )
+    return 0
+
+
+_FLASH_EFFECT_TIMEOUT_S = 180
+
+
+def _verify_flash_effects(seed_base: str, mac: str, workspace: Path) -> int:
+    """After the live env's pixie CLI runs ``_run_auto``, it dds the
+    image onto the target disk (matched by serial), then POSTs
+    ``/pxe/<mac>/status`` with status=done. The status handler flips
+    pixie-flash-once to ipxe-exit. Two assertions here:
+
+    1. Poll ``GET /machines/<mac>`` until ``boot_mode`` reads
+       ``ipxe-exit`` -- proves the /done POST landed AND the server
+       flipped correctly (end-to-end wire test for the flip logic).
+    2. Read the QEMU-side qcow2 blank disk raw and grep for the
+       flash marker -- proves the CLI actually wrote the image (not
+       just POSTed done and reboot-panicked). qemu-img convert to a
+       throwaway raw file avoids parsing qcow2 by hand.
+
+    Returns 0 on success, an errno on any failure (already logged)."""
+    url = f"{seed_base}/machines/{mac}"
+    log.info(f"Polling for pixie-flash-once -> ipxe-exit flip: GET {url}")
+    deadline = time.monotonic() + _FLASH_EFFECT_TIMEOUT_S
+    last_mode: str | None = None
+    while time.monotonic() < deadline:
+        try:
+            with urllib.request.urlopen(url, timeout=5) as resp:
+                body = json.loads(resp.read())
+        except (urllib.error.URLError, OSError) as exc:
+            last_mode = f"transport: {exc}"
+            time.sleep(3.0)
+            continue
+        last_mode = body.get("boot_mode")
+        if last_mode == "ipxe-exit":
+            log.info("Mode flipped to ipxe-exit (post-flash /done landed)")
+            break
+        time.sleep(3.0)
+    else:
+        log.error(
+            f"boot_mode did not flip to ipxe-exit within {_FLASH_EFFECT_TIMEOUT_S}s "
+            f"(last: {last_mode!r}); live-env flash pipeline never POSTed /done"
+        )
+        return errno.ETIMEDOUT
+
+    # ``client-blank.qcow2`` is the qcow2 the client wrote through;
+    # convert to raw so we can seek(0) + read the first bytes without
+    # depending on a qcow2 parser. qemu-img is on the runner already
+    # (we used it to create the disk).
+    blank_qcow = workspace / "client-blank.qcow2"
+    raw_dump = workspace / "client-blank.raw"
+    log.info(f"Converting {blank_qcow} to raw for marker check")
+    conv = subprocess.run(
+        ["qemu-img", "convert", "-O", "raw", str(blank_qcow), str(raw_dump)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if conv.returncode != 0:
+        log.error(f"qemu-img convert failed: {conv.stderr.strip()}")
+        return errno.EIO
+    try:
+        with open(raw_dump, "rb") as fh:
+            head = fh.read(len(_FLASH_MARKER))
+    except OSError as exc:
+        log.error(f"reading raw dump failed: {exc}")
+        return errno.EIO
+    finally:
+        raw_dump.unlink(missing_ok=True)
+    if head != _FLASH_MARKER:
+        log.error(
+            f"target disk missing flash marker; head[:{len(_FLASH_MARKER)}]={head!r} "
+            f"expected={_FLASH_MARKER!r}"
+        )
+        return errno.EPROTO
+    log.info("Target disk carries the flash marker -- flash pipeline wrote bytes")
     return 0
