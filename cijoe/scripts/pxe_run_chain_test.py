@@ -418,7 +418,15 @@ def _start_client_vm(workspace: Path, cfg, log_path: Path, firmware: str = "bios
         "-smp",
         "1",
         "-m",
-        "1G",
+        # Sized for the pixie live env's own footprint. In inventory
+        # mode Debian live-boot's do_httpmount downloads the whole
+        # squashfs into a ramfs before mounting, and our netboot-pc
+        # bake weighs ~750 MiB. 1 GiB left wget OOM-killed mid-fetch
+        # on the runner (kernel panic at ~8.6 s); 4 GiB carries the
+        # ramfs + kernel + tmpfs headroom + running processes with
+        # room to spare. Ramboot + bootstrap modes fit in less but
+        # the shared driver runs one config, so pick the ceiling.
+        "4G",
         "-drive",
         f"file={blank_disk},if=none,id=flashdrive,format=qcow2",
         "-device",
