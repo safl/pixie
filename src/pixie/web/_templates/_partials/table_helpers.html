@@ -57,8 +57,9 @@
            class="form-control form-control-sm flex-grow-1"
            placeholder="{{ placeholder }}"
            aria-label="Filter this table">
-    <button type="submit" class="btn btn-sm btn-outline-secondary" title="Search">
-        <i class="bi bi-search"></i>
+    <button type="submit" class="btn btn-sm btn-outline-secondary"
+            title="Search" aria-label="Apply filter">
+        <i class="bi bi-search" aria-hidden="true"></i>
     </button>
     {% if q %}
     <a href="?{{ _qs(preserved, {'q': None, 'page': None}) }}"
