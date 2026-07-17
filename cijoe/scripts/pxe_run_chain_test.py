@@ -156,7 +156,10 @@ def main(args, cijoe) -> int:
             )
             if workspace_http is None:
                 return errno.ENOENT  # error already logged
-            log.info("Seeding pixie catalog + binding machine to pixie-flash-once")
+            log.info(
+                "Seeding pixie catalog + binding machine to "
+                f"{cfg.get('flash_boot_mode', 'pixie-flash-once')}"
+            )
             seed_err = _seed_flash_and_bind(seed_base, admin_password, cfg)
             if seed_err:
                 log.error(f"flash seed failed: rc={seed_err}")
@@ -203,7 +206,7 @@ def main(args, cijoe) -> int:
                 _dump_container_logs()
                 return inv_err
         elif mode == "flash":
-            flash_err = _verify_flash_effects(seed_base, cfg["client_mac"], workspace)
+            flash_err = _verify_flash_effects(seed_base, cfg, workspace)
             if flash_err:
                 _dump_container_logs()
                 return flash_err
@@ -921,16 +924,28 @@ def _post_flash_inventory(seed_base: str, mac: str, disk_serial: str) -> int:
     return 0
 
 
+_FLASH_BOOT_MODES = ("pixie-flash-once", "pixie-flash-always")
+
+
 def _seed_flash_and_bind(seed_base: str, admin_password: str, cfg) -> int:
     """Login, POST + fetch the synthetic flash image, wait for its
     content_sha256, seed a matching inventory disk on the machine,
-    then PUT /machines/<mac> with boot_mode=pixie-flash-once +
-    image_content_sha256 + target_disk_serial=PIXIETEST. Returns 0
-    on success, an errno on any failure (already logged)."""
+    then PUT /machines/<mac> with the configured flash boot_mode +
+    image_content_sha256 + target_disk_serial. Returns 0 on success,
+    an errno on any failure (already logged). ``flash_boot_mode`` in
+    the config defaults to ``pixie-flash-once``; the always variant
+    exercises the same wire but the post-chain assertion in
+    ``_verify_flash_effects`` inverts (mode must NOT flip)."""
     server_ip = cfg["server_pxe_ip"]
     image_url = f"http://{server_ip}:{WORKSPACE_HTTP_PORT}/flash-target.img"
     mac = cfg["client_mac"]
     disk_serial = str(cfg.get("target_disk_serial", FLASH_TARGET_SERIAL))
+    boot_mode = str(cfg.get("flash_boot_mode", "pixie-flash-once"))
+    if boot_mode not in _FLASH_BOOT_MODES:
+        log.error(
+            f"unknown [test.pxe] flash_boot_mode={boot_mode!r}; expected one of {_FLASH_BOOT_MODES}"
+        )
+        return errno.EINVAL
 
     try:
         cookie = _login(seed_base, admin_password)
@@ -953,7 +968,7 @@ def _seed_flash_and_bind(seed_base: str, admin_password: str, cfg) -> int:
         return err
 
     body = {
-        "boot_mode": "pixie-flash-once",
+        "boot_mode": boot_mode,
         "image_content_sha256": image_sha,
         "target_disk_serial": disk_serial,
     }
@@ -980,7 +995,7 @@ def _seed_flash_and_bind(seed_base: str, admin_password: str, cfg) -> int:
         )
         return errno.EPROTO
     log.info(
-        f"Machine {mac} bound to boot_mode=pixie-flash-once "
+        f"Machine {mac} bound to boot_mode={boot_mode} "
         f"(image_sha={image_sha[:12]}..., target_disk_serial={disk_serial})"
     )
     return 0
@@ -989,44 +1004,81 @@ def _seed_flash_and_bind(seed_base: str, admin_password: str, cfg) -> int:
 _FLASH_EFFECT_TIMEOUT_S = 180
 
 
-def _verify_flash_effects(seed_base: str, mac: str, workspace: Path) -> int:
+def _verify_flash_effects(seed_base: str, cfg, workspace: Path) -> int:
     """After the live env's pixie CLI runs ``_run_auto``, it dds the
     image onto the target disk (matched by serial), then POSTs
     ``/pxe/<mac>/status`` with status=done. The status handler flips
-    pixie-flash-once to ipxe-exit. Two assertions here:
+    pixie-flash-once to ipxe-exit; pixie-flash-always stays put.
+    Assertions:
 
-    1. Poll ``GET /machines/<mac>`` until ``boot_mode`` reads
-       ``ipxe-exit`` -- proves the /done POST landed AND the server
-       flipped correctly (end-to-end wire test for the flip logic).
+    1. For ``pixie-flash-once``: poll ``GET /machines/<mac>`` until
+       ``boot_mode`` reads ``ipxe-exit`` -- proves the /done POST
+       landed AND the server flipped.
+       For ``pixie-flash-always``: sleep long enough that a flip
+       WOULD have shown up, then GET once and assert boot_mode
+       still reads ``pixie-flash-always``. Same /done POST fires
+       from the CLI; this side of the wire is what differs.
     2. Read the QEMU-side qcow2 blank disk raw and grep for the
        flash marker -- proves the CLI actually wrote the image (not
        just POSTed done and reboot-panicked). qemu-img convert to a
        throwaway raw file avoids parsing qcow2 by hand.
 
     Returns 0 on success, an errno on any failure (already logged)."""
+    mac = cfg["client_mac"]
+    boot_mode = str(cfg.get("flash_boot_mode", "pixie-flash-once"))
     url = f"{seed_base}/machines/{mac}"
-    log.info(f"Polling for pixie-flash-once -> ipxe-exit flip: GET {url}")
-    deadline = time.monotonic() + _FLASH_EFFECT_TIMEOUT_S
-    last_mode: str | None = None
-    while time.monotonic() < deadline:
+    if boot_mode == "pixie-flash-once":
+        log.info(f"Polling for pixie-flash-once -> ipxe-exit flip: GET {url}")
+        deadline = time.monotonic() + _FLASH_EFFECT_TIMEOUT_S
+        last_mode: str | None = None
+        while time.monotonic() < deadline:
+            try:
+                with urllib.request.urlopen(url, timeout=5) as resp:
+                    body = json.loads(resp.read())
+            except (urllib.error.URLError, OSError) as exc:
+                last_mode = f"transport: {exc}"
+                time.sleep(3.0)
+                continue
+            last_mode = body.get("boot_mode")
+            if last_mode == "ipxe-exit":
+                log.info("Mode flipped to ipxe-exit (post-flash /done landed)")
+                break
+            time.sleep(3.0)
+        else:
+            log.error(
+                f"boot_mode did not flip to ipxe-exit within {_FLASH_EFFECT_TIMEOUT_S}s "
+                f"(last: {last_mode!r}); live-env flash pipeline never POSTed /done"
+            )
+            return errno.ETIMEDOUT
+    else:
+        # pixie-flash-always: sleep past the point a once-mode flip
+        # would have committed (single GET_TIMEOUT worth is enough --
+        # the CLI POSTs /done well before that), then assert the mode
+        # is unchanged. Using the same 15s window twice would be
+        # cheaper but leaves a race where a slow /done arrives after
+        # the check; 30s covers real jitter without inflating wall
+        # clock.
+        settle_s = 30
+        log.info(
+            f"pixie-flash-always: sleeping {settle_s}s past /done and "
+            f"asserting mode stays put: GET {url}"
+        )
+        time.sleep(settle_s)
         try:
             with urllib.request.urlopen(url, timeout=5) as resp:
                 body = json.loads(resp.read())
         except (urllib.error.URLError, OSError) as exc:
-            last_mode = f"transport: {exc}"
-            time.sleep(3.0)
-            continue
-        last_mode = body.get("boot_mode")
-        if last_mode == "ipxe-exit":
-            log.info("Mode flipped to ipxe-exit (post-flash /done landed)")
-            break
-        time.sleep(3.0)
-    else:
-        log.error(
-            f"boot_mode did not flip to ipxe-exit within {_FLASH_EFFECT_TIMEOUT_S}s "
-            f"(last: {last_mode!r}); live-env flash pipeline never POSTed /done"
-        )
-        return errno.ETIMEDOUT
+            log.error(f"GET {url} failed: {exc}")
+            return errno.EPROTO
+        observed = body.get("boot_mode")
+        if observed != "pixie-flash-always":
+            log.error(
+                f"pixie-flash-always must not flip on /done; observed "
+                f"boot_mode={observed!r} after {settle_s}s. Server-side flip "
+                "logic regressed."
+            )
+            return errno.EPROTO
+        log.info("pixie-flash-always survived /done (mode unchanged as required)")
 
     # ``client-blank.qcow2`` is the qcow2 the client wrote through;
     # convert to raw so we can seek(0) + read the first bytes without

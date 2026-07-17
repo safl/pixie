@@ -1,0 +1,74 @@
+# pixie PXE flash-always chain test: mirror of test-pxe-flash but with
+# boot_mode=pixie-flash-always so the server MUST NOT flip the bind on
+# /done. Everything else (staging, HTTP server, live-env mount, marker
+# check) is identical.
+#
+# Usage:
+#   cijoe tasks/test-pxe-flash-always.yaml --monitor \
+#     -c configs/test-pxe-flash-always.toml
+#
+# Pre-conditions match test-pxe-flash exactly (see that config).
+
+[pixie]
+variant = "test-pxe-flash-always"
+
+[cijoe.workflow]
+fail_fast = true
+
+[test.pxe]
+mode = "flash"
+# Flips the seed bind + the post-chain assertion (mode must stay put).
+flash_boot_mode = "pixie-flash-always"
+
+pixie_image = "pixie:pxetest"
+admin_password = "test-admin-pw"
+
+client_firmware = "bios"
+# Distinct MAC + serial so cross-test state on a shared runner cannot
+# alias the once-mode's fixtures. Bindings + inventory rows live in
+# the pixie container's tmpfs so this is defensive not required.
+client_mac = "52:54:00:11:22:77"
+target_disk_serial = "PIXIETEST"
+
+bridge = "br-ipxe"
+tap_iface = "tap-ipxe"
+server_pxe_ip = "192.168.99.1"
+pxe_netmask = "255.255.255.0"
+dhcp_range_lo = "192.168.99.50"
+dhcp_range_hi = "192.168.99.150"
+
+[[test.pxe.chain_markers]]
+key = "ipxe-loaded"
+needle = "iPXE"
+
+[[test.pxe.chain_markers]]
+key = "ipxe-fetch-bootstrap"
+needle = "pxe-bootstrap.ipxe"
+
+[[test.pxe.chain_markers]]
+key = "live-env-vmlinuz"
+needle = "/boot/pixie-live-env/vmlinuz"
+
+[[test.pxe.chain_markers]]
+key = "live-env-initrd"
+needle = "/boot/pixie-live-env/initrd"
+
+[[test.pxe.chain_markers]]
+key = "live-env-squashfs"
+needle = "/boot/pixie-live-env/live.squashfs"
+
+[[test.pxe.chain_markers]]
+key = "kernel-boot"
+needle = "Linux version"
+
+[[test.pxe.chain_markers]]
+key = "systemd-started"
+needle = "systemd["
+
+[[test.pxe.chain_markers]]
+key = "pixie-auto-flash-start"
+needle = "pixie: auto-flash starting"
+
+[[test.pxe.chain_markers]]
+key = "pixie-flash-complete"
+needle = "pixie: flash complete"

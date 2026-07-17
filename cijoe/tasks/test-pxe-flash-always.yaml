@@ -1,0 +1,30 @@
+doc: |
+  pixie PXE flash-always chain test
+  ===================================
+
+  End-to-end proof that the pixie-flash-always chain reaches the
+  pixie live env, auto-flashes the target disk, POSTs status=done
+  back to pixie, and the server LEAVES the bind at
+  pixie-flash-always (unlike pixie-flash-once which flips to
+  ipxe-exit). Same infrastructure as test-pxe-flash, distinct
+  post-chain assertion.
+
+  Steps mirror test-pxe-flash: pxe_prepare + pxe_flash_stage +
+  pxe_run_chain_test (mode=flash, flash_boot_mode=pixie-flash-always).
+
+  Why a separate job: the server-side ``/pxe/<mac>/status`` handler
+  branches on boot_mode when deciding whether to flip; running one
+  test per branch keeps the assertion pass/fail unambiguous. Wall
+  clock: ~2.5 min, same order as test-pxe-flash.
+
+  Requires the same host tools + netboot-pc bake as test-pxe-flash.
+
+steps:
+- name: pxe_prepare
+  uses: pxe_prepare
+
+- name: pxe_flash_stage
+  uses: pxe_flash_stage
+
+- name: pxe_run_chain_test
+  uses: pxe_run_chain_test
