@@ -141,6 +141,20 @@ def test_disk_image_blob_end_to_end(client: TestClient, state_dir: Path) -> None
     assert r.status_code == 200
     assert r.content == payload
 
+    # HEAD is served with Content-Length + no body so the ported
+    # pixie CLI's ``flash._probe_image_url_http`` can size an image
+    # before dispatching an auto-flash. A 405 here (regression to
+    # ``@router.get`` only) aborts every pixie-hosted auto-flash
+    # before ``dd`` fires; see #237.
+    h = client.head(f"/b/{result.content_sha256}/tiny.img.gz")
+    assert h.status_code == 200
+    assert h.content == b""
+    assert h.headers["content-length"] == str(len(payload))
+
+    # HEAD on a missing blob still 404s (same read guard as GET).
+    h404 = client.head("/b/" + "b" * 64 + "/nope.img.gz")
+    assert h404.status_code == 404
+
 
 def test_netboot_bundle_serves_artifacts(client: TestClient, state_dir: Path) -> None:
     """A fetched tar.gz bundle unpacks + serves vmlinuz + initrd +
@@ -165,6 +179,14 @@ def test_netboot_bundle_serves_artifacts(client: TestClient, state_dir: Path) ->
     assert r_ir.content == b"INITRD"
     assert r_mf.status_code == 200
     assert r_mf.json()["variant"] == "tiny"
+
+    # Artifacts accept HEAD too, mirrors the blob route: iPXE only
+    # GETs but keeping the two routes symmetric protects against a
+    # future probe-verb change (or an operator curl -I) 405ing.
+    h_vm = client.head(f"/artifacts/{sha}/vmlinuz")
+    assert h_vm.status_code == 200
+    assert h_vm.content == b""
+    assert h_vm.headers["content-length"] == str(len(b"KERNEL"))
 
 
 def test_artifact_serve_rejects_bad_sha(client: TestClient) -> None:
