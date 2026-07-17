@@ -139,3 +139,47 @@ def test_layout_has_settings_nav_pill(client: TestClient, path: str) -> None:
     c = _authed(client)
     body = c.get(path).text
     assert 'href="/ui/settings"' in body
+
+
+def test_resolve_display_timezone_env_var_fallback(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No DB override + PIXIE_DISPLAY_TZ set -> env wins over the
+    built-in UTC default. Ordering matters: env is second in the
+    resolution chain, so an operator can pin the compose deploy's
+    timezone via envvars without touching state.db."""
+    from pixie.web._settings_store import SettingsStore, format_ts
+
+    monkeypatch.setenv("PIXIE_DISPLAY_TZ", "Europe/Copenhagen")
+    store = SettingsStore(tmp_path / "state.db")
+    out = format_ts("2026-07-16T14:30:00Z", store)
+    # Europe/Copenhagen in mid-July is UTC+2 -> 16:30 local.
+    assert "16:30:00" in out
+
+
+def test_resolve_datetime_format_env_var_fallback(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No DB override + PIXIE_DATETIME_FORMAT set -> env wins over
+    the built-in default. Same resolution chain as the tz key."""
+    from pixie.web._settings_store import SettingsStore, format_ts
+
+    monkeypatch.setenv("PIXIE_DATETIME_FORMAT", "%d %b %Y")
+    store = SettingsStore(tmp_path / "state.db")
+    out = format_ts("2026-07-16T14:30:00Z", store)
+    assert out == "16 Jul 2026"
+
+
+def test_db_override_wins_over_env_var(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """DB override is FIRST in the resolution chain, so a Settings-
+    page pick trumps the compose envvar. Guards the /ui/settings
+    write path against a surprise revert on the next render."""
+    from pixie.web._settings_store import KEY_DISPLAY_TZ, SettingsStore, format_ts
+
+    monkeypatch.setenv("PIXIE_DISPLAY_TZ", "America/New_York")
+    store = SettingsStore(tmp_path / "state.db")
+    store.set_value(KEY_DISPLAY_TZ, "Europe/Copenhagen")
+    out = format_ts("2026-07-16T14:30:00Z", store)
+    assert "16:30:00" in out  # Copenhagen, not New_York's 10:30
