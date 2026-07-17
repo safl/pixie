@@ -74,6 +74,94 @@ def test_plan_json_rejects_bad_mac(client: TestClient) -> None:
     assert r.status_code == 400
 
 
+def _seed_flash_bound_machine(client: TestClient, mac: str, mode: str, serial: str) -> str:
+    """Bind ``mac`` to ``mode`` with a fetched image + matching disk
+    serial so plan JSON returns mode=flash. Returns the content sha
+    the machine is bound to. Reused by the flash-plan tests."""
+    from pixie.catalog._schema import CatalogEntry
+
+    c = _authed(client)
+    catalog = c.app.state.catalog_store  # type: ignore[attr-defined]
+    catalog.upsert(CatalogEntry(name="ready", src="https://x/ready.img.gz", format="img.gz"))
+    sha = "a" * 64
+    catalog.mark_fetched("ready", content_sha256=sha, size_bytes=42)
+    c.post(f"/pxe/{mac}/inventory", json={"disks": [{"path": "/dev/sda", "serial": serial}]})
+    r = c.put(
+        f"/machines/{mac}",
+        json={
+            "boot_mode": mode,
+            "image_content_sha256": sha,
+            "target_disk_serial": serial,
+        },
+    )
+    assert r.status_code == 200, r.text
+    return sha
+
+
+def test_plan_json_returns_flash_for_pixie_flash_once(client: TestClient) -> None:
+    """A pixie-flash-once bind with image + target serial resolves to
+    mode=flash with image URL + target_disk_serial + name +
+    disk_image_sha; the pixie CLI auto-flashes without touching the
+    interactive wizard."""
+    mac = "aa:bb:cc:dd:ee:30"
+    sha = _seed_flash_bound_machine(client, mac, "pixie-flash-once", "SN-1")
+    r = client.get(f"/pxe/{mac}/plan")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["mode"] == "flash"
+    assert body["target_disk_serial"] == "SN-1"
+    assert body["name"] == "ready"
+    assert body["disk_image_sha"] == sha
+    assert body["format"] == "img.gz"
+    assert body["image"].startswith("http://")
+    assert body["image"].endswith(f"/b/{sha}/ready")
+
+
+def test_plan_json_flash_falls_back_when_image_missing(client: TestClient) -> None:
+    """A pixie-flash-* bind without an image_content_sha256 falls
+    back to interactive so the operator can pick manually."""
+    from pixie.catalog._schema import CatalogEntry
+
+    c = _authed(client)
+    mac = "aa:bb:cc:dd:ee:31"
+    catalog = c.app.state.catalog_store  # type: ignore[attr-defined]
+    catalog.upsert(CatalogEntry(name="ready", src="https://x/r.img.gz", format="img.gz"))
+    catalog.mark_fetched("ready", content_sha256="b" * 64, size_bytes=1)
+    c.post(f"/pxe/{mac}/inventory", json={"disks": [{"path": "/dev/sda", "serial": "SN-x"}]})
+    # bind flash-once WITHOUT image_content_sha256 -- machine record
+    # accepts it (only target_disk_serial guarded); plan should back
+    # off to interactive rather than build a broken flash payload.
+    c.put(
+        f"/machines/{mac}",
+        json={"boot_mode": "pixie-flash-once", "target_disk_serial": "SN-x"},
+    )
+    r = client.get(f"/pxe/{mac}/plan")
+    assert r.json() == {"mode": "interactive"}
+
+
+def test_status_done_flips_pixie_flash_once_to_ipxe_exit(client: TestClient) -> None:
+    """After the live env's pixie CLI POSTs status=done, a
+    pixie-flash-once bind flips to ipxe-exit so the target's next
+    PXE boot lands on the disk without re-flashing."""
+    mac = "aa:bb:cc:dd:ee:32"
+    _seed_flash_bound_machine(client, mac, "pixie-flash-once", "SN-2")
+    # Confirm the bind pre-check.
+    assert client.get(f"/machines/{mac}").json()["boot_mode"] == "pixie-flash-once"
+
+    r = client.post(f"/pxe/{mac}/status", json={"status": "done"})
+    assert r.status_code == 204
+    assert client.get(f"/machines/{mac}").json()["boot_mode"] == "ipxe-exit"
+
+
+def test_status_done_leaves_pixie_flash_always_alone(client: TestClient) -> None:
+    """pixie-flash-always is meant to re-flash every boot; a status
+    done stays on the same mode so the next boot re-arms."""
+    mac = "aa:bb:cc:dd:ee:33"
+    _seed_flash_bound_machine(client, mac, "pixie-flash-always", "SN-3")
+    client.post(f"/pxe/{mac}/status", json={"status": "done"})
+    assert client.get(f"/machines/{mac}").json()["boot_mode"] == "pixie-flash-always"
+
+
 def test_ipxe_plan_pixie_inventory_no_live_env_dir_falls_back(client: TestClient) -> None:
     """With no netboot-pc artifacts staged, ``boot_mode=pixie-inventory``
     must degrade to the readable ``unavailable`` plan rather than
