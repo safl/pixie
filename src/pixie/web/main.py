@@ -1387,7 +1387,7 @@ def create_app() -> FastAPI:
             r = httpx.get(target_url, timeout=15.0, follow_redirects=True)
             r.raise_for_status()
             entries = parse_catalog_toml(r.content)
-        except (httpx.HTTPError, ValueError, Exception) as exc:
+        except (httpx.HTTPError, ValueError) as exc:
             log = getattr(request.app.state, "events_log", None)
             if log is not None:
                 log.emit(

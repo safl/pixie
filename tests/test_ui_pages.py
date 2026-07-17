@@ -9,12 +9,7 @@ from __future__ import annotations
 
 from fastapi.testclient import TestClient
 
-from tests.conftest import TEST_ADMIN_PASSWORD
-
-
-def _authed(client: TestClient) -> TestClient:
-    client.post("/ui/login", data={"password": TEST_ADMIN_PASSWORD})
-    return client
+from tests.conftest import authed as _authed
 
 
 def test_dashboard_renders_nav_when_authed(client: TestClient) -> None:

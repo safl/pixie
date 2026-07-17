@@ -11,7 +11,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from pixie.machines._store import BOOT_MODES, BadMac, normalise_mac
-from tests.conftest import TEST_ADMIN_PASSWORD
+from tests.conftest import authed as _authed
 
 
 def test_normalise_mac_accepts_all_common_shapes() -> None:
@@ -49,11 +49,6 @@ def test_boot_modes_is_the_locked_set() -> None:
 def test_get_machine_404_before_discovery(client: TestClient) -> None:
     r = client.get("/machines/aa:bb:cc:dd:ee:00")
     assert r.status_code == 404
-
-
-def _authed(client: TestClient) -> TestClient:
-    client.post("/ui/login", data={"password": TEST_ADMIN_PASSWORD})
-    return client
 
 
 def test_put_machine_requires_session(client: TestClient) -> None:
