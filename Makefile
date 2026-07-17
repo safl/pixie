@@ -48,6 +48,8 @@ help:
 	@echo "                  (needs podman + QEMU + KVM + dnsmasq; a few min wall clock)"
 	@echo "  test-pxe-ramboot  end-to-end PXE ramboot chain test"
 	@echo "                  (same deps as test-pxe + a prior VARIANT=netboot-pc bake)"
+	@echo "  test-pxe-inventory  end-to-end PXE pixie-inventory chain test"
+	@echo "                  (same deps as test-pxe-ramboot; no catalog seed)"
 	@echo ""
 	@echo "Variant: $(VARIANT)  (override with VARIANT=netboot-pc, ...)"
 	@echo "  usbboot-pc    - bootable USB live ISO via live-build (.iso, x86_64)"
@@ -123,6 +125,15 @@ test-pxe:
 # ``~/system_imaging/disk/`` (or PIXIE_NETBOOT_ARTIFACT_DIR).
 test-pxe-ramboot:
 	cd cijoe && cijoe tasks/test-pxe-ramboot.yaml --monitor -c configs/test-pxe-ramboot.toml
+
+# Inventory chain test: bring up pixie with the netboot-pc bake
+# bind-mounted as its live-env dir, bind the client MAC to
+# boot_mode=pixie-inventory, PXE-boot QEMU, and assert the live-env
+# actually boots + posts an inventory blob back to pixie. Same
+# artifact dependency as test-pxe-ramboot (needs the netboot-pc
+# bake).
+test-pxe-inventory:
+	cd cijoe && cijoe tasks/test-pxe-inventory.yaml --monitor -c configs/test-pxe-inventory.toml
 
 # ---------- Cleanup ------------------------------------------------------
 

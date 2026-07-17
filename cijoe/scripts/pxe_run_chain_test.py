@@ -80,8 +80,10 @@ def main(args, cijoe) -> int:
         client_log.unlink()
 
     mode = str(cfg.get("mode", "bootstrap")).lower()
-    if mode not in ("bootstrap", "ramboot"):
-        log.error(f"unknown [test.pxe] mode={mode!r}; expected 'bootstrap' or 'ramboot'")
+    if mode not in ("bootstrap", "ramboot", "inventory"):
+        log.error(
+            f"unknown [test.pxe] mode={mode!r}; expected 'bootstrap', 'ramboot', or 'inventory'"
+        )
         return errno.EINVAL
 
     container = None
@@ -94,14 +96,40 @@ def main(args, cijoe) -> int:
         net_up = True
         dnsmasq = _start_dnsmasq(cfg, tftproot, workspace)
 
-        container = _run_container(image, admin_password)
+        # ``inventory`` needs pixie's own live-env media staged
+        # inside the container; nothing else does. Verify the caller's
+        # workspace has the three files before we start podman so a
+        # missing bake fails fast rather than mid-boot on the client.
+        live_env_dir: Path | None = None
+        if mode == "inventory":
+            live_env_dir = workspace / "live-env"
+            missing = [
+                name
+                for name in ("vmlinuz", "initrd", "squashfs")
+                if not (live_env_dir / name).is_file()
+            ]
+            if missing:
+                log.error(
+                    f"mode=inventory needs live-env media at {live_env_dir}; "
+                    f"missing: {missing}. Run pxe_inventory_stage first."
+                )
+                return errno.ENOENT
+
+        container = _run_container(image, admin_password, live_env_dir=live_env_dir)
         log.info(f"Waiting for pixie /healthz on {seed_base}")
         if not _wait_until(lambda: _http_ready(seed_base), HEALTHZ_TIMEOUT, "pixie /healthz"):
             log.error("pixie container did not become healthy; logs:")
             _dump_container_logs()
             return errno.ETIMEDOUT
 
-        if mode == "ramboot":
+        if mode == "inventory":
+            log.info("Binding machine to boot_mode=pixie-inventory")
+            seed_err = _bind_inventory(seed_base, admin_password, cfg)
+            if seed_err:
+                log.error(f"inventory bind failed: rc={seed_err}")
+                _dump_container_logs()
+                return seed_err
+        elif mode == "ramboot":
             ramboot_http = _start_ramboot_http_server(workspace, cfg["server_pxe_ip"])
             if ramboot_http is None:
                 return errno.ENOENT  # error already logged
@@ -139,11 +167,13 @@ def main(args, cijoe) -> int:
             _dump_container_logs()
             return errno.EPROTO
 
-        # Ramboot mode also validates the server-side inventory
-        # roundtrip: the client's rootfs /init POSTed a blob via
-        # busybox wget; here we GET it back from pixie's state.db and
-        # assert it holds the marker fields we sent.
-        if mode == "ramboot":
+        # Ramboot + inventory both prove the server-side inventory
+        # roundtrip: the live env's pixie CLI POSTs the blob after
+        # boot; here we GET it back from pixie's state.db and assert
+        # it holds a non-empty disks list. Different chain shape (NBD
+        # for ramboot vs static live-env for inventory) hits the same
+        # inventory POST code path.
+        if mode in ("ramboot", "inventory"):
             inv_err = _verify_server_inventory(seed_base, cfg["client_mac"])
             if inv_err:
                 _dump_container_logs()
@@ -270,40 +300,49 @@ def _whoami() -> str:
 # ---------- pixie container ------------------------------------------------
 
 
-def _run_container(image: str, admin_password: str):
+def _run_container(image: str, admin_password: str, *, live_env_dir: Path | None = None):
     """Run the pixie container detached on host networking with
     ``PIXIE_ADMIN_PASSWORD`` set. Host networking keeps ``/healthz``
     reachable via loopback while the client's PXE HTTP fetch hits the
-    same process via the bridge IP."""
+    same process via the bridge IP.
+
+    ``live_env_dir``, when passed, bind-mounts the caller's staged
+    vmlinuz + initrd + squashfs into the container at
+    ``/var/lib/pixie/live-env`` (pixie's default live-env dir), which
+    the inventory + flash chain modes need for the ``pixie-live-env.j2``
+    template to resolve. Not used in the bootstrap / ramboot modes."""
     subprocess.run(
         ["podman", "rm", "-f", CONTAINER_NAME],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
         check=False,
     )
-    subprocess.run(
-        [
-            "podman",
-            "run",
-            "-d",
-            "--name",
-            CONTAINER_NAME,
-            "--network=host",
-            "-e",
-            f"PIXIE_ADMIN_PASSWORD={admin_password}",
-            # Suppress pixie's in-container in.tftpd: the test's host-
-            # side dnsmasq owns udp/69 on this bridge, and the container
-            # is on --network=host so binding :69 inside would collide
-            # (in.tftpd already exits rc=71 on the runner because
-            # rootless podman can't bind privileged ports). The bootstrap
-            # chain here doesn't need pixie's TFTP surface at all.
-            "-e",
-            "PIXIE_TFTP_ENABLED=0",
-            image,
-        ],
-        check=True,
-        capture_output=True,
-    )
+    cmd = [
+        "podman",
+        "run",
+        "-d",
+        "--name",
+        CONTAINER_NAME,
+        "--network=host",
+        "-e",
+        f"PIXIE_ADMIN_PASSWORD={admin_password}",
+        # Suppress pixie's in-container in.tftpd: the test's host-
+        # side dnsmasq owns udp/69 on this bridge, and the container
+        # is on --network=host so binding :69 inside would collide
+        # (in.tftpd already exits rc=71 on the runner because
+        # rootless podman can't bind privileged ports). The bootstrap
+        # chain here doesn't need pixie's TFTP surface at all.
+        "-e",
+        "PIXIE_TFTP_ENABLED=0",
+    ]
+    if live_env_dir is not None:
+        # ``:z`` relabels the volume for SELinux so an enforcing
+        # runner (rare on GHA but present on some dev machines) can
+        # still open the files. ``:ro`` because pixie never writes
+        # into live-env at runtime; the operator stages it once.
+        cmd.extend(["-v", f"{live_env_dir}:/var/lib/pixie/live-env:z,ro"])
+    cmd.append(image)
+    subprocess.run(cmd, check=True, capture_output=True)
     return CONTAINER_NAME
 
 
@@ -777,3 +816,35 @@ def _bind_machine(base: str, cookie: str, mac: str, image_sha: str) -> None:
     with urllib.request.urlopen(req, timeout=15) as resp:
         if resp.status != 200:
             raise RuntimeError(f"PUT /machines/{mac} returned {resp.status}")
+
+
+def _bind_inventory(seed_base: str, admin_password: str, cfg) -> int:
+    """Login + PUT /machines/<mac> with boot_mode=pixie-inventory.
+    Distinct from ``_bind_machine`` because inventory needs no catalog
+    seed and no image_content_sha256 -- pixie's PXE renderer resolves
+    the live-env chain from the operator-staged live-env dir alone.
+    Returns 0 on success, an errno on any failure (already logged)."""
+    try:
+        cookie = _login(seed_base, admin_password)
+    except Exception as exc:
+        log.error(f"login failed: {exc}")
+        return errno.EACCES
+
+    body = {"boot_mode": "pixie-inventory"}
+    data = json.dumps(body).encode("utf-8")
+    req = urllib.request.Request(
+        f"{seed_base}/machines/{cfg['client_mac']}",
+        data=data,
+        method="PUT",
+        headers={"Content-Type": "application/json", "Cookie": cookie},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            if resp.status != 200:
+                log.error(f"PUT /machines/{cfg['client_mac']} returned {resp.status}")
+                return errno.EPROTO
+    except urllib.error.HTTPError as exc:
+        log.error(f"PUT /machines/{cfg['client_mac']}: HTTP {exc.code}")
+        return errno.EPROTO
+    log.info(f"Machine {cfg['client_mac']} bound to boot_mode=pixie-inventory")
+    return 0

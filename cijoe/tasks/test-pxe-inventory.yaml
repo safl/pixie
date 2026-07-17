@@ -1,0 +1,51 @@
+doc: |
+  pixie PXE inventory chain test
+  ================================
+
+  End-to-end proof that the FULL pixie-inventory chain reaches
+  the pixie live env on a real QEMU client and completes an
+  inventory POST back to pixie:
+
+  1. ``pxe_prepare``: build the ``pixie:pxetest`` container image
+     from this checkout.
+  2. ``pxe_inventory_stage``: copy the ``pixie-netboot-pc-x86_64``
+     bake's vmlinuz + initrd + squashfs (looked up under
+     ``~/system_imaging/disk`` or ``$PIXIE_NETBOOT_ARTIFACT_DIR``)
+     into ``_build/test-pxe/live-env/``.
+  3. ``pxe_run_chain_test`` with ``mode = "inventory"``: brings up
+     pixie with the staged ``live-env/`` bind-mounted at
+     ``/var/lib/pixie/live-env``, PUTs the client MAC to
+     ``boot_mode=pixie-inventory``, then PXE-boots the QEMU client
+     and asserts every marker in ``[test.pxe.chain_markers]`` shows
+     up, plus GETs ``/machines/<mac>/inventory`` and asserts the
+     live-env's pixie CLI actually posted an inventory blob.
+
+  What's covered here: PXE firmware -> DHCP -> TFTP -> iPXE ->
+  HTTP re-DHCP -> ``chain http://pixie:8080/pxe-bootstrap.ipxe``
+  -> per-MAC pixie-live-env plan fetch -> kernel + initrd +
+  squashfs download from ``/boot/pixie-live-env/`` -> Debian
+  live-boot mounts squashfs -> pivot into real pixie live env
+  -> systemd + pixie-on-tty1.service run the ported pixie CLI
+  -> CLI's ``_auto_post_inventory`` POSTs the inventory blob
+  -> pixie stores it on the machine row.
+
+  What's NOT covered (needs a real bootable rootfs on the target
+  disk, out of scope for this test): the flash pipeline that
+  ``pixie-flash-once`` / ``pixie-flash-always`` runs; that lands
+  in ``test-pxe-flash``.
+
+  Requires: podman, qemu-system-x86, dnsmasq, ipxe,
+  bridge-utils / iproute2, KVM, passwordless sudo, AND a prior
+  ``pixie-netboot-pc-x86_64`` bake staged under
+  ``~/system_imaging/disk/`` (in CI, downloaded from the
+  ``build-media`` job's ``pixie-netboot-pc-x86_64`` artifact).
+
+steps:
+- name: pxe_prepare
+  uses: pxe_prepare
+
+- name: pxe_inventory_stage
+  uses: pxe_inventory_stage
+
+- name: pxe_run_chain_test
+  uses: pxe_run_chain_test
