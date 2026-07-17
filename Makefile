@@ -50,6 +50,8 @@ help:
 	@echo "                  (same deps as test-pxe + a prior VARIANT=netboot-pc bake)"
 	@echo "  test-pxe-inventory  end-to-end PXE pixie-inventory chain test"
 	@echo "                  (same deps as test-pxe-ramboot; no catalog seed)"
+	@echo "  test-pxe-flash  end-to-end PXE pixie-flash-once chain test"
+	@echo "                  (same deps as test-pxe-inventory; small synthetic image)"
 	@echo ""
 	@echo "Variant: $(VARIANT)  (override with VARIANT=netboot-pc, ...)"
 	@echo "  usbboot-pc    - bootable USB live ISO via live-build (.iso, x86_64)"
@@ -134,6 +136,16 @@ test-pxe-ramboot:
 # bake).
 test-pxe-inventory:
 	cd cijoe && cijoe tasks/test-pxe-inventory.yaml --monitor -c configs/test-pxe-inventory.toml
+
+# Flash chain test: bring up pixie with the netboot-pc bake bind-mounted
+# as its live-env dir, seed the catalog with a small (16 MiB) synthetic
+# image whose first bytes carry a marker, bind the client MAC to
+# boot_mode=pixie-flash-once + target_disk_serial=PIXIETEST, PXE-boot
+# QEMU, and assert the live-env's pixie CLI auto-flashes the image +
+# POSTs status=done. Same artifact dependency as test-pxe-inventory
+# (needs the netboot-pc bake).
+test-pxe-flash:
+	cd cijoe && cijoe tasks/test-pxe-flash.yaml --monitor -c configs/test-pxe-flash.toml
 
 # ---------- Cleanup ------------------------------------------------------
 

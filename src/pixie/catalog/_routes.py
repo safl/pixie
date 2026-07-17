@@ -296,7 +296,7 @@ async def start_fetch(
 # ----------------------- blob + artifact serve -----------------------
 
 
-@router.get("/b/{sha}/{name:path}")
+@router.api_route("/b/{sha}/{name:path}", methods=["GET", "HEAD"])
 def serve_blob(request: Request, sha: str, name: str) -> FileResponse:
     """Content-addressed blob serve: ``/b/<content_sha256>/<display-name>``.
 
@@ -306,7 +306,11 @@ def serve_blob(request: Request, sha: str, name: str) -> FileResponse:
     same content -- serves the same bytes at the same URL. Renaming
     a catalog entry does not change its blob URL.
 
-    Open route: iPXE targets don't carry sessions.
+    Open route: iPXE targets don't carry sessions. HEAD is served
+    too: the ported pixie CLI's ``flash._probe_image_url_http``
+    HEADs the image URL to read Content-Length before it commits to
+    an auto-flash plan, and when that URL is pixie's own /b/... a
+    405 there aborts the flash before ``dd`` fires.
     """
     store = _get_store(request)
     sha = _decode_sha(sha)
@@ -316,10 +320,14 @@ def serve_blob(request: Request, sha: str, name: str) -> FileResponse:
     # Sanitise the ``name`` for Content-Disposition; iPXE doesn't
     # care, but operator curl -O should land on a reasonable filename.
     display = name.rsplit("/", 1)[-1] or f"pixie-{sha[:12]}.bin"
+    # Starlette's FileResponse strips the body on HEAD automatically
+    # (its ``__call__`` skips file streaming when scope.method ==
+    # "HEAD") while keeping Content-Length + Content-Type headers,
+    # which is exactly what the CLI's probe wants.
     return FileResponse(str(blob), filename=display)
 
 
-@router.get("/artifacts/{sha}/{filename}")
+@router.api_route("/artifacts/{sha}/{filename}", methods=["GET", "HEAD"])
 def serve_artifact(request: Request, sha: str, filename: str) -> FileResponse:
     """Content-addressed netboot artifact serve. iPXE's ipxe_ramboot
     plan points at ``/artifacts/<content_sha256>/{vmlinuz,initrd}``.
