@@ -1,0 +1,20 @@
+#!/bin/sh
+# pixie initramfs-tools trace hook (init-top).
+#
+# Purpose: prove /init runs past line 220 of Debian's initramfs-tools
+# /init (which calls run_scripts /scripts/init-top). Emits directly to
+# /dev/kmsg so the message rides the kernel ring buffer to the serial
+# console, bypassing live-boot's Live() stdout redirection that
+# swallows every printf under /boot.log.
+#
+# See CI job test-pxe-inventory for the reproducer + task #238 for
+# context. Diagnostic-only; remove once the initrd's live-boot flow
+# is fixed.
+
+PREREQ=""
+prereqs() { echo "$PREREQ"; }
+case "${1:-}" in
+    prereqs) prereqs; exit 0 ;;
+esac
+
+echo "PIXIE-TRACE: init-top reached" > /dev/kmsg 2>/dev/null || true

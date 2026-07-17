@@ -1,0 +1,17 @@
+#!/bin/sh
+# pixie initramfs-tools trace hook (live-top).
+#
+# Purpose: prove live-boot's mountroot() called live_top() which ran
+# run_scripts /scripts/live-top. This is inside Live() where stdout
+# has been redirected to /boot.log, so /dev/kmsg is the only path
+# out to the serial console.
+#
+# See CI job test-pxe-inventory + task #238. Diagnostic-only.
+
+PREREQ=""
+prereqs() { echo "$PREREQ"; }
+case "${1:-}" in
+    prereqs) prereqs; exit 0 ;;
+esac
+
+echo "PIXIE-TRACE: live-top reached (Live() -> live_top())" > /dev/kmsg 2>/dev/null || true

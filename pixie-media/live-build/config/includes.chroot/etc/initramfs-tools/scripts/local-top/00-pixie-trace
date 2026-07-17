@@ -1,0 +1,17 @@
+#!/bin/sh
+# pixie initramfs-tools trace hook (local-top).
+#
+# Purpose: prove /init reached the local-top run_scripts pass. This
+# runs BEFORE the BOOT-specific mountroot resolution, so seeing it
+# proves the general initramfs-tools /init flow works and the
+# failure is in mountroot() (i.e. inside live-boot's Live()).
+#
+# See CI job test-pxe-inventory + task #238. Diagnostic-only.
+
+PREREQ=""
+prereqs() { echo "$PREREQ"; }
+case "${1:-}" in
+    prereqs) prereqs; exit 0 ;;
+esac
+
+echo "PIXIE-TRACE: local-top reached" > /dev/kmsg 2>/dev/null || true

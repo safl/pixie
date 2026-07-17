@@ -1,0 +1,19 @@
+#!/bin/sh
+# pixie initramfs-tools trace hook (init-bottom).
+#
+# Purpose: prove mountroot() completed. init-bottom runs AFTER
+# mountroot, right before /init exec's run-init into the root
+# filesystem. If we see this trace, mountroot succeeded and pivot
+# is about to happen. If we do NOT see it (but init-top and
+# local-top DID trace), mountroot itself is failing.
+#
+# See CI job test-pxe-inventory + task #238. Diagnostic-only.
+# ``zz-`` prefix keeps this last in run_scripts's alphabetical order.
+
+PREREQ=""
+prereqs() { echo "$PREREQ"; }
+case "${1:-}" in
+    prereqs) prereqs; exit 0 ;;
+esac
+
+echo "PIXIE-TRACE: init-bottom reached (mountroot done)" > /dev/kmsg 2>/dev/null || true
