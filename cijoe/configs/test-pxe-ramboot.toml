@@ -1,5 +1,6 @@
 # pixie PXE ramboot chain test: containerized pixie + a bridged QEMU
-# client that reaches the initramfs's ramboot script.
+# client that pulls the real nosi netboot bundle + disk image, then
+# ramboots via pixie's NBD export.
 #
 # Usage:
 #   cijoe tasks/test-pxe-ramboot.yaml --monitor -c configs/test-pxe-ramboot.toml
@@ -9,9 +10,8 @@
 #   iproute2 on PATH.
 # - passwordless sudo (bridge/tap/dnsmasq).
 # - KVM accessible.
-# - ``pixie-netboot-pc-x86_64`` bake artifacts staged under
-#   ``~/system_imaging/disk/`` (or override
-#   ``PIXIE_NETBOOT_ARTIFACT_DIR``).
+# - Internet access from the runner to ghcr.io (real nosi oras pulls)
+#   and to github.com (real nosi catalog.toml download).
 
 [pixie]
 variant = "test-pxe-ramboot"
@@ -25,8 +25,9 @@ mode = "ramboot"
 # pixie container image tag (built by pxe_prepare from this checkout).
 pixie_image = "pixie:pxetest"
 
-# Admin password set on the container; the test uses it to POST the
-# catalog seed + machine bind.
+# Admin password set on the container; the test uses it to
+# POST /ui/catalog/import + trigger the fetch on the disk + bundle
+# entries + PUT the machine binding.
 admin_password = "test-admin-pw"
 
 # Client VM firmware: "bios" (SeaBIOS + NIC option ROM) or "uefi" (OVMF).
@@ -34,8 +35,10 @@ client_firmware = "bios"
 client_mac = "52:54:00:11:22:44"
 
 # Host bridge for the synthetic PXE segment. server_pxe_ip is where
-# pixie is reachable AND where the test-side HTTP server (hosting the
-# bundle + disk image) binds.
+# pixie is reachable AND where pixie's per-machine NBD export binds
+# for the guest to connect to. No test-side HTTP shim in this mode --
+# both the netboot bundle and the disk image come from ghcr.io via
+# pixie's own oras client.
 bridge = "br-rpxe"
 tap_iface = "tap-rpxe"
 server_pxe_ip = "192.168.99.1"
@@ -43,10 +46,12 @@ pxe_netmask = "255.255.255.0"
 dhcp_range_lo = "192.168.99.50"
 dhcp_range_hi = "192.168.99.150"
 
-# Ramboot markers. iPXE's own boot chain markers (loaded /
-# fetch-bootstrap / fetch-permac) are inherited from the bootstrap
-# mode; add ones specific to the ramboot plan being served + the
-# initramfs script executing.
+# Ramboot markers. Chain: iPXE loaded, HTTP re-DHCP, chain to
+# bootstrap, per-MAC ramboot plan fetch, iPXE fetches vmlinuz +
+# initrd out of pixie's ``/artifacts/`` (unpacked from the fetched
+# netboot bundle), kernel boots, initramfs mounts the disk image over
+# NBD, Debian pivots to userspace, systemd starts, getty prints login
+# banner on the serial console.
 [[test.pxe.chain_markers]]
 key = "ipxe-loaded"
 needle = "iPXE"
@@ -55,70 +60,31 @@ needle = "iPXE"
 key = "ipxe-fetch-bootstrap"
 needle = "pxe-bootstrap.ipxe"
 
-# Kernel + initrd fetch from pixie's content-addressed artifacts path.
-# ``/artifacts/`` is only served for ramboot (bootstrap mode never
-# renders that path).
+# Netboot bundle's vmlinuz + initrd fetched from pixie's
+# content-addressed /artifacts/ path (fires on both iPXE-side + the
+# server-side uvicorn access log).
 [[test.pxe.chain_markers]]
-key = "kernel-fetch"
+key = "artifacts-fetch"
 needle = "/artifacts/"
 
-# Initramfs starts. Linux prints this from the kernel decompressor.
+# Kernel boot. Linux prints "Linux version <ver>" from the
+# decompressor.
 [[test.pxe.chain_markers]]
 key = "kernel-boot"
 needle = "Linux version"
 
-# Ramboot script is sourced by initramfs-tools' /init. The trace
-# helper writes to /dev/kmsg + /dev/console, so every line lands
-# in the QEMU serial log. The four markers below cover the
-# initrd's boot-time NBD chain end-to-end: script loaded ->
-# mountroot() entered -> kernel modules loaded -> nbd-client
-# actually invoked against pixie -> pixie's NBD served real bytes.
-# The chain stops (via _ramboot_die) at partition scan because
-# the test disk is a zero-filled 64 MiB file with no partition
-# table; adding a real rootfs stub lands in a follow-up.
-[[test.pxe.chain_markers]]
-key = "ramboot-script-sourced"
-needle = "ramboot: script sourced"
-
-[[test.pxe.chain_markers]]
-key = "ramboot-mountroot-entered"
-needle = "ramboot: mountroot() entered"
-
-[[test.pxe.chain_markers]]
-key = "ramboot-modprobe-nbd"
-needle = "ramboot: modprobe nbd"
-
-[[test.pxe.chain_markers]]
-key = "ramboot-nbd-client"
-needle = "ramboot: nbd-client -persist"
-
-[[test.pxe.chain_markers]]
-key = "ramboot-nbd0-capacity"
-needle = "ramboot: nbd0 capacity ready"
-
-# Post-pivot markers assert that ramboot successfully mounted +
-# pivoted into the netboot-pc squashfs's real pixie live env
-# (unpacked verbatim onto the ramboot disk). systemd starts,
-# pixie-on-tty1.service fires, and the actual ported pixie CLI
-# runs with --server + --mac from the kernel cmdline. Its
-# ``_auto_post_inventory`` background thread POSTs an inventory
-# blob back to pixie's /pxe/<mac>/inventory -- no test-side
-# shim; this is the same code path a real hardware boot exercises.
-
-# systemd started in the pivoted userspace. Its startup banner is
-# printed to /dev/console by default.
+# systemd started in the pivoted userspace (nosi disk image is
+# Debian 13; its systemd version banner reads "systemd 25X.Y" on
+# every distro-headless boot).
 [[test.pxe.chain_markers]]
 key = "systemd-started"
 needle = "systemd["
 
-# pixie-on-tty1.service ran the pixie CLI. The wrapper script
-# emits "pixie: " lines on tty1 which surface on the serial
-# console via consoleblank + agetty-less tty1 ownership.
+# Debian userspace-specific marker: the systemd generator emits the
+# distro name on the console via the /etc/os-release ID during
+# NAME-branded target banners. Present on every Debian boot -- if
+# it doesn't appear here, ramboot got as far as systemd starting
+# but Debian userspace itself did not come up.
 [[test.pxe.chain_markers]]
-key = "pixie-on-tty1"
-needle = "pixie:"
-
-# Downstream, pxe_run_chain_test does a server-side GET
-# /machines/<mac>/inventory to prove the pixie CLI's inventory
-# POST landed. Marker on the client side is a nice-to-have; the
-# GET is the load-bearing assertion.
+key = "debian-userspace"
+needle = "Debian"

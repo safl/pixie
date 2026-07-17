@@ -149,6 +149,14 @@ def parse_catalog_toml(raw: bytes | str) -> list[CatalogEntry]:
         _log.warning("catalog.toml: unknown version=%r; parsing anyway", version)
 
     entries: list[CatalogEntry] = []
+    # Legacy netboot_ref (name-string) capture: nosi's published
+    # catalog.toml uses ``netboot_ref = "<sibling entry name>"``
+    # rather than the URL-based ``netboot_src``. Pixie's ramboot
+    # renderer resolves the pair through ``netboot_src`` only, so a
+    # name-based ref would leave every ramboot bind unrenderable.
+    # Capture the ref during the first pass, then resolve name ->
+    # src through the just-parsed set below.
+    _pending_ref: dict[str, str] = {}
     for row in doc.get("images", []):
         if not isinstance(row, dict):
             continue
@@ -159,20 +167,16 @@ def parse_catalog_toml(raw: bytes | str) -> list[CatalogEntry]:
             _log.warning("catalog.toml: dropping entry missing name/src/format: %r", row)
             continue
 
-        # Loose-parse legacy netboot_ref: warn + drop.
-        if row.get("netboot_ref"):
-            _log.warning(
-                "catalog.toml entry %r carries legacy 'netboot_ref' (name-string); "
-                "pixie ignores it. Publish 'netboot_src' (URL) to advertise the "
-                "sibling bundle.",
-                name,
-            )
-
         size_bytes = row.get("size_bytes") or 0
         try:
             size_int = int(size_bytes)
         except (TypeError, ValueError):
             size_int = 0
+
+        netboot_src = str(row.get("netboot_src") or "").strip()
+        netboot_ref = str(row.get("netboot_ref") or "").strip()
+        if netboot_ref and not netboot_src:
+            _pending_ref[name] = netboot_ref
 
         entry = CatalogEntry(
             name=name,
@@ -180,7 +184,7 @@ def parse_catalog_toml(raw: bytes | str) -> list[CatalogEntry]:
             format=fmt,
             arch=str(row.get("arch") or ""),
             description=str(row.get("description") or ""),
-            netboot_src=str(row.get("netboot_src") or ""),
+            netboot_src=netboot_src,
             content_sha256=str(row.get("content_sha256") or row.get("sha256") or ""),
             size_bytes=size_int,
             fetched_at=str(row.get("fetched_at") or ""),
@@ -195,6 +199,27 @@ def parse_catalog_toml(raw: bytes | str) -> list[CatalogEntry]:
         if extra:
             entry.extra = extra
         entries.append(entry)
+
+    # Second pass: resolve legacy netboot_ref (name -> URL) against
+    # entries in this same batch. A ref that names an absent entry
+    # logs a warning and leaves netboot_src empty (renderer surfaces
+    # a readable "unavailable" plan; better than a silent orphan).
+    if _pending_ref:
+        by_name = {e.name: e.src for e in entries}
+        for entry in entries:
+            ref = _pending_ref.get(entry.name)
+            if not ref:
+                continue
+            resolved = by_name.get(ref)
+            if resolved:
+                entry.netboot_src = resolved
+            else:
+                _log.warning(
+                    "catalog.toml entry %r netboot_ref -> %r resolved to no "
+                    "entry in the same catalog; leaving netboot_src empty",
+                    entry.name,
+                    ref,
+                )
     return entries
 
 
