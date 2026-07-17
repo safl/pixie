@@ -66,6 +66,14 @@ class RenderContext:
     port: int
     nbd_host: str
     overlay_size: str = DEFAULT_OVERLAY_SIZE
+    # Extra tokens appended verbatim to the pixie-live-env kernel
+    # cmdline. Operator-set via PIXIE_LIVE_ENV_EXTRA_CMDLINE.
+    # Intended for hardware-specific workarounds -- e.g. the
+    # GIGABYTE MC12-LE0 needs pci=nommconf to bring up its Intel
+    # i210 NICs under kernel 6.12 -- without a live-env rebake.
+    # Empty by default; the template shims it in unconditionally so
+    # no-op is a legal value.
+    extra_cmdline: str = ""
 
 
 class PlanRenderer:
@@ -128,6 +136,7 @@ class PlanRenderer:
                 boot_mode=mode,
                 host=ctx.host,
                 port=ctx.port,
+                extra_cmdline=ctx.extra_cmdline,
             )
         # Unknown mode: refuse loudly rather than falling through.
         return self._env.get_template("unavailable.j2").render(

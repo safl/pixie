@@ -280,3 +280,44 @@ def test_ipxe_plan_pixie_inventory_with_staged_artifacts_renders_live_env(
     finally:
         for name in ("vmlinuz", "initrd", "live.squashfs"):
             (live_env / name).unlink(missing_ok=True)
+
+
+def test_ipxe_plan_live_env_appends_extra_cmdline(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """PIXIE_LIVE_ENV_EXTRA_CMDLINE lets an operator pin hardware
+    workarounds (e.g. pci=nommconf for the GIGABYTE MC12-LE0's
+    Intel i210 NICs) without rebaking the live-env image.
+    Verified: the tokens land on the kernel line verbatim; an empty
+    env is a legal no-op."""
+    live_env = client.app.state.live_env_dir  # type: ignore[attr-defined]
+    live_env.mkdir(parents=True, exist_ok=True)
+    for name in ("vmlinuz", "initrd", "live.squashfs"):
+        (live_env / name).write_bytes(b"stub")
+    try:
+        _seed_machine(client, "aa:bb:cc:dd:ee:36", "pixie-inventory")
+        # Empty env -> no extra tokens injected.
+        monkeypatch.setenv("PIXIE_LIVE_ENV_EXTRA_CMDLINE", "")
+        body = client.get("/pxe/aa:bb:cc:dd:ee:36").text
+        assert "pci=nommconf" not in body
+        # With env -> tokens appended to the kernel line, still one
+        # line, still after the pixie.mac= / bty.mac= tail so a
+        # workaround token can't accidentally shadow a pixie.* knob.
+        monkeypatch.setenv(
+            "PIXIE_LIVE_ENV_EXTRA_CMDLINE", "pci=nommconf amd_iommu=off pcie_aspm=off"
+        )
+        body = client.get("/pxe/aa:bb:cc:dd:ee:36").text
+        # Find the kernel line (one line, starts with "kernel ").
+        kernel_line = next(line for line in body.splitlines() if line.startswith("kernel "))
+        assert "pci=nommconf" in kernel_line
+        assert "amd_iommu=off" in kernel_line
+        assert "pcie_aspm=off" in kernel_line
+        # Tokens land AFTER the bty.mac= tail (last-token-wins for
+        # any kernel parameter conflict, so an operator override
+        # takes effect).
+        idx_bty = kernel_line.index("bty.mac=")
+        idx_nommconf = kernel_line.index("pci=nommconf")
+        assert idx_nommconf > idx_bty
+    finally:
+        for name in ("vmlinuz", "initrd", "live.squashfs"):
+            (live_env / name).unlink(missing_ok=True)

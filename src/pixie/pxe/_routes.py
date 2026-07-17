@@ -72,7 +72,14 @@ def _render_context(request: Request) -> RenderContext:
     host = override or (request.url.hostname or "127.0.0.1")
     port = request.url.port or 8080
     nbd_host = (os.environ.get("PIXIE_NBD_PUBLIC_HOST") or "").strip() or host
-    return RenderContext(host=host, port=port, nbd_host=nbd_host)
+    # PIXIE_LIVE_ENV_EXTRA_CMDLINE lets an operator pin hardware-
+    # specific kernel workarounds without rebaking the live env
+    # (observed: GIGABYTE MC12-LE0 igb NIC needs pci=nommconf).
+    # Trailing/leading whitespace stripped; the template drops a
+    # single space between the base cmdline and this string when
+    # non-empty, so an empty value is a legal no-op.
+    extra_cmdline = (os.environ.get("PIXIE_LIVE_ENV_EXTRA_CMDLINE") or "").strip()
+    return RenderContext(host=host, port=port, nbd_host=nbd_host, extra_cmdline=extra_cmdline)
 
 
 @router.get("/pxe-bootstrap.ipxe", response_class=PlainTextResponse)
