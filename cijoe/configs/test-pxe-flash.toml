@@ -42,8 +42,10 @@ target_disk_serial = "PIXIETEST"
 
 # Host bridge for the synthetic PXE segment. server_pxe_ip is where
 # pixie is reachable and where the client's HTTP fetch for
-# vmlinuz + initrd + squashfs lands, plus the workspace HTTP server
-# that hosts the flash-target.img.
+# vmlinuz + initrd + squashfs lands. The real nosi image the flash
+# pipeline dds onto the target disk is pulled via oras from ghcr.io
+# by pixie's own fetcher (see NOSI_FLASH_IMAGE in the chain-test
+# script) -- no local HTTP shim for the flash payload.
 bridge = "br-ipxe"
 tap_iface = "tap-ipxe"
 server_pxe_ip = "192.168.99.1"

@@ -10,29 +10,35 @@ doc: |
   1. ``pxe_prepare``: build the ``pixie:pxetest`` container image
      from this checkout.
   2. ``pxe_flash_stage``: copy the ``pixie-netboot-pc-x86_64`` bake's
-     vmlinuz + initrd + squashfs into ``_build/test-pxe/live-env/``
-     AND write a small (16 MiB) synthetic disk image to
-     ``_build/test-pxe/flash-target.img`` whose first bytes carry a
-     marker string the post-chain assertion greps for.
+     vmlinuz + initrd + squashfs into ``_build/test-pxe/live-env/``.
+     (Earlier iterations also wrote a synthetic 16 MiB
+     ``flash-target.img`` here; that was replaced with an ``oras://``
+     pull of a real nosi image so the pipeline exercises real
+     decompression + a full-size dd instead of a marker check.)
   3. ``pxe_run_chain_test`` with ``mode = "flash"``: brings up pixie
-     with the staged ``live-env/`` bind-mounted, starts a workspace
-     HTTP server that hosts ``flash-target.img``, seeds it as a
-     catalog entry + fetches it, seeds the machine's inventory with
-     a disk carrying ``serial=PIXIETEST``, then PUTs the client MAC
-     to ``boot_mode=pixie-flash-once`` with the image sha + target
+     with the staged ``live-env/`` bind-mounted, seeds pixie's
+     catalog with the pinned nosi oras ref
+     (``oras://ghcr.io/safl/nosi/debian-13-headless:<tag>``, ~2.6
+     GiB compressed) + POSTs a fetch through pixie's own oras
+     client, seeds the machine's inventory with a disk carrying
+     ``serial=PIXIETEST``, then PUTs the client MAC to
+     ``boot_mode=pixie-flash-once`` with the image sha + target
      serial, PXE-boots the QEMU client, asserts every marker in
      ``[test.pxe.chain_markers]`` shows up, then verifies the
      server-side effects: (a) ``GET /machines/<mac>`` shows
      ``boot_mode=ipxe-exit`` (proves the CLI POSTed
      ``/pxe/<mac>/status`` with status=done AND the server flipped
-     the once-mode); (b) the QEMU-side blank disk carries the flash
-     marker (proves the CLI actually wrote the image).
+     the once-mode); (b) the QEMU-side blank disk's sector 0 carries
+     the 0x55 0xAA MBR/GPT-protective boot signature (proves the
+     real nosi partition table landed on the disk).
 
   What's covered here: the pieces test-pxe-inventory covers PLUS
   the pixie CLI's ``_run_auto`` scripted-flash path, the
   ``/pxe/<mac>/plan -> mode=flash`` payload, the ``/pxe/<mac>/status
-  -> boot_mode=ipxe-exit`` flip, and the disks.list_disks-by-serial
-  match under a live QEMU virtio-blk device.
+  -> boot_mode=ipxe-exit`` flip, the disks.list_disks-by-serial
+  match under a live QEMU virtio-blk device, and the real oras
+  pull + img.gz decompress + dd pipeline on a production nosi
+  image (not a synthetic marker file).
 
   What's NOT covered: the pixie-flash-always variant (same wire, no
   flip); pixie-tui interactive flashing (needs a scripted terminal

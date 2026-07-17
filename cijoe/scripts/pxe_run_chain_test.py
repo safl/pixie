@@ -44,6 +44,7 @@ import subprocess
 import threading
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from argparse import ArgumentParser
 from pathlib import Path
@@ -52,14 +53,54 @@ PIXIE_HTTP_PORT = 8080
 CONTAINER_NAME = "pixie-pxe-test"
 CONTAINER_TAG = "pixie:pxetest"
 HEALTHZ_TIMEOUT = 120
+# ramboot / inventory / tui: pixie live env boot is done in ~5 min
+# (netboot-pc squashfs fetch + Debian live-boot pivot dominate).
+# Full flash exercises the real oras pull (~2.6 GiB) + img.gz
+# decompress + dd of the uncompressed image (~10 GiB sparse) which
+# adds ~10 min. Keep the base short-mode timeout as-is and let
+# ``mode=flash`` bump its own budget.
 CHAIN_TIMEOUT = 300
-FETCH_TIMEOUT = 120  # ramboot / flash: catalog fetch of the payload
+CHAIN_TIMEOUT_FLASH = 1800  # 30 min for the real-nosi flash pipeline
+FETCH_TIMEOUT = 120  # ramboot / tui: local http fetch of the catalog payload
+FETCH_TIMEOUT_ORAS = 900  # 15 min for the real-nosi oras pull + blob write
 WORKSPACE_HTTP_PORT = 8000  # test-side http server hosting workspace files on the bridge
 # QEMU virtio-blk serial the test binds pixie-flash-once to. Chosen
 # to be a plain-ASCII no-punctuation string because the pixie CLI's
 # ``disks.list_disks`` reads serials via lsblk + they must round-trip
 # through JSON with no escapes.
 FLASH_TARGET_SERIAL = "PIXIETEST"
+
+# Pinned nosi tag the flash chain test seeds. Pin (not ``:latest``)
+# so a new weekly release cannot silently shift what the test
+# targets -- a nosi format / partition-layout change should fail
+# the test on a controlled bump, not on the next Monday's release.
+# 2.6 GiB compressed (img.gz) / ~10 GiB uncompressed sparsely
+# written; adjust the QEMU virtio-blk backing store below if this
+# tag ever exceeds ~11 GiB uncompressed.
+NOSI_FLASH_TAG = "2026.W29"
+# Real nosi catalog URL. The flash + tui tests POST this to
+# pixie's ``/ui/catalog/import`` which fetches, parses, and
+# upserts every entry -- exercising the real catalog wire (HTTPS
+# to github.com/safl/nosi releases, real TOML parse against the
+# real schema) instead of a hand-authored POST /catalog/entries.
+# Pinned by tag so a weekly nosi release cannot silently shift
+# what the test targets.
+NOSI_CATALOG_URL = f"https://github.com/safl/nosi/releases/download/{NOSI_FLASH_TAG}/catalog.toml"
+# Names of the catalog entries the flash + tui tests pick after
+# import. Must match nosi's published entry names for the pinned
+# tag exactly; a rename upstream fails the test on the fetch step
+# with "no entry named ...", which is louder + more actionable
+# than an empty catalog. Reflect what's in the fetched catalog
+# body -- see NOSI_CATALOG_URL for the source of truth.
+NOSI_FLASH_ENTRY_NAME = f"nosi debian-13-headless (x86_64, {NOSI_FLASH_TAG})"
+NOSI_FLASH_FORMAT = "img.gz"
+NOSI_TUI_ENTRY_NAME = f"nosi debian-13-headless netboot bundle (x86_64, {NOSI_FLASH_TAG})"
+NOSI_TUI_FORMAT = "tar.gz"
+# Bigger backing store than the other tests (which use 8 GiB and
+# never populate more than ~64 KiB) so the real debian-13-headless
+# image can dd into it without hitting qcow2 grow-and-write errors
+# mid-flash.
+FLASH_QCOW2_SIZE = "12G"
 
 
 def add_args(parser: ArgumentParser) -> None:
@@ -159,14 +200,16 @@ def main(args, cijoe) -> int:
                 _dump_container_logs()
                 return seed_err
         elif mode == "flash":
-            workspace_http = _start_workspace_http_server(
-                workspace, cfg["server_pxe_ip"], required=("flash-target.img",)
-            )
-            if workspace_http is None:
-                return errno.ENOENT  # error already logged
+            # No workspace HTTP server: the flash test fetches a real
+            # nosi image via ``oras://`` through pixie's own oras
+            # client, so the payload comes off ghcr.io not a local
+            # http shim. The workspace still holds the client's
+            # qcow2 backing store; no shared files to serve.
             log.info(
                 "Seeding pixie catalog + binding machine to "
-                f"{cfg.get('flash_boot_mode', 'pixie-flash-once')}"
+                f"{cfg.get('flash_boot_mode', 'pixie-flash-once')} "
+                f"(real nosi catalog: {NOSI_CATALOG_URL}, "
+                f"target entry: {NOSI_FLASH_ENTRY_NAME!r})"
             )
             seed_err = _seed_flash_and_bind(seed_base, admin_password, cfg)
             if seed_err:
@@ -174,16 +217,12 @@ def main(args, cijoe) -> int:
                 _dump_container_logs()
                 return seed_err
         elif mode == "tui":
-            # tui reuses the flash-target.img the flash-stage step
-            # writes into the workspace: the wizard's picker needs at
-            # least one downloadable catalog entry so it can render a
-            # real row (and prove the /catalog.toml wire works
-            # server->CLI).
-            workspace_http = _start_workspace_http_server(
-                workspace, cfg["server_pxe_ip"], required=("flash-target.img",)
-            )
-            if workspace_http is None:
-                return errno.ENOENT  # error already logged
+            # tui seeds a small real nosi artifact so the wizard's
+            # picker has at least one downloaded catalog row to
+            # render (proves /catalog.toml wire works server->CLI).
+            # Uses a netboot bundle (~70 MiB tar.gz) rather than the
+            # 2.6 GiB disk image because the wizard never flashes
+            # from tui in this test -- it only enters the picker.
             log.info("Seeding pixie catalog + binding machine to pixie-tui")
             seed_err = _seed_tui_and_bind(seed_base, admin_password, cfg)
             if seed_err:
@@ -199,7 +238,12 @@ def main(args, cijoe) -> int:
         client = _start_client_vm(workspace, cfg, client_log, firmware)
 
         markers = _build_markers(cfg)
-        seen = _wait_for_chain_markers(client_log, markers, CHAIN_TIMEOUT)
+        # ``mode=flash`` runs the full real-image pipeline (oras
+        # pull + img.gz decompress + dd of ~10 GiB) inside the live
+        # env; every other mode finishes well within the 5 min
+        # short-mode budget.
+        chain_deadline = CHAIN_TIMEOUT_FLASH if mode == "flash" else CHAIN_TIMEOUT
+        seen = _wait_for_chain_markers(client_log, markers, chain_deadline)
         missing = [k for k, ok in seen.items() if not ok]
         if missing:
             log.error(f"PXE chain incomplete; missing markers: {', '.join(missing)}")
@@ -451,9 +495,18 @@ def _find_ovmf():
 
 def _start_client_vm(workspace: Path, cfg, log_path: Path, firmware: str = "bios"):
     blank_disk = workspace / "client-blank.qcow2"
+    # ``mode=flash`` dds a real nosi image (~10 GiB uncompressed
+    # sparsely written) onto this disk; the other modes never
+    # populate more than a few KiB of the backing store. Size the
+    # qcow2 large enough for the real image; qcow2 stays sparse so
+    # the other tests pay no on-disk cost for the larger virtual
+    # size. Growing an existing qcow2 mid-run needs qemu-img resize;
+    # the leave-existing-alone branch below assumes the disk was
+    # created at the right size or a fresh workspace.
+    disk_size = FLASH_QCOW2_SIZE if str(cfg.get("mode", "")).lower() == "flash" else "8G"
     if not blank_disk.exists():
         subprocess.run(
-            ["qemu-img", "create", "-f", "qcow2", str(blank_disk), "8G"],
+            ["qemu-img", "create", "-f", "qcow2", str(blank_disk), disk_size],
             check=True,
             capture_output=True,
         )
@@ -635,9 +688,10 @@ def _terminate(proc, what: str, sudo: bool = False) -> None:
 
 class _WorkspaceFilesHandler(http.server.SimpleHTTPRequestHandler):
     """Serves any file from the workspace's ``_build/test-pxe/``
-    directory. Ramboot uses ``bundle.tar.gz`` + ``disk.img``; flash
-    uses ``flash-target.img``. The staging step drops files into the
-    workspace before we boot; the server just exposes them."""
+    directory. Only ramboot uses this (``bundle.tar.gz`` +
+    ``disk.img`` assembled from the netboot-pc bake); flash + tui
+    fetch their catalog payloads via ``oras://`` through pixie's
+    own fetcher and need no local http shim."""
 
     def log_message(self, format: str, *args: object) -> None:
         del format, args
@@ -917,13 +971,78 @@ def _bind_inventory(seed_base: str, admin_password: str, cfg) -> int:
 # ---------- flash mode: seed synthetic image + bind pixie-flash-once -------
 
 
-# The synthetic image ``pxe_flash_stage`` writes into the workspace
-# starts with this marker so the post-chain assertion can grep the
-# QEMU-side disk (byte-for-byte compare on the first ~64 bytes) to
-# prove the flash actually wrote the disk. Kept in sync with the
-# constant in ``pxe_flash_stage.py``; they are the two ends of the
-# same contract.
-_FLASH_MARKER = b"PIXIE-FLASH-TARGET-MARKER-v1\n"
+def _import_catalog(seed_base: str, cookie: str, catalog_url: str) -> int:
+    """Drive pixie's ``POST /ui/catalog/import`` with the real nosi
+    catalog URL. This hits pixie's own import path (httpx fetch,
+    parse_catalog_toml, upsert every entry) rather than the test
+    hand-authoring a single POST /catalog/entries -- so a nosi
+    schema break OR a change to pixie's parser is caught by CI, not
+    silently masked.
+
+    Returns 0 on success; errno.EPROTO if the form POST is rejected;
+    errno.ENOENT if the import redirect suggests a validation error
+    (empty entry list, unreachable URL). ``/ui/catalog/import``
+    always redirects to /ui/catalog on both success and failure, so
+    verify the outcome by GETting /catalog next."""
+    body = urllib.parse.urlencode({"url": catalog_url}).encode("utf-8")
+    req = urllib.request.Request(
+        f"{seed_base}/ui/catalog/import",
+        data=body,
+        method="POST",
+        headers={
+            "Content-Type": "application/x-www-form-urlencoded",
+            "Cookie": cookie,
+        },
+    )
+    log.info(f"POST /ui/catalog/import url={catalog_url!r}")
+    # urllib follows the 303-See-Other redirect back to /ui/catalog
+    # which returns 200 (HTML); we do not care about the body -- the
+    # subsequent _catalog_has_entry check validates the store side.
+    try:
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            if resp.status not in (200, 303):
+                log.error(f"POST /ui/catalog/import returned {resp.status}")
+                return errno.EPROTO
+    except urllib.error.HTTPError as exc:
+        log.error(f"POST /ui/catalog/import: HTTP {exc.code}")
+        return errno.EPROTO
+    return 0
+
+
+def _catalog_has_entry(seed_base: str, entry_name: str) -> bool:
+    """GET /catalog + return True iff an entry with the given name
+    is present. Used after ``/ui/catalog/import`` to prove the
+    import actually populated the store."""
+    try:
+        with urllib.request.urlopen(f"{seed_base}/catalog", timeout=5) as resp:
+            entries = json.loads(resp.read()).get("entries", [])
+    except (urllib.error.URLError, OSError):
+        return False
+    return any(e.get("name") == entry_name for e in entries)
+
+
+def _fetch_entry(seed_base: str, cookie: str, entry_name: str) -> int:
+    """POST /catalog/entries/<name>/fetch to trigger pixie's fetch
+    pipeline on a specific already-imported entry. Path-encodes the
+    name so spaces + parens in nosi's ``nosi debian-13-headless
+    (x86_64, TAG)``-style names survive."""
+    encoded = urllib.parse.quote(entry_name, safe="")
+    req = urllib.request.Request(
+        f"{seed_base}/catalog/entries/{encoded}/fetch",
+        data=b"",
+        method="POST",
+        headers={"Content-Type": "application/json", "Cookie": cookie},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            if resp.status != 202:
+                log.error(f"POST /catalog/entries/{entry_name}/fetch returned {resp.status}")
+                return errno.EPROTO
+    except urllib.error.HTTPError as exc:
+        log.error(f"POST /catalog/entries/{entry_name}/fetch: HTTP {exc.code}")
+        return errno.EPROTO
+    log.info(f"Fetch triggered for {entry_name!r}")
+    return 0
 
 
 def _post_flash_inventory(seed_base: str, mac: str, disk_serial: str) -> int:
@@ -958,16 +1077,22 @@ _FLASH_BOOT_MODES = ("pixie-flash-once", "pixie-flash-always")
 
 
 def _seed_flash_and_bind(seed_base: str, admin_password: str, cfg) -> int:
-    """Login, POST + fetch the synthetic flash image, wait for its
+    """Login, POST + fetch the real nosi flash image, wait for its
     content_sha256, seed a matching inventory disk on the machine,
     then PUT /machines/<mac> with the configured flash boot_mode +
     image_content_sha256 + target_disk_serial. Returns 0 on success,
     an errno on any failure (already logged). ``flash_boot_mode`` in
     the config defaults to ``pixie-flash-once``; the always variant
     exercises the same wire but the post-chain assertion in
-    ``_verify_flash_effects`` inverts (mode must NOT flip)."""
-    server_ip = cfg["server_pxe_ip"]
-    image_url = f"http://{server_ip}:{WORKSPACE_HTTP_PORT}/flash-target.img"
+    ``_verify_flash_effects`` inverts (mode must NOT flip).
+
+    The catalog entry's ``src`` is the pinned nosi oras ref
+    (``NOSI_FLASH_IMAGE``); pixie's own fetcher pulls it from
+    ghcr.io through the oras client. Fetch is the slow leg (~2.6
+    GiB compressed) -- allow ``FETCH_TIMEOUT_ORAS`` for it rather
+    than the short local-http budget the ramboot/tui modes use."""
+    catalog_url = str(cfg.get("nosi_catalog_url", NOSI_CATALOG_URL))
+    entry_name = str(cfg.get("nosi_flash_entry_name", NOSI_FLASH_ENTRY_NAME))
     mac = cfg["client_mac"]
     disk_serial = str(cfg.get("target_disk_serial", FLASH_TARGET_SERIAL))
     boot_mode = str(cfg.get("flash_boot_mode", "pixie-flash-once"))
@@ -983,16 +1108,29 @@ def _seed_flash_and_bind(seed_base: str, admin_password: str, cfg) -> int:
         log.error(f"login failed: {exc}")
         return errno.EACCES
 
-    if err := _add_and_fetch(seed_base, cookie, "flash-target", image_url, "img"):
+    if err := _import_catalog(seed_base, cookie, catalog_url):
+        return err
+    if not _catalog_has_entry(seed_base, entry_name):
+        log.error(
+            f"catalog import from {catalog_url!r} did not surface expected entry "
+            f"{entry_name!r}; nosi published entry names for tag {NOSI_FLASH_TAG!r} "
+            "may have drifted from what this test expects."
+        )
+        return errno.ENOENT
+    if err := _fetch_entry(seed_base, cookie, entry_name):
         return err
 
+    log.info(
+        f"Waiting up to {FETCH_TIMEOUT_ORAS}s for pixie to pull "
+        f"{entry_name!r} from ghcr.io (real nosi image, ~2.6 GiB compressed)"
+    )
     try:
-        image_sha = _wait_content_sha(seed_base, "flash-target")
+        image_sha = _wait_content_sha(seed_base, entry_name, timeout=FETCH_TIMEOUT_ORAS)
     except TimeoutError as exc:
         log.error(str(exc))
         return errno.ETIMEDOUT
 
-    log.info(f"Flash-target sha={image_sha[:12]}...")
+    log.info(f"Flash-target sha={image_sha[:12]}... (real nosi pull complete)")
 
     if err := _post_flash_inventory(seed_base, mac, disk_serial):
         return err
@@ -1120,32 +1258,73 @@ def _verify_flash_effects(seed_base: str, cfg, workspace: Path) -> int:
     # the qcow2 metadata is stable enough to read the leading raw
     # sectors even while the guest keeps running.
     blank_qcow = workspace / "client-blank.qcow2"
-    raw_dump = workspace / "client-blank.raw"
-    log.info(f"Converting {blank_qcow} to raw for marker check")
-    conv = subprocess.run(
-        ["qemu-img", "convert", "-U", "-O", "raw", str(blank_qcow), str(raw_dump)],
+    log.info(f"Reading first sector of {blank_qcow} for disk-signature check")
+    # ``qemu-img info`` isn't enough (it inspects qcow2 metadata, not
+    # guest content). Read the first LBA through ``qemu-img dd``
+    # bs=512 count=1 to pull the guest-visible sector 0 without a
+    # full-disk convert (which on a 12 GiB qcow2 with real image
+    # data is minutes of I/O when we only care about 512 bytes).
+    # ``-U`` bypasses the shared-write lock QEMU still holds on the
+    # qcow2 -- the client VM is torn down in the outer ``finally``,
+    # not here, so the file is still in use.
+    sector0 = workspace / "client-blank.sector0"
+    dd = subprocess.run(
+        [
+            "qemu-img",
+            "dd",
+            "-U",
+            "-f",
+            "qcow2",
+            "-O",
+            "raw",
+            f"if={blank_qcow}",
+            f"of={sector0}",
+            "bs=512",
+            "count=1",
+        ],
         capture_output=True,
         text=True,
         check=False,
     )
-    if conv.returncode != 0:
-        log.error(f"qemu-img convert failed: {conv.stderr.strip()}")
+    if dd.returncode != 0:
+        log.error(f"qemu-img dd failed: {dd.stderr.strip()}")
         return errno.EIO
     try:
-        with open(raw_dump, "rb") as fh:
-            head = fh.read(len(_FLASH_MARKER))
+        with open(sector0, "rb") as fh:
+            first_sector = fh.read(512)
     except OSError as exc:
-        log.error(f"reading raw dump failed: {exc}")
+        log.error(f"reading sector 0 failed: {exc}")
         return errno.EIO
     finally:
-        raw_dump.unlink(missing_ok=True)
-    if head != _FLASH_MARKER:
+        sector0.unlink(missing_ok=True)
+    if len(first_sector) < 512:
         log.error(
-            f"target disk missing flash marker; head[:{len(_FLASH_MARKER)}]={head!r} "
-            f"expected={_FLASH_MARKER!r}"
+            f"sector 0 short read: got {len(first_sector)} bytes; "
+            "flash pipeline never touched the disk"
         )
         return errno.EPROTO
-    log.info("Target disk carries the flash marker -- flash pipeline wrote bytes")
+    # Real disk images end sector 0 with the 0x55 0xAA boot signature
+    # (both MBR and hybrid-MBR-with-GPT layouts carry it -- the GPT
+    # header starts at LBA 1 but the protective-MBR at LBA 0 keeps
+    # the signature). A blank qcow2 reads back all zeros; missing
+    # signature means the CLI reported flash-complete but the dd
+    # never landed.
+    if first_sector[510:512] != b"\x55\xaa":
+        # Not a MBR/GPT? Could be an OS raw partition-table-less
+        # image; dump the first 16 bytes to make the failure
+        # actionable rather than "no signature, no idea".
+        head = first_sector[:16]
+        log.error(
+            f"target disk sector 0 missing 0x55 0xAA boot signature "
+            f"(bytes [510:512]={first_sector[510:512]!r}); head[:16]={head!r}. "
+            "The nosi flash pipeline reported complete but no partition "
+            "table landed on the disk."
+        )
+        return errno.EPROTO
+    log.info(
+        "Target disk carries a 0x55 0xAA boot signature "
+        "-- real nosi image landed sector-0 correctly"
+    )
     return 0
 
 
@@ -1163,9 +1342,17 @@ def _seed_tui_and_bind(seed_base: str, admin_password: str, cfg) -> int:
     mode; the plan JSON always returns mode=interactive and the CLI
     drops into the wizard. Presence of a downloaded catalog entry is
     only there so the wizard's image picker has something to show
-    (otherwise a "no images" panel renders instead of the picker)."""
-    server_ip = cfg["server_pxe_ip"]
-    image_url = f"http://{server_ip}:{WORKSPACE_HTTP_PORT}/flash-target.img"
+    (otherwise a "no images" panel renders instead of the picker).
+
+    Seeds a real nosi netboot bundle (~70 MiB tar.gz) rather than the
+    full 2.6 GiB disk image the flash test uses. The wizard only
+    needs a downloaded catalog row to render; format doesn't matter
+    for the picker (the CLI never runs the flash pipeline in this
+    test), and 70 MiB fetches from ghcr.io in a fraction of the
+    time. Still exercises the real oras client + real ghcr auth +
+    real bundle unpack."""
+    catalog_url = str(cfg.get("nosi_catalog_url", NOSI_CATALOG_URL))
+    entry_name = str(cfg.get("nosi_tui_entry_name", NOSI_TUI_ENTRY_NAME))
     mac = cfg["client_mac"]
 
     try:
@@ -1174,11 +1361,24 @@ def _seed_tui_and_bind(seed_base: str, admin_password: str, cfg) -> int:
         log.error(f"login failed: {exc}")
         return errno.EACCES
 
-    if err := _add_and_fetch(seed_base, cookie, "flash-target", image_url, "img"):
+    if err := _import_catalog(seed_base, cookie, catalog_url):
+        return err
+    if not _catalog_has_entry(seed_base, entry_name):
+        log.error(
+            f"catalog import from {catalog_url!r} did not surface expected entry "
+            f"{entry_name!r}; nosi published entry names for tag {NOSI_FLASH_TAG!r} "
+            "may have drifted from what this test expects."
+        )
+        return errno.ENOENT
+    if err := _fetch_entry(seed_base, cookie, entry_name):
         return err
 
+    log.info(
+        f"Waiting up to {FETCH_TIMEOUT_ORAS}s for pixie to pull "
+        f"{entry_name!r} from ghcr.io (real nosi netboot bundle, ~70 MiB tar.gz)"
+    )
     try:
-        _wait_content_sha(seed_base, "flash-target")
+        _wait_content_sha(seed_base, entry_name, timeout=FETCH_TIMEOUT_ORAS)
     except TimeoutError as exc:
         log.error(str(exc))
         return errno.ETIMEDOUT

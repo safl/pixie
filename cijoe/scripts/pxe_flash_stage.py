@@ -1,32 +1,29 @@
 """
-Stage the flash payload (live-env media + small target image)
-=============================================================
+Stage the live-env media for the flash chain tests
+==================================================
 
-For ``mode=flash`` in ``pxe_run_chain_test.py``. Does two things:
+For ``mode=flash`` + ``mode=tui`` in ``pxe_run_chain_test.py``.
+Copies the ``pixie-netboot-pc-x86_64`` bake's vmlinuz + initrd +
+squashfs into ``_build/test-pxe/live-env/`` (renamed to the plain
+``vmlinuz`` / ``initrd`` / ``live.squashfs`` shape pixie's PXE
+renderer emits URLs for). Same as :mod:`pxe_inventory_stage`.
 
-- Copies the ``pixie-netboot-pc-x86_64`` bake's vmlinuz + initrd +
-  squashfs into ``_build/test-pxe/live-env/`` (renamed to the plain
-  ``vmlinuz`` / ``initrd`` / ``live.squashfs`` shape pixie's PXE
-  renderer emits URLs for). Same as :mod:`pxe_inventory_stage`.
-- Writes a small (16 MiB) synthetic disk image at
-  ``_build/test-pxe/flash-target.img`` whose first 4 KiB carry a
-  distinctive marker string. The chain-test driver seeds this into
-  pixie's catalog, binds the client to pixie-flash-once with the
-  image sha + a target_disk_serial that matches QEMU's virtio-blk
-  serial (``PIXIETEST``), and after the client's live env has
-  flashed the image, greps the QEMU-side blank disk for the marker.
-  Small on purpose: the whole HTTP fetch + dd path runs in under a
-  minute on a GHA runner.
-
-Requires: nothing beyond stdlib + a readable
-``pixie-netboot-pc-x86_64-v*`` artifact set.
+The flash test used to also write a small synthetic 16 MiB image
+here (``_build/test-pxe/flash-target.img``) served over a local
+HTTP shim. That was replaced with an ``oras://`` pull of a real
+nosi image (see ``_seed_flash_and_bind`` in the chain test) so
+the pipeline exercises real oras resolution + real img.gz
+decompression + a full-size dd instead of a marker-at-offset-0
+smoke test. The tar.gz-bundle path (``mode=ramboot``) still uses
+the workspace HTTP server + a locally-assembled payload; the
+choice there is deliberate (nosi's netboot bundles don't quite
+match ramboot's expected bundle layout yet).
 
 Retargetable: False
 """
 
 from __future__ import annotations
 
-import hashlib
 import logging as log
 import os
 import shutil
@@ -35,16 +32,6 @@ from pathlib import Path
 
 _ARTIFACT_ROOT = Path(os.environ.get("PIXIE_NETBOOT_ARTIFACT_DIR") or "").expanduser()
 _DEFAULT_ARTIFACT_ROOT = Path.home() / "system_imaging" / "disk"
-
-# 16 MiB. Big enough that the wget + dd path in the pixie CLI runs
-# through the same code as a real image, small enough that the whole
-# chain test finishes in under a minute on a GHA runner.
-_FLASH_IMG_SIZE = 16 * 1024 * 1024
-
-# Marker the chain test greps for on the QEMU-side blank disk after
-# flash. Contains no ``\0`` at the start so a `strings`-style scan
-# picks it up if we ever need to diagnose from a saved qcow2.
-_FLASH_MARKER = b"PIXIE-FLASH-TARGET-MARKER-v1\n"
 
 
 def _find_artifact_root() -> Path | None:
@@ -83,22 +70,6 @@ def _stage_live_env(root: Path, workspace: Path) -> None:
     )
 
 
-def _write_flash_target(workspace: Path) -> tuple[Path, str]:
-    """Write the synthetic flash-target image + return its (path, sha256).
-    The image is ``_FLASH_MARKER`` padded with zeros to ``_FLASH_IMG_SIZE``;
-    that gives us a marker at offset 0 for the after-flash grep while
-    keeping the sha stable across CI runs."""
-    out = workspace / "flash-target.img"
-    body = _FLASH_MARKER + b"\0" * (_FLASH_IMG_SIZE - len(_FLASH_MARKER))
-    out.write_bytes(body)
-    sha = hashlib.sha256(body).hexdigest()
-    log.error(
-        f"pxe_flash_stage: flash-target image staged at {out} "
-        f"({out.stat().st_size} bytes, sha={sha[:12]}...)"
-    )
-    return out, sha
-
-
 def add_args(parser: ArgumentParser) -> None:
     del parser
 
@@ -119,5 +90,4 @@ def main(args, cijoe) -> int:
     log.error(f"pxe_flash_stage: workspace={workspace}")
 
     _stage_live_env(root, workspace)
-    _write_flash_target(workspace)
     return 0

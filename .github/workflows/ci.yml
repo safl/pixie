@@ -367,12 +367,17 @@ jobs:
   test-pxe-flash:
     name: PXE flash chain test (containerized pixie + client QEMU VM)
     # Same artifact dependency as test-pxe-inventory (the netboot-pc
-    # bake for the live-env media pixie serves at /boot/pixie-live-env/).
-    # Adds qemu-utils since post-chain verification qemu-img converts
-    # the client's qcow2 to raw to grep for the flash marker.
+    # bake for the live-env media). qemu-utils lands qemu-img which
+    # we use to read the client disk's sector 0 for a boot-signature
+    # check without a full-disk convert.
+    #
+    # Wider timeout (60 min) because the pipeline pulls a real nosi
+    # image via oras (~2.6 GiB compressed) + decompresses img.gz +
+    # dds ~10 GiB sparsely to the client qcow2 -- not the synthetic
+    # 16 MiB marker file the earlier test-pxe-flash iterations used.
     needs: build-media
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v6
 
@@ -429,13 +434,13 @@ jobs:
 
   test-pxe-flash-always:
     name: PXE flash-always chain test (containerized pixie + client QEMU VM)
-    # Same dependencies as test-pxe-flash (needs the netboot-pc bake
-    # for live-env media, qemu-utils for post-chain marker read). The
+    # Same dependencies + real-nosi pipeline as test-pxe-flash. The
     # difference is a one-line config knob + an inverted assertion:
     # pixie-flash-always must NOT flip its bind on the CLI's /done.
+    # 60 min for the same reasons -- real oras pull dominates.
     needs: build-media
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v6
 
