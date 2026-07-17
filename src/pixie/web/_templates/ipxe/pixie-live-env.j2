@@ -23,6 +23,33 @@
 
 set pixie-base http://{{ host }}:{{ port }}
 
-kernel ${pixie-base}/boot/pixie-live-env/vmlinuz boot=live components ip=dhcp fetch=${pixie-base}/boot/pixie-live-env/live.squashfs console=tty0 console=ttyS1,115200 console=ttyS0,115200 earlyprintk=ttyS0,115200 pixie.server=${pixie-base} pixie.mac={{ mac }} bty.server=${pixie-base} bty.mac={{ mac }}{% if extra_cmdline %} {{ extra_cmdline }}{% endif %}
+# Cmdline matches bty's proven-working live-env kernel line
+# (bty/src/bty/web/_templates/ipxe_flash.j2 + ipxe_tui.j2). Deltas
+# from an earlier pixie shape that had drifted:
+#
+# - ``ip=dhcp`` REMOVED. Debian live-boot's ``fetch=`` handler
+#   configures the network itself via its own DHCP client; keeping
+#   both racing produced silent hangs on GIGABYTE MC12-LE0 hardware
+#   where live-boot's ipconfig would return with no NIC configured
+#   despite iPXE having successfully DHCP'd from the same interface.
+#   bty never had it; verified live on 10.20.30.61 (matx-bmc) with
+#   nothing else changing.
+# - ``plymouth.enable=0 modprobe.blacklist=nouveau,rndis_host
+#   nouveau.modeset=0 systemd.gpt_auto=0`` ADDED. Same set bty
+#   ships. plymouth stays off so the operator sees the full boot
+#   stream (a wedge between two ``[ OK ] Started X`` lines is
+#   immediately diagnostic); nouveau blacklist keeps NVIDIA
+#   GPU quirks from stalling non-graphics targets; rndis_host
+#   blacklist stops the kernel from claiming a USB-console-emulated
+#   NIC before the real one appears; systemd.gpt_auto=0 keeps
+#   systemd from auto-mounting random GPT partitions the flasher
+#   is about to overwrite.
+#
+# ``console=`` chain matches bty too; LAST-wins for /dev/console.
+# The ttyS0 tail lands on most bench-side USB-serial adapters;
+# operators driving from a BMC's SoL on ttyS1 append their own
+# ``console=ttyS1,115200`` via PIXIE_LIVE_ENV_EXTRA_CMDLINE.
+
+kernel ${pixie-base}/boot/pixie-live-env/vmlinuz boot=live fetch=${pixie-base}/boot/pixie-live-env/live.squashfs components console=tty0 console=ttyS1,115200 console=ttyS0,115200 earlyprintk=ttyS0,115200 plymouth.enable=0 modprobe.blacklist=nouveau,rndis_host nouveau.modeset=0 systemd.gpt_auto=0 pixie.server=${pixie-base} pixie.mac={{ mac }} bty.server=${pixie-base} bty.mac={{ mac }}{% if extra_cmdline %} {{ extra_cmdline }}{% endif %}
 initrd ${pixie-base}/boot/pixie-live-env/initrd
 boot
