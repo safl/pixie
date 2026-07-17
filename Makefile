@@ -52,6 +52,8 @@ help:
 	@echo "                  (same deps as test-pxe-ramboot; no catalog seed)"
 	@echo "  test-pxe-flash  end-to-end PXE pixie-flash-once chain test"
 	@echo "                  (same deps as test-pxe-inventory; small synthetic image)"
+	@echo "  test-pxe-flash-always  end-to-end PXE pixie-flash-always chain test"
+	@echo "                  (same deps as test-pxe-flash; asserts no /done flip)"
 	@echo ""
 	@echo "Variant: $(VARIANT)  (override with VARIANT=netboot-pc, ...)"
 	@echo "  usbboot-pc    - bootable USB live ISO via live-build (.iso, x86_64)"
@@ -146,6 +148,12 @@ test-pxe-inventory:
 # (needs the netboot-pc bake).
 test-pxe-flash:
 	cd cijoe && cijoe tasks/test-pxe-flash.yaml --monitor -c configs/test-pxe-flash.toml
+
+# Flash-always chain test: mirrors test-pxe-flash but binds
+# boot_mode=pixie-flash-always. Same wire; the post-chain assertion
+# inverts (mode must NOT flip to ipxe-exit on the CLI's /done POST).
+test-pxe-flash-always:
+	cd cijoe && cijoe tasks/test-pxe-flash-always.yaml --monitor -c configs/test-pxe-flash-always.toml
 
 # ---------- Cleanup ------------------------------------------------------
 
