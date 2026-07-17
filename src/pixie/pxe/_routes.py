@@ -13,6 +13,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import logging
 from typing import Any
 
@@ -233,6 +234,27 @@ async def pxe_status(request: Request, mac: str) -> PlainTextResponse:
             summary=f"{canon}: {status_token}",
             details={"status": status_token},
         )
+    # pixie-flash-once completes -> flip to ipxe-exit so the next PXE
+    # boot loads the disk. pixie-flash-always keeps re-arming; the
+    # operator explicitly picked "flash every boot". Any other status
+    # (started, failed, etc.) or boot_mode is a pure event emit.
+    if status_token == "done":
+        machines = _get_machines(request)
+        row = machines.get(canon)
+        if row is not None and row.boot_mode == "pixie-flash-once":
+            # Guard would trip if inventory is missing on the row
+            # (shouldn't happen; getting here required a flash-once
+            # bind which itself passed the guard). Swallow so the
+            # /done POST still returns 204.
+            with contextlib.suppress(ValueError):
+                machines.upsert_binding(
+                    canon,
+                    boot_mode="ipxe-exit",
+                    image_content_sha256=row.image_content_sha256,
+                    labels=list(row.labels),
+                    sanboot_drive=row.sanboot_drive,
+                    target_disk_serial=row.target_disk_serial,
+                )
     return PlainTextResponse("", status_code=204)
 
 
@@ -279,12 +301,34 @@ def pxe_plan_json(request: Request, mac: str) -> dict[str, Any]:
     if mode == "pixie-tui":
         return {"mode": "interactive"}
     if mode in ("pixie-flash-once", "pixie-flash-always"):
-        # Flash mode wanted, but pixie does not yet carry the
-        # target-disk selector on the machine row; surface as
-        # ``interactive`` so the operator gets the wizard rather
-        # than a broken auto-flash dispatch. A follow-up PR grows
-        # ``target_disk_serial`` + returns ``mode=flash`` here.
-        return {"mode": "interactive"}
+        # Resolve the bound catalog entry so the live env can fetch
+        # the bytes + know the format. Bind-time validation (see
+        # machines._store.upsert_binding) guarantees both fields are
+        # non-empty for a flash mode; if either goes missing between
+        # bind and here (schema drift, out-of-band DB edit), fall
+        # back to the interactive wizard so the operator can pick.
+        if not (row.image_content_sha256 and row.target_disk_serial):
+            return {"mode": "interactive"}
+        catalog = request.app.state.catalog_store
+        entry = None
+        for e in catalog.list_entries():
+            if e.content_sha256 == row.image_content_sha256:
+                entry = e
+                break
+        if entry is None:
+            return {"mode": "interactive"}
+        ctx = _render_context(request)
+        image_url = f"http://{ctx.host}:{ctx.port}/b/{row.image_content_sha256}/{entry.name}"
+        plan: dict[str, Any] = {
+            "mode": "flash",
+            "image": image_url,
+            "target_disk_serial": row.target_disk_serial,
+            "name": entry.name,
+            "disk_image_sha": row.image_content_sha256,
+        }
+        if entry.format:
+            plan["format"] = entry.format
+        return plan
     if mode == "ramboot":
         # ramboot targets normally boot the image's own kernel +
         # initrd -- no pixie CLI in the picture -- so this branch
