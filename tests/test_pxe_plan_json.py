@@ -102,7 +102,13 @@ def test_plan_json_returns_flash_for_pixie_flash_once(client: TestClient) -> Non
     """A pixie-flash-once bind with image + target serial resolves to
     mode=flash with image URL + target_disk_serial + name +
     disk_image_sha; the pixie CLI auto-flashes without touching the
-    interactive wizard."""
+    interactive wizard.
+
+    The catalog entry's format is ``img.gz`` but pixie's fetcher
+    decompresses ``img.gz`` at fetch time, so the blob on disk is
+    raw ``img``. The plan advertises ``img`` accordingly -- shipping
+    ``img.gz`` here would send the live-env CLI into gunzip-on-raw-
+    bytes and the flash never completes."""
     mac = "aa:bb:cc:dd:ee:30"
     sha = _seed_flash_bound_machine(client, mac, "pixie-flash-once", "SN-1")
     r = client.get(f"/pxe/{mac}/plan")
@@ -112,9 +118,38 @@ def test_plan_json_returns_flash_for_pixie_flash_once(client: TestClient) -> Non
     assert body["target_disk_serial"] == "SN-1"
     assert body["name"] == "ready"
     assert body["disk_image_sha"] == sha
-    assert body["format"] == "img.gz"
+    # img.gz + img.zst + img.xz all normalise to "img" (fetcher
+    # decompressed to blob; wire bytes are raw). Plain "img" +
+    # "tar.gz" round-trip untouched.
+    assert body["format"] == "img"
     assert body["image"].startswith("http://")
     assert body["image"].endswith(f"/b/{sha}/ready")
+
+
+def test_plan_json_flash_format_passes_through_uncompressed(client: TestClient) -> None:
+    """A plain ``img`` catalog entry ships as ``img`` in the plan;
+    no server-side normalisation kicks in for already-uncompressed
+    formats (or ``tar.gz`` bundles, which the flash pipeline
+    understands as-is)."""
+    from pixie.catalog._schema import CatalogEntry
+
+    c = _authed(client)
+    mac = "aa:bb:cc:dd:ee:35"
+    catalog = c.app.state.catalog_store  # type: ignore[attr-defined]
+    catalog.upsert(CatalogEntry(name="raw-img", src="https://x/y.img", format="img"))
+    sha = "d" * 64
+    catalog.mark_fetched("raw-img", content_sha256=sha, size_bytes=1)
+    c.post(f"/pxe/{mac}/inventory", json={"disks": [{"path": "/dev/sda", "serial": "SN-r"}]})
+    c.put(
+        f"/machines/{mac}",
+        json={
+            "boot_mode": "pixie-flash-once",
+            "image_content_sha256": sha,
+            "target_disk_serial": "SN-r",
+        },
+    )
+    body = client.get(f"/pxe/{mac}/plan").json()
+    assert body["format"] == "img"
 
 
 def test_plan_json_flash_url_quotes_entry_name(client: TestClient) -> None:

@@ -333,6 +333,24 @@ def pxe_plan_json(request: Request, mac: str) -> dict[str, Any]:
             f"http://{ctx.host}:{ctx.port}"
             f"/b/{row.image_content_sha256}/{_urlparse.quote(entry.name, safe='')}"
         )
+        # ``entry.format`` in the catalog is the ORIGINAL upstream
+        # format (``img.gz`` / ``img.zst`` / ``img.xz`` / ``img``).
+        # Pixie's fetcher decompresses ``img.gz`` / ``img.zst`` /
+        # ``img.xz`` at fetch time and stores the DECOMPRESSED bytes
+        # in the blob (see catalog._fetcher._COMPRESSED_IMG_FORMATS
+        # + _decompress_to_tmpfile). The blob route serves those
+        # decompressed bytes verbatim, so the flash pipeline in the
+        # live env must NOT try to gunzip/unzstd/unxz the stream --
+        # the bytes on the wire are already raw ``img``.
+        #
+        # Advertise ``format=img`` for any compressed variant whose
+        # bytes are pre-decompressed on disk. Leaves plain ``img``
+        # + ``tar.gz`` (bundle) untouched. Without this, a
+        # ``format=img.gz`` payload from an entry we already
+        # decompressed sends the CLI into gunzip-on-raw-bytes and
+        # the flash never completes.
+        _COMPRESSED_IMG_FORMATS = {"img.gz", "img.zst", "img.xz"}
+        plan_format = "img" if entry.format in _COMPRESSED_IMG_FORMATS else entry.format
         plan: dict[str, Any] = {
             "mode": "flash",
             "image": image_url,
@@ -340,8 +358,8 @@ def pxe_plan_json(request: Request, mac: str) -> dict[str, Any]:
             "name": entry.name,
             "disk_image_sha": row.image_content_sha256,
         }
-        if entry.format:
-            plan["format"] = entry.format
+        if plan_format:
+            plan["format"] = plan_format
         return plan
     if mode == "ramboot":
         # ramboot targets normally boot the image's own kernel +
