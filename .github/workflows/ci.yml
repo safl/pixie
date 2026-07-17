@@ -489,3 +489,66 @@ jobs:
           name: test-pxe-flash-always-workspace
           path: cijoe/_build/test-pxe
           if-no-files-found: warn
+
+  test-pxe-tui:
+    name: PXE tui chain test (containerized pixie + client QEMU VM)
+    # Same live-env media dependency as test-pxe-flash. No qemu-utils
+    # here -- the tui test does not read the target disk; it just
+    # asserts the wizard entered its picker screen (a serial marker
+    # coming out of pixie CLI's _screen_select_image).
+    needs: build-media
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install host tools (qemu, dnsmasq, ipxe, bridge)
+        run: |
+          set -eu
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            qemu-system-x86 \
+            qemu-utils \
+            dnsmasq \
+            ipxe \
+            bridge-utils \
+            iproute2
+          sudo chmod a+rw /dev/kvm
+          ls -la /dev/kvm
+
+      - name: Install cijoe
+        run: pipx install --force cijoe
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v8.1.0
+
+      - name: Download netboot-pc bake artifacts
+        uses: actions/download-artifact@v7
+        with:
+          name: pixie-netboot-pc-x86_64
+          path: ~/system_imaging/disk/
+
+      - name: Show downloaded artifact contents
+        run: |
+          set -eu
+          echo "--- ~/system_imaging/disk (recursive) ---"
+          find ~/system_imaging/disk -maxdepth 5 -print
+
+      - name: Run PXE tui chain test
+        run: make test-pxe-tui
+
+      - name: Upload cijoe output
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: cijoe-output-test-pxe-tui
+          path: cijoe/cijoe-output
+          if-no-files-found: warn
+
+      - name: Upload PXE workspace (serial logs, dnsmasq.log)
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: test-pxe-tui-workspace
+          path: cijoe/_build/test-pxe
+          if-no-files-found: warn

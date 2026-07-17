@@ -1048,6 +1048,15 @@ class BtyTui:
         a single-letter command. The catalog source itself was
         chosen in stage 1; ``b`` here re-enters that screen.
         """
+        # Serial-console marker for chain tests + BMC log tailers:
+        # signals the interactive path reached the picker (i.e. the
+        # CLI honored a mode=interactive plan and successfully loaded
+        # a catalog). Distinguishes pixie-tui from pixie-flash-*
+        # boots on the same serial log; the auto path emits its own
+        # "auto-flash starting" marker instead. Kept idempotent --
+        # the wizard re-enters this screen on back-nav, and firing
+        # the marker each time is fine (log tailers dedupe on match).
+        _emit_console_marker("pixie: wizard select_image", local_tty=False)
         self._refresh_images()
         self._console.clear()
         self._print_header(stage=2, title="Pick an image to flash")

@@ -1,0 +1,74 @@
+# pixie PXE tui chain test: containerized pixie + a bridged QEMU
+# client booting into pixie's own live env with a
+# boot_mode=pixie-tui bind so the ported CLI takes the interactive
+# dispatch path.
+#
+# Usage:
+#   cijoe tasks/test-pxe-tui.yaml --monitor -c configs/test-pxe-tui.toml
+#
+# Pre-conditions match test-pxe-flash (same live-env media, same
+# host tools). No qemu-utils needed -- we don't dd a disk this time.
+
+[pixie]
+variant = "test-pxe-tui"
+
+[cijoe.workflow]
+fail_fast = true
+
+[test.pxe]
+mode = "tui"
+
+pixie_image = "pixie:pxetest"
+admin_password = "test-admin-pw"
+
+client_firmware = "bios"
+client_mac = "52:54:00:11:22:88"
+
+bridge = "br-ipxe"
+tap_iface = "tap-ipxe"
+server_pxe_ip = "192.168.99.1"
+pxe_netmask = "255.255.255.0"
+dhcp_range_lo = "192.168.99.50"
+dhcp_range_hi = "192.168.99.150"
+
+# Same PXE + live-env markers as the other chain tests. Adds the
+# "pixie: wizard select_image" marker that fires when the CLI
+# reaches its SELECT_IMAGE screen -- proves BOTH the plan JSON
+# returned mode=interactive AND the wizard successfully loaded a
+# catalog from <server>/catalog.toml (added in the same PR as
+# this test; see pixie.catalog._routes.catalog_toml).
+[[test.pxe.chain_markers]]
+key = "ipxe-loaded"
+needle = "iPXE"
+
+[[test.pxe.chain_markers]]
+key = "ipxe-fetch-bootstrap"
+needle = "pxe-bootstrap.ipxe"
+
+[[test.pxe.chain_markers]]
+key = "live-env-vmlinuz"
+needle = "/boot/pixie-live-env/vmlinuz"
+
+[[test.pxe.chain_markers]]
+key = "live-env-initrd"
+needle = "/boot/pixie-live-env/initrd"
+
+[[test.pxe.chain_markers]]
+key = "live-env-squashfs"
+needle = "/boot/pixie-live-env/live.squashfs"
+
+[[test.pxe.chain_markers]]
+key = "kernel-boot"
+needle = "Linux version"
+
+[[test.pxe.chain_markers]]
+key = "systemd-started"
+needle = "systemd["
+
+# Wizard-side markers: proves the CLI reached the interactive path
+# (not auto-flash) AND catalog load succeeded (wizard couldn't
+# render its picker without at least an empty catalog, so its
+# presence proves the load path did not blow up).
+[[test.pxe.chain_markers]]
+key = "pixie-wizard-select-image"
+needle = "pixie: wizard select_image"

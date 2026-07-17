@@ -54,6 +54,8 @@ help:
 	@echo "                  (same deps as test-pxe-inventory; small synthetic image)"
 	@echo "  test-pxe-flash-always  end-to-end PXE pixie-flash-always chain test"
 	@echo "                  (same deps as test-pxe-flash; asserts no /done flip)"
+	@echo "  test-pxe-tui  end-to-end PXE pixie-tui chain test"
+	@echo "                  (same deps as test-pxe-flash; asserts wizard entry)"
 	@echo ""
 	@echo "Variant: $(VARIANT)  (override with VARIANT=netboot-pc, ...)"
 	@echo "  usbboot-pc    - bootable USB live ISO via live-build (.iso, x86_64)"
@@ -154,6 +156,15 @@ test-pxe-flash:
 # inverts (mode must NOT flip to ipxe-exit on the CLI's /done POST).
 test-pxe-flash-always:
 	cd cijoe && cijoe tasks/test-pxe-flash-always.yaml --monitor -c configs/test-pxe-flash-always.toml
+
+# TUI chain test: binds boot_mode=pixie-tui, asserts the CLI reaches
+# the interactive wizard's SELECT_IMAGE screen (proves the plan
+# dispatch AND the /catalog.toml catalog wire between server + CLI).
+# Does not drive the wizard's inputs; that would need QMP send-key
+# and the flash pipeline past the pick is already covered by
+# test-pxe-flash.
+test-pxe-tui:
+	cd cijoe && cijoe tasks/test-pxe-tui.yaml --monitor -c configs/test-pxe-tui.toml
 
 # ---------- Cleanup ------------------------------------------------------
 

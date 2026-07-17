@@ -156,6 +156,48 @@ def test_disk_image_blob_end_to_end(client: TestClient, state_dir: Path) -> None
     assert h404.status_code == 404
 
 
+def test_catalog_toml_projection_for_pixie_tui_wizard(client: TestClient, state_dir: Path) -> None:
+    """The ported pixie CLI's interactive wizard defaults its catalog
+    source to ``<server>/catalog.toml`` when a ``--mac`` is set (see
+    ``pixie.tui._app._TuiState.__init__``); its parser only reads
+    ``version = 1`` + ``[[images]]``. Assert pixie serves that
+    projection with the expected shape + skips un-downloaded entries
+    (unflashable from the wizard anyway)."""
+    from pixie.catalog._fetcher import stream_bytes_to_blob
+    from pixie.catalog._schema import CatalogEntry
+    from pixie.catalog._store import CatalogStore
+
+    store = CatalogStore(state_dir)
+    ready = CatalogEntry(
+        name="ready-image",
+        src="https://example.com/ready.img.gz",
+        format="img.gz",
+        arch="x86_64",
+        description='a "quoted" image',
+    )
+    store.upsert(ready)
+    stream_bytes_to_blob(b"ROOTFS", ready, store)
+    store.upsert(
+        CatalogEntry(name="staged-only", src="https://example.com/pending.img", format="img")
+    )
+
+    r = client.get("/catalog.toml")
+    assert r.status_code == 200
+    assert r.headers["content-type"].startswith("application/toml")
+    body = r.text
+    assert body.startswith("version = 1")
+    assert 'name = "ready-image"' in body
+    # Description with a double-quote must round-trip through TOML.
+    assert 'description = "a \\"quoted\\" image"' in body
+    # Un-downloaded entries stay out of the wire projection.
+    assert "staged-only" not in body
+    # HEAD works too so a curl -I on catalog.toml can be used to
+    # probe reachability without pulling the whole catalog.
+    h = client.head("/catalog.toml")
+    assert h.status_code == 200
+    assert h.content == b""
+
+
 def test_netboot_bundle_serves_artifacts(client: TestClient, state_dir: Path) -> None:
     """A fetched tar.gz bundle unpacks + serves vmlinuz + initrd +
     manifest.json at content-addressed URLs."""

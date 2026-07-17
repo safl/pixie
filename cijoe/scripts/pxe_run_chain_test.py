@@ -85,10 +85,10 @@ def main(args, cijoe) -> int:
         client_log.unlink()
 
     mode = str(cfg.get("mode", "bootstrap")).lower()
-    if mode not in ("bootstrap", "ramboot", "inventory", "flash"):
+    if mode not in ("bootstrap", "ramboot", "inventory", "flash", "tui"):
         log.error(
             f"unknown [test.pxe] mode={mode!r}; expected "
-            "'bootstrap', 'ramboot', 'inventory', or 'flash'"
+            "'bootstrap', 'ramboot', 'inventory', 'flash', or 'tui'"
         )
         return errno.EINVAL
 
@@ -102,14 +102,14 @@ def main(args, cijoe) -> int:
         net_up = True
         dnsmasq = _start_dnsmasq(cfg, tftproot, workspace)
 
-        # ``inventory`` + ``flash`` both need pixie's own live-env
-        # media staged inside the container (they boot into the pixie
-        # live env before the CLI can post inventory or auto-flash);
-        # nothing else does. Verify the caller's workspace has the
-        # three files before we start podman so a missing bake fails
-        # fast rather than mid-boot on the client.
+        # ``inventory`` + ``flash`` + ``tui`` all boot into pixie's
+        # own live env (only bootstrap + ramboot do not), so the
+        # live-env media must be staged inside the container ahead
+        # of time. Verify the caller's workspace has the three files
+        # before we start podman so a missing bake fails fast rather
+        # than mid-boot on the client.
         live_env_dir: Path | None = None
-        if mode in ("inventory", "flash"):
+        if mode in ("inventory", "flash", "tui"):
             live_env_dir = workspace / "live-env"
             missing = [
                 name
@@ -117,7 +117,15 @@ def main(args, cijoe) -> int:
                 if not (live_env_dir / name).is_file()
             ]
             if missing:
-                stage_step = "pxe_inventory_stage" if mode == "inventory" else "pxe_flash_stage"
+                stage_step = {
+                    "inventory": "pxe_inventory_stage",
+                    "flash": "pxe_flash_stage",
+                    # tui reuses the flash stage step: it needs the
+                    # same live-env media + a downloadable catalog
+                    # entry so the wizard's picker has something to
+                    # render.
+                    "tui": "pxe_flash_stage",
+                }[mode]
                 log.error(
                     f"mode={mode} needs live-env media at {live_env_dir}; "
                     f"missing: {missing}. Run {stage_step} first."
@@ -165,6 +173,23 @@ def main(args, cijoe) -> int:
                 log.error(f"flash seed failed: rc={seed_err}")
                 _dump_container_logs()
                 return seed_err
+        elif mode == "tui":
+            # tui reuses the flash-target.img the flash-stage step
+            # writes into the workspace: the wizard's picker needs at
+            # least one downloadable catalog entry so it can render a
+            # real row (and prove the /catalog.toml wire works
+            # server->CLI).
+            workspace_http = _start_workspace_http_server(
+                workspace, cfg["server_pxe_ip"], required=("flash-target.img",)
+            )
+            if workspace_http is None:
+                return errno.ENOENT  # error already logged
+            log.info("Seeding pixie catalog + binding machine to pixie-tui")
+            seed_err = _seed_tui_and_bind(seed_base, admin_password, cfg)
+            if seed_err:
+                log.error(f"tui seed failed: rc={seed_err}")
+                _dump_container_logs()
+                return seed_err
 
         firmware = str(cfg.get("client_firmware", "bios")).lower()
         if firmware == "uefi" and _find_ovmf() is None:
@@ -210,6 +235,11 @@ def main(args, cijoe) -> int:
             if flash_err:
                 _dump_container_logs()
                 return flash_err
+        elif mode == "tui":
+            tui_err = _verify_tui_effects(seed_base, cfg["client_mac"])
+            if tui_err:
+                _dump_container_logs()
+                return tui_err
 
         log.info(f"PXE {mode} chain test PASSED (all markers seen)")
         return 0
@@ -1116,4 +1146,101 @@ def _verify_flash_effects(seed_base: str, cfg, workspace: Path) -> int:
         )
         return errno.EPROTO
     log.info("Target disk carries the flash marker -- flash pipeline wrote bytes")
+    return 0
+
+
+# ---------- tui mode: seed catalog + bind pixie-tui + verify wire ---------
+
+
+def _seed_tui_and_bind(seed_base: str, admin_password: str, cfg) -> int:
+    """Login, POST + fetch the synthetic flash image so the catalog
+    has one downloaded entry the wizard can render, then PUT
+    /machines/<mac> with boot_mode=pixie-tui. Returns 0 on success,
+    an errno on any failure (already logged).
+
+    Unlike ``_seed_flash_and_bind`` we set NO image_content_sha256 +
+    NO target_disk_serial: pixie-tui is the operator-picks-things
+    mode; the plan JSON always returns mode=interactive and the CLI
+    drops into the wizard. Presence of a downloaded catalog entry is
+    only there so the wizard's image picker has something to show
+    (otherwise a "no images" panel renders instead of the picker)."""
+    server_ip = cfg["server_pxe_ip"]
+    image_url = f"http://{server_ip}:{WORKSPACE_HTTP_PORT}/flash-target.img"
+    mac = cfg["client_mac"]
+
+    try:
+        cookie = _login(seed_base, admin_password)
+    except Exception as exc:
+        log.error(f"login failed: {exc}")
+        return errno.EACCES
+
+    if err := _add_and_fetch(seed_base, cookie, "flash-target", image_url, "img"):
+        return err
+
+    try:
+        _wait_content_sha(seed_base, "flash-target")
+    except TimeoutError as exc:
+        log.error(str(exc))
+        return errno.ETIMEDOUT
+
+    body = {"boot_mode": "pixie-tui"}
+    data = json.dumps(body).encode("utf-8")
+    req = urllib.request.Request(
+        f"{seed_base}/machines/{mac}",
+        data=data,
+        method="PUT",
+        headers={"Content-Type": "application/json", "Cookie": cookie},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            if resp.status != 200:
+                log.error(f"PUT /machines/{mac} returned {resp.status}")
+                return errno.EPROTO
+    except urllib.error.HTTPError as exc:
+        log.error(f"PUT /machines/{mac}: HTTP {exc.code}")
+        return errno.EPROTO
+    log.info(f"Machine {mac} bound to boot_mode=pixie-tui (1 downloaded catalog entry ready)")
+    return 0
+
+
+_TUI_EFFECT_TIMEOUT_S = 60
+
+
+def _verify_tui_effects(seed_base: str, mac: str) -> int:
+    """After the live env's pixie CLI honors mode=interactive and
+    reaches its SELECT_IMAGE screen, assertions:
+
+    1. GET /machines/<mac> still shows boot_mode=pixie-tui -- the
+       server did NOT flip the bind. Only pixie-flash-once flips on
+       /done; pixie-tui + pixie-flash-always are meant to persist.
+       Since the wizard never fires /done (we don't drive keystrokes
+       into QEMU), a flip here would signal an unexpected server-
+       side rewrite.
+    2. Catalog wire actually worked: the CLI's wizard loads its
+       catalog from GET /catalog.toml (server-driven default). We
+       cannot directly observe that from the outside, but the
+       chain-marker "pixie: wizard select_image" fires from
+       _screen_select_image which runs AFTER _refresh_images
+       succeeds -- so its presence in the chain marker set (already
+       asserted in _wait_for_chain_markers) is the wire-worked
+       signal. This helper is purely the mode-not-flipped guard.
+
+    Returns 0 on success, an errno on any failure (already logged)."""
+    url = f"{seed_base}/machines/{mac}"
+    time.sleep(5)  # small settle so a racy plan re-fetch cannot mask the check
+    try:
+        with urllib.request.urlopen(url, timeout=5) as resp:
+            body = json.loads(resp.read())
+    except (urllib.error.URLError, OSError) as exc:
+        log.error(f"GET {url} failed: {exc}")
+        return errno.EPROTO
+    observed = body.get("boot_mode")
+    if observed != "pixie-tui":
+        log.error(
+            f"pixie-tui must persist across live-env boot; observed "
+            f"boot_mode={observed!r} after {_TUI_EFFECT_TIMEOUT_S}s. "
+            "Server-side bind rewriter regressed."
+        )
+        return errno.EPROTO
+    log.info("pixie-tui bind persists across live-env boot (mode unchanged)")
     return 0

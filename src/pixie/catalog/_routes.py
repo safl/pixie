@@ -157,6 +157,52 @@ def list_catalog(request: Request) -> dict[str, Any]:
     return {"entries": entries}
 
 
+@router.api_route("/catalog.toml", methods=["GET", "HEAD"], response_class=Response)
+def catalog_toml(request: Request) -> Response:
+    """TOML projection of the current catalog for the ported pixie
+    CLI's interactive wizard.
+
+    The wizard (``pixie.tui._app._TuiState.__init__``) defaults its
+    catalog source to ``<server>/catalog.toml`` in server-driven
+    mode, and its parser (``pixie.tui_catalog.load_bytes``) only
+    understands ``version = 1`` + ``[[images]]``. Without this
+    endpoint, a pixie-tui-bound machine's live env falls into
+    interactive mode but immediately fails catalog-load with a
+    404, leaving the operator on an "empty catalog" screen when
+    the real problem is a wire mismatch. Emits only downloaded
+    entries so a pick is guaranteed to have bytes on disk when
+    the flash pipeline reaches them."""
+    store = _get_store(request)
+    lines = ["version = 1", ""]
+    for e in store.list_entries():
+        if not e.content_sha256:
+            # Skip un-downloaded entries: the wizard can't flash them
+            # anyway (auto-flash and interactive both call
+            # ``flash._probe_image_url_http`` which needs the bytes)
+            # so surfacing them just clutters the picker.
+            continue
+        lines.append("[[images]]")
+        lines.append(f'name = "{e.name}"')
+        lines.append(f'src = "{e.src}"')
+        lines.append(f'format = "{e.format}"')
+        if e.arch:
+            lines.append(f'arch = "{e.arch}"')
+        if e.description:
+            # Description is operator-provided free text; escape " and
+            # \ so a curly-quote or backslash won't tank the TOML parse.
+            safe = e.description.replace("\\", "\\\\").replace('"', '\\"')
+            lines.append(f'description = "{safe}"')
+        if e.netboot_src:
+            lines.append(f'netboot_src = "{e.netboot_src}"')
+        if e.content_sha256:
+            lines.append(f'sha256 = "{e.content_sha256}"')
+        if e.size_bytes:
+            lines.append(f"size_bytes = {e.size_bytes}")
+        lines.append("")
+    body = ("\n".join(lines) + "\n").encode("utf-8")
+    return Response(content=body, media_type="application/toml")
+
+
 @router.post("/catalog/entries", status_code=201)
 def add_entry(
     request: Request,
