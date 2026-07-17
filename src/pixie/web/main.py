@@ -1059,7 +1059,6 @@ def create_app() -> FastAPI:
     from pixie.catalog._fetcher import FetchError
     from pixie.catalog._fetcher import fetch as _fetch
     from pixie.catalog._schema import CatalogEntry as _Entry
-    from pixie.catalog._store import CatalogStore as _Store  # noqa: F401
 
     @app.post("/ui/catalog/add")
     def ui_catalog_add(
