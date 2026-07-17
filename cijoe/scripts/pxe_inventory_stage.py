@@ -97,12 +97,12 @@ def main(args, cijoe) -> int:
     shutil.copy2(vmlinuz, live_env / "vmlinuz")
     log.error(f"pxe_inventory_stage: copying {initrd.name} -> {live_env / 'initrd'}")
     shutil.copy2(initrd, live_env / "initrd")
-    log.error(f"pxe_inventory_stage: copying {squashfs.name} -> {live_env / 'squashfs'}")
-    shutil.copy2(squashfs, live_env / "squashfs")
+    log.error(f"pxe_inventory_stage: copying {squashfs.name} -> {live_env / 'live.squashfs'}")
+    shutil.copy2(squashfs, live_env / "live.squashfs")
 
     # World-readable so the pixie container's non-root uvicorn can
     # serve them via StaticFiles from the bind-mount.
-    for f in (live_env / "vmlinuz", live_env / "initrd", live_env / "squashfs"):
+    for f in (live_env / "vmlinuz", live_env / "initrd", live_env / "live.squashfs"):
         f.chmod(0o644)
     log.error(
         f"pxe_inventory_stage: staged live-env at {live_env} "

@@ -23,6 +23,6 @@
 
 set pixie-base http://{{ host }}:{{ port }}
 
-kernel ${pixie-base}/boot/pixie-live-env/vmlinuz boot=live components ip=dhcp fetch=${pixie-base}/boot/pixie-live-env/squashfs console=tty0 console=ttyS1,115200 console=ttyS0,115200 earlyprintk=ttyS0,115200 pixie.server=${pixie-base} pixie.mac={{ mac }} bty.server=${pixie-base} bty.mac={{ mac }}
+kernel ${pixie-base}/boot/pixie-live-env/vmlinuz boot=live components ip=dhcp fetch=${pixie-base}/boot/pixie-live-env/live.squashfs console=tty0 console=ttyS1,115200 console=ttyS0,115200 earlyprintk=ttyS0,115200 pixie.server=${pixie-base} pixie.mac={{ mac }} bty.server=${pixie-base} bty.mac={{ mac }}
 initrd ${pixie-base}/boot/pixie-live-env/initrd
 boot

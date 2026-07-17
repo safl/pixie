@@ -103,7 +103,7 @@ class PlanRenderer:
         if self._live_env_dir is None:
             return False
         return all(
-            (self._live_env_dir / name).is_file() for name in ("vmlinuz", "initrd", "squashfs")
+            (self._live_env_dir / name).is_file() for name in ("vmlinuz", "initrd", "live.squashfs")
         )
 
     def render(self, machine: Machine, ctx: RenderContext) -> str:

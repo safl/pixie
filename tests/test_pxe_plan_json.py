@@ -99,7 +99,7 @@ def test_ipxe_plan_pixie_inventory_with_staged_artifacts_renders_live_env(
     live_env = client.app.state.live_env_dir  # type: ignore[attr-defined]
     assert isinstance(live_env, Path)
     live_env.mkdir(parents=True, exist_ok=True)
-    for name in ("vmlinuz", "initrd", "squashfs"):
+    for name in ("vmlinuz", "initrd", "live.squashfs"):
         (live_env / name).write_bytes(b"stub")
     try:
         _seed_machine(client, "aa:bb:cc:dd:ee:13", "pixie-inventory")
@@ -109,8 +109,8 @@ def test_ipxe_plan_pixie_inventory_with_staged_artifacts_renders_live_env(
         assert "boot=live" in body
         assert "/boot/pixie-live-env/vmlinuz" in body
         assert "/boot/pixie-live-env/initrd" in body
-        assert "/boot/pixie-live-env/squashfs" in body
+        assert "/boot/pixie-live-env/live.squashfs" in body
         assert "pixie.mac=aa:bb:cc:dd:ee:13" in body
     finally:
-        for name in ("vmlinuz", "initrd", "squashfs"):
+        for name in ("vmlinuz", "initrd", "live.squashfs"):
             (live_env / name).unlink(missing_ok=True)

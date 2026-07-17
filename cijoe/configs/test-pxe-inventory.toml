@@ -71,7 +71,7 @@ needle = "/boot/pixie-live-env/initrd"
 # /boot/pixie-live-env/squashfs and pivots.
 [[test.pxe.chain_markers]]
 key = "live-env-squashfs"
-needle = "/boot/pixie-live-env/squashfs"
+needle = "/boot/pixie-live-env/live.squashfs"
 
 # Kernel boots. Linux prints ``Linux version`` from the kernel
 # decompressor.
