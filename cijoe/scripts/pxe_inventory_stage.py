@@ -97,7 +97,7 @@ def main(args, cijoe) -> int:
     shutil.copy2(vmlinuz, live_env / "vmlinuz")
     log.error(f"pxe_inventory_stage: copying {initrd.name} -> {live_env / 'initrd'}")
     shutil.copy2(initrd, live_env / "initrd")
-    log.error(f"pxe_inventory_stage: copying {squashfs.name} -> {live_env / 'squashfs'}")
+    log.error(f"pxe_inventory_stage: copying {squashfs.name} -> {live_env / 'live.squashfs'}")
     shutil.copy2(squashfs, live_env / "live.squashfs")
 
     # World-readable so the pixie container's non-root uvicorn can

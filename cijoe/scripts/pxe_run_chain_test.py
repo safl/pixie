@@ -105,7 +105,7 @@ def main(args, cijoe) -> int:
             live_env_dir = workspace / "live-env"
             missing = [
                 name
-                for name in ("vmlinuz", "initrd", "squashfs")
+                for name in ("vmlinuz", "initrd", "live.squashfs")
                 if not (live_env_dir / name).is_file()
             ]
             if missing:
