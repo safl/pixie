@@ -1031,12 +1031,17 @@ def _verify_flash_effects(seed_base: str, mac: str, workspace: Path) -> int:
     # ``client-blank.qcow2`` is the qcow2 the client wrote through;
     # convert to raw so we can seek(0) + read the first bytes without
     # depending on a qcow2 parser. qemu-img is on the runner already
-    # (we used it to create the disk).
+    # (we used it to create the disk). ``-U`` bypasses the shared-
+    # write lock QEMU still holds on the qcow2 -- the client VM is
+    # tore down in the outer ``finally``, not here, so at this point
+    # the file is still in use. Read-only convert is safe with -U;
+    # the qcow2 metadata is stable enough to read the leading raw
+    # sectors even while the guest keeps running.
     blank_qcow = workspace / "client-blank.qcow2"
     raw_dump = workspace / "client-blank.raw"
     log.info(f"Converting {blank_qcow} to raw for marker check")
     conv = subprocess.run(
-        ["qemu-img", "convert", "-O", "raw", str(blank_qcow), str(raw_dump)],
+        ["qemu-img", "convert", "-U", "-O", "raw", str(blank_qcow), str(raw_dump)],
         capture_output=True,
         text=True,
         check=False,
