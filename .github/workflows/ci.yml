@@ -300,3 +300,81 @@ jobs:
           name: test-pxe-ramboot-workspace
           path: cijoe/_build/test-pxe
           if-no-files-found: warn
+
+  test-pxe-inventory:
+    name: PXE inventory chain test (containerized pixie + client QEMU VM)
+    # Depends on the netboot-pc bake for the live-env media that
+    # pixie serves at /boot/pixie-live-env/. No disk image assembly
+    # here (unlike ramboot), so the runner does not need
+    # squashfs-tools / rsync / mkfs.ext4.
+    #
+    # NOT REQUIRED yet. As of the first run of this job the live-env's
+    # Debian live-boot init exits with code 1 in ~2.4 s of boot: the
+    # initrd carries ``scripts/live`` + ``/usr/bin/live-boot`` + the
+    # ``lib/live/boot/`` components but none of the ``scripts/live-top``
+    # / ``scripts/live-premount`` / ``scripts/live-bottom`` hook dirs
+    # ramboot's own path builds around, so ``run_scripts`` finds
+    # nothing and mountroot returns without mounting a rootfs. This is
+    # the same failure signature the lab appliance (matx-bmc) hits;
+    # having the QEMU job catch it in CI lets the fix iterate against
+    # a real reproducer. ``continue-on-error`` so the job runs +
+    # publishes serial logs + workspace + cijoe-output on every merge,
+    # but a red doesn't block the merge queue. Flip back to required
+    # once the initrd is fixed.
+    continue-on-error: true
+    needs: build-media
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install host tools (qemu, dnsmasq, ipxe, bridge)
+        run: |
+          set -eu
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            qemu-system-x86 \
+            qemu-utils \
+            dnsmasq \
+            ipxe \
+            bridge-utils \
+            iproute2
+          sudo chmod a+rw /dev/kvm
+          ls -la /dev/kvm
+
+      - name: Install cijoe
+        run: pipx install --force cijoe
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v8.1.0
+
+      - name: Download netboot-pc bake artifacts
+        uses: actions/download-artifact@v7
+        with:
+          name: pixie-netboot-pc-x86_64
+          path: ~/system_imaging/disk/
+
+      - name: Show downloaded artifact contents
+        run: |
+          set -eu
+          echo "--- ~/system_imaging/disk (recursive) ---"
+          find ~/system_imaging/disk -maxdepth 5 -print
+
+      - name: Run PXE inventory chain test
+        run: make test-pxe-inventory
+
+      - name: Upload cijoe output
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: cijoe-output-test-pxe-inventory
+          path: cijoe/cijoe-output
+          if-no-files-found: warn
+
+      - name: Upload PXE workspace (serial logs, dnsmasq.log)
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: test-pxe-inventory-workspace
+          path: cijoe/_build/test-pxe
+          if-no-files-found: warn

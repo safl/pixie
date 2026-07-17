@@ -170,9 +170,7 @@ def test_resolve_datetime_format_env_var_fallback(
     assert out == "16 Jul 2026"
 
 
-def test_db_override_wins_over_env_var(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_db_override_wins_over_env_var(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """DB override is FIRST in the resolution chain, so a Settings-
     page pick trumps the compose envvar. Guards the /ui/settings
     write path against a surprise revert on the next render."""
