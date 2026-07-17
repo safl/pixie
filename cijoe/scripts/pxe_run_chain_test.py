@@ -44,6 +44,7 @@ import subprocess
 import threading
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from argparse import ArgumentParser
 from pathlib import Path
@@ -77,13 +78,23 @@ FLASH_TARGET_SERIAL = "PIXIETEST"
 # written; adjust the QEMU virtio-blk backing store below if this
 # tag ever exceeds ~11 GiB uncompressed.
 NOSI_FLASH_TAG = "2026.W29"
-NOSI_FLASH_IMAGE = f"oras://ghcr.io/safl/nosi/debian-13-headless:{NOSI_FLASH_TAG}"
+# Real nosi catalog URL. The flash + tui tests POST this to
+# pixie's ``/ui/catalog/import`` which fetches, parses, and
+# upserts every entry -- exercising the real catalog wire (HTTPS
+# to github.com/safl/nosi releases, real TOML parse against the
+# real schema) instead of a hand-authored POST /catalog/entries.
+# Pinned by tag so a weekly nosi release cannot silently shift
+# what the test targets.
+NOSI_CATALOG_URL = f"https://github.com/safl/nosi/releases/download/{NOSI_FLASH_TAG}/catalog.toml"
+# Names of the catalog entries the flash + tui tests pick after
+# import. Must match nosi's published entry names for the pinned
+# tag exactly; a rename upstream fails the test on the fetch step
+# with "no entry named ...", which is louder + more actionable
+# than an empty catalog. Reflect what's in the fetched catalog
+# body -- see NOSI_CATALOG_URL for the source of truth.
+NOSI_FLASH_ENTRY_NAME = f"nosi debian-13-headless (x86_64, {NOSI_FLASH_TAG})"
 NOSI_FLASH_FORMAT = "img.gz"
-# Small real nosi artifact for the tui picker (~70 MiB vs 2.6 GiB
-# for the flash test). Same tag so bumping ``NOSI_FLASH_TAG`` moves
-# both tests in lockstep -- a nosi format change lands consistently
-# across the CI matrix or not at all.
-NOSI_TUI_IMAGE = f"oras://ghcr.io/safl/nosi/debian-13-headless-netboot:{NOSI_FLASH_TAG}"
+NOSI_TUI_ENTRY_NAME = f"nosi debian-13-headless netboot bundle (x86_64, {NOSI_FLASH_TAG})"
 NOSI_TUI_FORMAT = "tar.gz"
 # Bigger backing store than the other tests (which use 8 GiB and
 # never populate more than ~64 KiB) so the real debian-13-headless
@@ -197,7 +208,8 @@ def main(args, cijoe) -> int:
             log.info(
                 "Seeding pixie catalog + binding machine to "
                 f"{cfg.get('flash_boot_mode', 'pixie-flash-once')} "
-                f"(real image: {NOSI_FLASH_IMAGE})"
+                f"(real nosi catalog: {NOSI_CATALOG_URL}, "
+                f"target entry: {NOSI_FLASH_ENTRY_NAME!r})"
             )
             seed_err = _seed_flash_and_bind(seed_base, admin_password, cfg)
             if seed_err:
@@ -959,6 +971,80 @@ def _bind_inventory(seed_base: str, admin_password: str, cfg) -> int:
 # ---------- flash mode: seed synthetic image + bind pixie-flash-once -------
 
 
+def _import_catalog(seed_base: str, cookie: str, catalog_url: str) -> int:
+    """Drive pixie's ``POST /ui/catalog/import`` with the real nosi
+    catalog URL. This hits pixie's own import path (httpx fetch,
+    parse_catalog_toml, upsert every entry) rather than the test
+    hand-authoring a single POST /catalog/entries -- so a nosi
+    schema break OR a change to pixie's parser is caught by CI, not
+    silently masked.
+
+    Returns 0 on success; errno.EPROTO if the form POST is rejected;
+    errno.ENOENT if the import redirect suggests a validation error
+    (empty entry list, unreachable URL). ``/ui/catalog/import``
+    always redirects to /ui/catalog on both success and failure, so
+    verify the outcome by GETting /catalog next."""
+    body = urllib.parse.urlencode({"url": catalog_url}).encode("utf-8")
+    req = urllib.request.Request(
+        f"{seed_base}/ui/catalog/import",
+        data=body,
+        method="POST",
+        headers={
+            "Content-Type": "application/x-www-form-urlencoded",
+            "Cookie": cookie,
+        },
+    )
+    log.info(f"POST /ui/catalog/import url={catalog_url!r}")
+    # urllib follows the 303-See-Other redirect back to /ui/catalog
+    # which returns 200 (HTML); we do not care about the body -- the
+    # subsequent _catalog_has_entry check validates the store side.
+    try:
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            if resp.status not in (200, 303):
+                log.error(f"POST /ui/catalog/import returned {resp.status}")
+                return errno.EPROTO
+    except urllib.error.HTTPError as exc:
+        log.error(f"POST /ui/catalog/import: HTTP {exc.code}")
+        return errno.EPROTO
+    return 0
+
+
+def _catalog_has_entry(seed_base: str, entry_name: str) -> bool:
+    """GET /catalog + return True iff an entry with the given name
+    is present. Used after ``/ui/catalog/import`` to prove the
+    import actually populated the store."""
+    try:
+        with urllib.request.urlopen(f"{seed_base}/catalog", timeout=5) as resp:
+            entries = json.loads(resp.read()).get("entries", [])
+    except (urllib.error.URLError, OSError):
+        return False
+    return any(e.get("name") == entry_name for e in entries)
+
+
+def _fetch_entry(seed_base: str, cookie: str, entry_name: str) -> int:
+    """POST /catalog/entries/<name>/fetch to trigger pixie's fetch
+    pipeline on a specific already-imported entry. Path-encodes the
+    name so spaces + parens in nosi's ``nosi debian-13-headless
+    (x86_64, TAG)``-style names survive."""
+    encoded = urllib.parse.quote(entry_name, safe="")
+    req = urllib.request.Request(
+        f"{seed_base}/catalog/entries/{encoded}/fetch",
+        data=b"",
+        method="POST",
+        headers={"Content-Type": "application/json", "Cookie": cookie},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            if resp.status != 202:
+                log.error(f"POST /catalog/entries/{entry_name}/fetch returned {resp.status}")
+                return errno.EPROTO
+    except urllib.error.HTTPError as exc:
+        log.error(f"POST /catalog/entries/{entry_name}/fetch: HTTP {exc.code}")
+        return errno.EPROTO
+    log.info(f"Fetch triggered for {entry_name!r}")
+    return 0
+
+
 def _post_flash_inventory(seed_base: str, mac: str, disk_serial: str) -> int:
     """The pixie-flash bind refuses unless the machine already has an
     inventory entry naming ``disk_serial``. Live-env clients POST that
@@ -1005,8 +1091,8 @@ def _seed_flash_and_bind(seed_base: str, admin_password: str, cfg) -> int:
     ghcr.io through the oras client. Fetch is the slow leg (~2.6
     GiB compressed) -- allow ``FETCH_TIMEOUT_ORAS`` for it rather
     than the short local-http budget the ramboot/tui modes use."""
-    image_url = str(cfg.get("nosi_flash_image", NOSI_FLASH_IMAGE))
-    image_format = str(cfg.get("nosi_flash_format", NOSI_FLASH_FORMAT))
+    catalog_url = str(cfg.get("nosi_catalog_url", NOSI_CATALOG_URL))
+    entry_name = str(cfg.get("nosi_flash_entry_name", NOSI_FLASH_ENTRY_NAME))
     mac = cfg["client_mac"]
     disk_serial = str(cfg.get("target_disk_serial", FLASH_TARGET_SERIAL))
     boot_mode = str(cfg.get("flash_boot_mode", "pixie-flash-once"))
@@ -1022,15 +1108,24 @@ def _seed_flash_and_bind(seed_base: str, admin_password: str, cfg) -> int:
         log.error(f"login failed: {exc}")
         return errno.EACCES
 
-    if err := _add_and_fetch(seed_base, cookie, "flash-target", image_url, image_format):
+    if err := _import_catalog(seed_base, cookie, catalog_url):
+        return err
+    if not _catalog_has_entry(seed_base, entry_name):
+        log.error(
+            f"catalog import from {catalog_url!r} did not surface expected entry "
+            f"{entry_name!r}; nosi published entry names for tag {NOSI_FLASH_TAG!r} "
+            "may have drifted from what this test expects."
+        )
+        return errno.ENOENT
+    if err := _fetch_entry(seed_base, cookie, entry_name):
         return err
 
     log.info(
-        f"Waiting up to {FETCH_TIMEOUT_ORAS}s for pixie to pull {image_url} "
-        "from ghcr.io (real nosi image, ~2.6 GiB compressed)"
+        f"Waiting up to {FETCH_TIMEOUT_ORAS}s for pixie to pull "
+        f"{entry_name!r} from ghcr.io (real nosi image, ~2.6 GiB compressed)"
     )
     try:
-        image_sha = _wait_content_sha(seed_base, "flash-target", timeout=FETCH_TIMEOUT_ORAS)
+        image_sha = _wait_content_sha(seed_base, entry_name, timeout=FETCH_TIMEOUT_ORAS)
     except TimeoutError as exc:
         log.error(str(exc))
         return errno.ETIMEDOUT
@@ -1256,8 +1351,8 @@ def _seed_tui_and_bind(seed_base: str, admin_password: str, cfg) -> int:
     test), and 70 MiB fetches from ghcr.io in a fraction of the
     time. Still exercises the real oras client + real ghcr auth +
     real bundle unpack."""
-    image_url = str(cfg.get("nosi_tui_image", NOSI_TUI_IMAGE))
-    image_format = str(cfg.get("nosi_tui_format", NOSI_TUI_FORMAT))
+    catalog_url = str(cfg.get("nosi_catalog_url", NOSI_CATALOG_URL))
+    entry_name = str(cfg.get("nosi_tui_entry_name", NOSI_TUI_ENTRY_NAME))
     mac = cfg["client_mac"]
 
     try:
@@ -1266,15 +1361,24 @@ def _seed_tui_and_bind(seed_base: str, admin_password: str, cfg) -> int:
         log.error(f"login failed: {exc}")
         return errno.EACCES
 
-    if err := _add_and_fetch(seed_base, cookie, "tui-picker-row", image_url, image_format):
+    if err := _import_catalog(seed_base, cookie, catalog_url):
+        return err
+    if not _catalog_has_entry(seed_base, entry_name):
+        log.error(
+            f"catalog import from {catalog_url!r} did not surface expected entry "
+            f"{entry_name!r}; nosi published entry names for tag {NOSI_FLASH_TAG!r} "
+            "may have drifted from what this test expects."
+        )
+        return errno.ENOENT
+    if err := _fetch_entry(seed_base, cookie, entry_name):
         return err
 
     log.info(
-        f"Waiting up to {FETCH_TIMEOUT_ORAS}s for pixie to pull {image_url} "
-        "from ghcr.io (real nosi netboot bundle, ~70 MiB tar.gz)"
+        f"Waiting up to {FETCH_TIMEOUT_ORAS}s for pixie to pull "
+        f"{entry_name!r} from ghcr.io (real nosi netboot bundle, ~70 MiB tar.gz)"
     )
     try:
-        _wait_content_sha(seed_base, "tui-picker-row", timeout=FETCH_TIMEOUT_ORAS)
+        _wait_content_sha(seed_base, entry_name, timeout=FETCH_TIMEOUT_ORAS)
     except TimeoutError as exc:
         log.error(str(exc))
         return errno.ETIMEDOUT
