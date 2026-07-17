@@ -116,37 +116,44 @@ pixie/
 
 ### Roadmap
 
-**PR 1 (v0.1.0) -- skeleton.** MIT-or-GPL license (see open), pyproject
-using uv, ruff + mypy + pytest wired, one CI workflow (lint + typecheck +
-pytest on Python 3.11-3.14, matching bty), one FastAPI app with `/healthz`
-+ session-cookie login/logout + a placeholder dashboard, one Containerfile
-staging the runtime toolchain (nbdkit + plugins, tftpd-hpa, curl, tar,
-gzip, zstd, xz, qemu-utils, ca-certificates), .gitignore, .dockerignore,
-README. No feature code beyond healthz + login. Publishes to PyPI + ghcr
-on tag.
+The four PR bands below all landed. Current focus is operator-UX polish
++ end-to-end hardware validation on the lab appliance (matx-bmc).
 
-**PR 2 (v0.2.0) -- catalog + fetch.** Ports withcache's Store class, ORAS
-client, catalog state, blob-serve, and download pipeline into
-`src/pixie/catalog/`. Ports nbdmux's `_fetch_and_decompress` +
-`_fetch_netboot_bundle` methods as the tar.gz-unpack half of `fetch`.
-Drops the misses / auto-fetch / cache-through surface per the audit. Adds
-`netboot_src` parsing + `netboot_ref` loose-parse-with-warning. Emits
-content-addressed `/artifacts/<sha256>/` on unpack. UI: catalog page with
-Fetch + Delete + Redownload buttons; no misses page, no cache-through
-prose.
+**PR 1 (shipped) -- skeleton.** pyproject on uv, ruff + mypy + pytest,
+CI on Python 3.11-3.14 mirroring bty, one FastAPI app with `/healthz`,
+session-cookie login, placeholder dashboard, one Containerfile staging
+the runtime toolchain (nbdkit + plugins, tftpd-hpa, curl, tar, gzip,
+zstd, xz, qemu-utils, ca-certificates). GPL-3.0-only. Publishes to PyPI
+(`pixie-lab`) + ghcr (`ghcr.io/safl/pixie`) on tag.
 
-**PR 3 (v0.3.0) -- exports + PXE + TFTP + TUI + pixie-lab.** Ports the
-nbdkit supervisor, export CRUD, machine registry, PXE plan renderer, iPXE
-templates, TFTP bootstrap, and Rich TUI. `pixie-lab` init/deploy/purge
-mirroring bty-lab. Templates keep their existing behaviour (console lines,
-modprobe blacklists, transparency comments) since those encode hardware
-lessons.
+**PR 2 (shipped) -- catalog + fetch.** Store class + ORAS client +
+catalog state + blob-serve + download pipeline live under
+`src/pixie/catalog/`. tar.gz netboot-bundle unpack pipeline folded in.
+`netboot_src` parsing + `netboot_ref` loose-parse-with-warning. No
+misses / auto-fetch / cache-through / warmer stages: presence on disk
+IS readiness. Content-addressed `/artifacts/<sha>/{vmlinuz,initrd,
+manifest.json}` + `/b/<sha>/<name>`.
 
-**PR 4 (v0.3.x) -- live-env media.** `pixie/media/` + `pixie/cijoe/`,
-bakes pixie-netboot-pc + pixie-ramboot-diag as GitHub release assets.
-Split from PR 3 because the media bake is a large, independently-testable
-diff (~5-10k LOC of live-build config) that can land after the container
-side is proven.
+**PR 3 (shipped) -- exports + PXE + TFTP + TUI + pixie-lab.** nbdkit
+supervisor, export CRUD, machine registry, PXE plan renderer, iPXE
+templates, in-process TFTP bootstrap, Rich TUI wholesale from bty.
+`pixie-lab init/deploy/purge` mirrors bty-lab shape. Templates keep
+their behaviour (console lines, modprobe blacklists, transparency
+comments) so hardware lessons survive.
+
+**PR 4 (shipped) -- live-env media.** `pixie-media/` + `cijoe/` bake
+`pixie-netboot-pc` (operator TUI live-env) and `pixie-ramboot-diag`
+(diagnostic screen) as GitHub release assets. Reference deploy stages
+the netboot-pc bake to `<data-dir>/live-env/`; the PXE renderer
+degrades to `unavailable.j2` when it is absent.
+
+**Ongoing -- operator UX + hardware validation.** Settings pane
+(timezone + strftime), machine record extensions (labels,
+sanboot_drive, target_disk_serial), inventory-derived flash-target
+picker, live-refresh on catalog + machines + dashboard, event log with
+kind + subject_kind filters, delete confirmations on destructive
+actions. End-to-end validation on matx-bmc pending target-side r8125
+autoload in the live-boot initrd.
 
 ### Relationship to bty / nbdmux / withcache
 
@@ -161,32 +168,33 @@ evolves separately afterwards.
 No migration script from an existing bty state.db. Fresh pixie install;
 operator re-adds catalog entries and re-fetches the images they want.
 
-## Open decisions
+## Decisions locked during PR 1-4
 
-Small calls I would otherwise silently make in PR 1. Answer any that
-you'd rather steer.
+License: GPL-3.0-only. Distribution: `pixie-lab` on PyPI with two
+console-scripts (`pixie` + `pixie-lab`), matching bty-lab. Env-var
+prefix `PIXIE_*` (e.g. `PIXIE_ADMIN_PASSWORD`). Data mount root
+`/var/lib/pixie/` with `blobs/`, `artifacts/`, `live-env/`, `state.db`.
+Admin password default in `pixie-lab`: `pixie`. Docs shape: slim
+README-first, operator narrative lives on `/ui/settings` and inline
+form help; PDF/HTML operator docs deferred until v1.0.
 
-- **License**. bty ships GPL-3.0-only. Pixie is also GPL-3.0-only unless
-  you'd rather MIT / Apache-2.0.
-- **PyPI package name.** `pixie` may be taken; falling back to `pixie-lab`
-  as the distribution + two console-scripts (`pixie` + `pixie-lab`)
-  matches how bty-lab / bty are shaped today.
-- **Config file.** `pixie.toml`, env-var prefix `PIXIE_*` (e.g.
-  `PIXIE_ADMIN_PASSWORD`).
-- **Admin password default in `pixie-lab`.** `pixie-lab` (mirrors bty-lab's
-  `bty-lab` default).
-- **Data mount root.** `/var/lib/pixie/` with subdirs `blobs/`,
-  `artifacts/`, `images/`, `state.db`, `session-secret`.
-- **Docs shape.** Slim README-first for v0.1-v0.3, add operator docs (PDF
-  + HTML via CI) later? Or match bty's docs tree from day one?
+Nosi coordination: option (b) as originally planned. Pixie
+loose-parses `netboot_ref` (accepted with a warning) and tight-emits
+`netboot_src`; nosi migrates on its own schedule.
 
-Higher-impact calls to answer explicitly:
+## Open
 
-- **Nosi coordination.** Option (b) is the current plan: pixie loose-parses
-  `netboot_ref`, tight-emits `netboot_src`, nosi migrates when convenient.
-  Alternatives are (a) coordinated nosi release before pixie v0.2 or (c)
-  nosi ships a schema v2 with `netboot_src` alongside a v1 with
-  `netboot_ref`.
+- **End-to-end validation on matx-bmc.** The netboot-pc initrd bakes
+  r8125 + r8169 + igb + e1000e drivers (PR safl/pixie#32) but the
+  target still stalls before Debian live-boot fetches its squashfs.
+  Blocks memory notes [[project_pixie_transition]] +
+  [[project_ramboot_architecture]] from graduating out of "in
+  progress".
+- **Backup / export / import for state.db.** Bty-web has this; pixie
+  does not yet. A tarball of `state.db` + selective `blobs/` +
+  `artifacts/` would let an operator migrate between hosts without
+  re-fetching every image. Deferred until an operator has enough
+  fetched to feel the migration pain.
 
 ## What lives elsewhere
 

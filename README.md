@@ -76,4 +76,4 @@ gated behind a marker so plain `pytest` skips them.
 
 ## License
 
-pixie is licensed under the Apache License 2.0. See `LICENSE`.
+pixie is licensed under GPL-3.0-only. See `LICENSE`.

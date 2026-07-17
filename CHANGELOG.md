@@ -16,6 +16,101 @@ to-end on real hardware.
 
 ### Added
 
+**Settings pane with per-operator display picks.** New top-nav
+pill `/ui/settings` with two knobs: display timezone (IANA zone
+name) and datetime format (strftime pattern). Both resolve override
+-> env (`PIXIE_DISPLAY_TZ`, `PIXIE_DATETIME_FORMAT`) -> built-in
+default (UTC + `%Y-%m-%d %H:%M:%S %Z`). A `settings` table lives on
+state.db via an idempotent additive migration. Every visible
+timestamp cell across dashboard, events, machines, machine-detail,
+catalog, and catalog-detail is threaded through a new `fmt_ts`
+Jinja filter, so a Settings change flips the whole UI in one place
+without a data step.
+
+**Live status pill for fetch phases.** The catalog page's status
+column now ticks through `downloading` (with `bytes / total` when
+Content-Length is present) -> `decompressing` -> `unpacking` while
+a Fetch is in flight, without a full page reload. Powered by a new
+`ProgressReporter` callback on `catalog._fetcher.fetch()`,
+`GET /ui/fetch-states.json` for the JSON echo, and a tiny in-page
+poller that starts on server-render if any row is in flight and
+stops when nothing is anymore.
+
+**Live refresh across machines list + detail + dashboard.**
+`GET /ui/machines-live.json` echoes the operator-visible per-machine
+fields keyed by MAC; the machines table + detail page poll it every
+5 s and rewrite cells in place. `GET /ui/dashboard-live.json` echoes
+the same stat block the dashboard cards render, and
+`GET /ui/events-live.json` the last N events with pre-formatted
+timestamps. Dashboard counters + recent-events feed refresh from
+those without a page reload.
+
+**Machine record extensions (labels, sanboot_drive,
+target_disk_serial).** Three additive columns on the machines table
+so an operator can tag a row for grouping / search, calibrate iPXE's
+BIOS drive slug (`0x80`, `0x81`, ...) for ipxe-exit, and pick a
+target disk serial from the reported inventory for the
+pixie-flash-* modes. Parsed via a shared validator so the JSON PUT
+and the form POST reject the same set. Labels render as light
+badges under the MAC on the list.
+
+**Flash-mode guard by inventory.** `pixie-flash-once` and
+`pixie-flash-always` bindings now require a target_disk_serial that
+matches the machine's stored inventory. Server-side raises 422 with
+three distinct failure lanes (no inventory yet -> bind
+pixie-inventory + power-cycle first; inventory present but no
+target picked; target serial not in the current inventory), and the
+machine detail form's Save button is JS-disabled until the
+constraint is met so the operator sees the prerequisite before
+clicking.
+
+**Image picker gated by boot_mode.** When a boot_mode does not
+consume an image, the picker (and its accompanying sanboot /
+target-disk fields) render truly `disabled` and take a
+`(not used by <mode>)` inline hint rather than a plain grey. The
+stored values still survive a mode flip via a submit-time re-enable,
+so a sanboot calibrated under ipxe-exit is not silently cleared when
+the operator swaps to ramboot. Ramboot additionally hides options
+whose blob is not fetched.
+
+**Events log page with kind + subject filters.** The events subnav
+grew two strict-equality dropdowns (kind + subject_kind) on the
+right slot. Both are allowlisted against the closed
+`KNOWN_EVENT_KINDS` registry + the observed subject_kind values, so
+a stale bookmark with a bogus value is silently dropped instead of
+rendering an empty page. Filters compose with the freeform q search
++ pagination.
+
+**Table shape ported wholesale from bty.** Catalog, machines, and
+events pages now render with bty's card-header contract: the title
+label on the left, an inline freeform filter beside it, and a
+Bootstrap `pagination-sm` list with per-page selector on the right,
+all on one row inside the card-header. Column headers are sortable
+via a shared `sort_header` macro whose URL grows a
+`?sort=<col>&dir=asc|desc` pair guarded by a per-page allowlist.
+Subnav strip trimmed to the promised contract: relative anchor
+links on the LEFT + inline forms on the RIGHT, nothing else.
+
+**Delete confirmations on destructive actions.** Machines list,
+catalog list, and catalog detail's Delete buttons now spawn a
+JS confirm dialog spelling out what gets deleted vs what stays (row
+vs blob vs both). The already-warned "Delete anyway" chains on
+catalog_detail keep their existing banner.
+
+**Richer hardware inventory rendering.** Machine detail's inventory
+pane now surfaces System / CPU / Memory / Network sections when the
+live env's pixie CLI reports them, falling back to the existing
+disks table + raw lshw JSON when a section is absent. Each section
+guards its own presence so a partial payload still displays the
+parts that did come through.
+
+**Closed-set event kinds with strict enforcement.**
+`pixie.events._kinds.KNOWN_EVENT_KINDS` names every kind pixie will
+emit; `EventsLog.emit()` raises `UnknownEventKind` on anything not in
+the frozenset. Missing emit sites (catalog blob deleted, catalog
+entry updated, catalog import ok / failed, export nbdkit spawned,
+TFTP started / stopped) all landed in this release cycle.
+
 **Operator TUI ported from bty wholesale.** The Rich-based five-stage
 wizard (source pick, catalog pick, image pick, disk pick, flash) that
 was the successful part of bty ships on pixie under the `pixie`
