@@ -86,14 +86,20 @@
                         {% if m.last_seen_ip %}<br><code>{{ m.last_seen_ip }}</code>{% endif %}
                     </td>
                     <td class="text-end text-nowrap">
-                        <a href="/ui/machines/{{ m.mac }}" class="btn btn-sm btn-outline-primary">
-                            <i class="bi bi-search"></i>
+                        <a href="/ui/machines/{{ m.mac }}"
+                           class="btn btn-sm btn-outline-primary"
+                           title="Open {{ m.mac }} detail"
+                           aria-label="Open {{ m.mac }} detail">
+                            <i class="bi bi-search" aria-hidden="true"></i>
                         </a>
                         <form method="post" action="/ui/machines/delete" class="d-inline"
                               onsubmit="return confirm('Delete machine record for {{ m.mac }}? Inventory + binding will be lost.');">
                             <input type="hidden" name="mac" value="{{ m.mac }}">
-                            <button type="submit" class="btn btn-sm btn-outline-danger">
-                                <i class="bi bi-trash"></i>
+                            <button type="submit"
+                                    class="btn btn-sm btn-outline-danger"
+                                    title="Delete {{ m.mac }}"
+                                    aria-label="Delete {{ m.mac }}">
+                                <i class="bi bi-trash" aria-hidden="true"></i>
                             </button>
                         </form>
                     </td>

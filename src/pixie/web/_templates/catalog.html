@@ -215,17 +215,21 @@
                         <form method="post" action="/ui/exports/delete" class="d-inline"
                               title="{% if exp is none %}no NBD export to stop{% else %}stop the NBD export ({{ exp.name }}); the catalog entry stays{% endif %}">
                             <input type="hidden" name="name" value="{{ exp.name if exp is not none else '' }}">
-                            <button type="submit" class="btn btn-sm btn-outline-warning"
+                            <button type="submit"
+                                    class="btn btn-sm btn-outline-warning"
+                                    aria-label="{% if exp is none %}No NBD export for {{ e.name }}{% else %}Stop NBD export {{ exp.name }}{% endif %}"
                                     {% if exp is none %}disabled{% endif %}>
-                                <i class="bi bi-stop-circle"></i>
+                                <i class="bi bi-stop-circle" aria-hidden="true"></i>
                             </button>
                         </form>
                         <form method="post" action="/ui/catalog/delete" class="d-inline"
                               title="Delete this catalog entry (does not delete the fetched blob)."
                               onsubmit="return confirm('Delete catalog entry {{ e.name }}? The fetched blob stays on disk.');">
                             <input type="hidden" name="name" value="{{ e.name }}">
-                            <button type="submit" class="btn btn-sm btn-outline-danger">
-                                <i class="bi bi-trash"></i>
+                            <button type="submit"
+                                    class="btn btn-sm btn-outline-danger"
+                                    aria-label="Delete catalog entry {{ e.name }}">
+                                <i class="bi bi-trash" aria-hidden="true"></i>
                             </button>
                         </form>
                     </td>

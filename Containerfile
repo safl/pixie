@@ -46,9 +46,9 @@ LABEL org.opencontainers.image.title="pixie" \
 #   qemu-utils:      qemu-img info + qemu-nbd for qcow2 handling.
 #   ca-certificates: HTTPS fetch of ORAS + release assets.
 #
-# The exact apt package names are subject to verification during PR 2
-# when the fetch pipeline actually lands and CI builds this image;
-# ubuntu:26.04 does not have full listings public at repo-init time.
+# Verified against ubuntu:26.04's package list in CI on every build;
+# a missing name flips the build red before merge. The container has
+# been rebuilt on every merged PR since the port PRs landed.
 RUN apt-get update \
  && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
         python3 \
