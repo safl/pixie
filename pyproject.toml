@@ -16,10 +16,11 @@ classifiers = [
     "Programming Language :: Python :: 3.14",
     "Operating System :: POSIX :: Linux",
 ]
-# Runtime deps kept intentionally lean for v0.1.0: the skeleton only
-# wires ``/healthz`` + session-cookie login/logout + a placeholder
-# dashboard. Feature deps (rich for the TUI, extra parsing libs) land
-# in the PRs that actually need them.
+# Runtime deps: FastAPI + uvicorn + Jinja stack + session-cookie signing
+# + form parsing + tomlkit for Settings round-trip + Rich for the TUI +
+# httpx for the catalog-import fetch. Kept intentionally lean; every
+# other pipeline uses stdlib (urllib for downloads, tarfile / lzma /
+# gzip / subprocess-to-zstd for decompression, sqlite3 for state).
 dependencies = [
     "fastapi>=0.115",
     "uvicorn[standard]>=0.30",
@@ -37,14 +38,18 @@ dependencies = [
     # Rich powers the operator TUI (``pixie`` console-script). Ported
     # wholesale from bty's Textual-free Rich wizard, no fallback.
     "rich>=13",
+    # Catalog Import UI fetches a remote ``catalog.toml`` at the
+    # operator's click. The route imports httpx lazily so it stays out
+    # of the hot path, but the module has to be installed in prod for
+    # the route to work at all.
+    "httpx>=0.27",
 ]
 
 [project.scripts]
 # Two console-scripts from one distribution, mirroring how bty ships
 # ``bty`` + ``bty-lab`` from ``bty-lab``. ``pixie`` is the operator TUI
 # (Rich-based, runs in the pixie-media live env on target hardware);
-# ``pixie-lab`` is the deploy generator (init/deploy/purge/upgrade).
-# Both land empty in the skeleton and get bodies in later PRs.
+# ``pixie-lab`` is the deploy generator (init/deploy/purge).
 pixie = "pixie.tui:main"
 pixie-lab = "pixie.deploy:main"
 
@@ -64,9 +69,6 @@ dev = [
     "pytest>=8",
     "ruff>=0.6",
     "mypy>=1.10",
-    # FastAPI's TestClient uses httpx; not pulled in by ``fastapi``
-    # itself.
-    "httpx>=0.27",
 ]
 
 [tool.ruff]
