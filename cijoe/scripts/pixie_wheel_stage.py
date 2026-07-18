@@ -34,7 +34,7 @@ from pathlib import Path
 # variants share the same chroot tree, so they share the same
 # target dir.
 #
-# ``ramboot-init`` does not actually use the staged wheel at boot
+# ``nbdboot-init`` does not actually use the staged wheel at boot
 # time (its initrd pivots to the catalog image's root before any
 # of pixie's userspace runs), but the shared chroot's
 # ``0500-pixie-install`` hook expects to find the wheel under
@@ -45,7 +45,7 @@ TARGET_DIRS: dict[str, Path] = {
     "netboot-pc": _LIVE_CHROOT,
     "usbboot-pc": _LIVE_CHROOT,
     "usbboot-rpi": _LIVE_CHROOT,
-    "ramboot-init": _LIVE_CHROOT,
+    "nbdboot-init": _LIVE_CHROOT,
 }
 
 

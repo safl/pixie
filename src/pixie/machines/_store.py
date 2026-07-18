@@ -116,9 +116,13 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
     # Renamed 2026-07: ``boot_mode='ramboot'`` -> ``'nbdboot'``. The
     # earlier name evoked "loads root into RAM" which is not what
     # this mode does -- it's a netboot that mounts the root over
-    # NBD. Kernel cmdline still carries ``boot=ramboot`` (Debian
-    # live-boot's script name in nosi's shipped netboot bundles);
-    # this rename is operator-facing only. Migrate silently.
+    # NBD. Full rename: kernel cmdline says ``boot=nbdboot``, the
+    # initramfs-tools boot driver ``/scripts/nbdboot`` handles the
+    # mountroot() path, and every wire status token (``nbdboot.up``
+    # etc) matches. Nosi netboot bundles must be rebuilt against
+    # a pixie-media release that ships the renamed script; an
+    # older bundle looking for ``boot=ramboot`` will fall through
+    # and never NBD-mount. Migrate silently.
     conn.execute("UPDATE machines SET boot_mode = 'nbdboot' WHERE boot_mode = 'ramboot'")
 
 

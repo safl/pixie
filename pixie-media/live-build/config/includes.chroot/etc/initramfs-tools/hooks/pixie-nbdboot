@@ -1,5 +1,5 @@
 #!/bin/sh
-# initramfs-tools hook -- include the ramboot driver's binaries +
+# initramfs-tools hook -- include the nbdboot driver's binaries +
 # kernel modules in the initramfs.
 #
 # initramfs-tools runs every executable under
