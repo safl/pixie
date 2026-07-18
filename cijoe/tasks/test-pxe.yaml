@@ -17,7 +17,7 @@ doc: |
   HTTP re-DHCP -> ``chain http://pixie:8080/pxe-bootstrap.ipxe``
   -> per-MAC plan fetch. The default ``ipxe-exit`` plan pixie
   renders for an unbound machine is enough to prove the surface;
-  nbdboot + catalog fetch land in a follow-up.
+  ramboot + catalog fetch land in a follow-up.
 
   Requires: podman, qemu-system-x86, dnsmasq, ipxe (the Debian /
   Ubuntu package that ships ``/usr/lib/ipxe/undionly.kpxe`` +

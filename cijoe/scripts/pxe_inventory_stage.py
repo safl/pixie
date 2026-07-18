@@ -11,7 +11,7 @@ artifacts into ``_build/test-pxe/live-env/``, renamed to the plain
 ``vmlinuz`` / ``initrd`` / ``squashfs`` shape pixie's PXE renderer
 emits URLs for.
 
-Deliberately narrower than :mod:`pxe_nbdboot_stage`: no tar.gz bundle,
+Deliberately narrower than :mod:`pxe_ramboot_stage`: no tar.gz bundle,
 no ext4 disk image, no unsquashfs. The pixie-inventory chain does
 NOT go through catalog + NBD; the live-env kernel is served straight
 out of the operator-visible ``live-env/`` directory. That directory

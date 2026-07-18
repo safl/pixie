@@ -136,7 +136,7 @@ plan comment carries."""
 PXE_STATUS_RECEIVED = "pxe.status.received"
 """POST /pxe/<mac>/status from the target initrd or live env.
 ``details.status`` is the raw status token
-(``nbdboot.up``, ``nbdboot.nbd_connect_failed``, ``nbdboot.die``, ...)."""
+(``ramboot.up``, ``ramboot.nbd_connect_failed``, ... (legacy names on the wire))."""
 
 # ---------- TFTP subprocess supervisor ------------------------------
 #

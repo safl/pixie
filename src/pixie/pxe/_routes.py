@@ -200,8 +200,8 @@ def pxe_plan(request: Request, mac: str) -> PlainTextResponse:
 async def pxe_status(request: Request, mac: str) -> PlainTextResponse:
     """Accept a status token from the target's initrd or live env.
 
-    Pixie's nbdboot initrd + pixie-tui both fire tokens like
-    ``nbdboot.up`` / ``nbdboot.nbd_connect_failed`` / ``nbdboot.die``
+    Bty's ramboot dracut hook + pixie's own tui both fire tokens like
+    ``ramboot.up`` / ``ramboot.nbd_connect_failed`` / ``ramboot.die``
     so an operator watching /ui/events sees the boot flow land or
     fail. The body carries either ``status=<token>`` in a form or a
     JSON object -- normalise both to a string.
@@ -226,7 +226,7 @@ async def pxe_status(request: Request, mac: str) -> PlainTextResponse:
             status_token = raw.strip()
     if not status_token:
         # Fall back to a raw body read for the wget-style
-        # ``--post-data=status=X`` shape busybox uses in the nbdboot
+        # ``--post-data=status=X`` shape busybox uses in the ramboot
         # initrd (application/x-www-form-urlencoded handled above,
         # but old busybox drops the content-type header).
         raw_body = (await request.body()).decode("utf-8", errors="replace").strip()

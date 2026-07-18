@@ -375,7 +375,7 @@ def serve_blob(request: Request, sha: str, name: str) -> FileResponse:
 
 @router.api_route("/artifacts/{sha}/{filename}", methods=["GET", "HEAD"])
 def serve_artifact(request: Request, sha: str, filename: str) -> FileResponse:
-    """Content-addressed netboot artifact serve. iPXE.s ipxe_nbdboot
+    """Content-addressed netboot artifact serve. iPXE's ipxe_ramboot
     plan points at ``/artifacts/<content_sha256>/{vmlinuz,initrd}``.
 
     Open route + narrow allowlist for the ``filename`` segment; any
