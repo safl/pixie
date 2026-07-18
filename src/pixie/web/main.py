@@ -30,7 +30,7 @@ from typing import Any
 
 from fastapi import Depends, FastAPI, Form, Request, status
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
@@ -418,6 +418,34 @@ def create_app() -> FastAPI:
     @app.get("/healthz")
     def healthz() -> dict[str, Any]:
         return {"status": "ok", "service": "pixie", "version": pixie.__version__}
+
+    @app.api_route("/pivot/nbdboot.cpio.gz", methods=["GET", "HEAD"])
+    def pivot_nbdboot() -> Response:
+        """Serve the nbdboot pivot overlay as a gzipped newc-cpio.
+
+        Loaded by ``ipxe/nbdboot.j2`` as a supplementary ``initrd``
+        directive after nosi's own initrd. Linux concatenates cpio
+        streams during initramfs unpack; same-path entries from a
+        later overlay win, so ``/scripts/nbdboot`` here shadows any
+        legacy ``/scripts/ramboot`` in nosi's baked initrd -- and a
+        future nosi release can ship a generic initrd (no
+        pixie-flavour pivot script) without breaking anything on
+        pixie's side.
+
+        Route is OPEN by design (the target holds no session cookie
+        at boot). Built once per app startup from
+        :mod:`pixie.pivot`; the bytes are byte-identical across
+        builds so a downstream cacher can treat the URL as
+        immutable per pixie release."""
+        from pixie.pivot import build_pivot_cpio_gz
+
+        # Rebuilt lazily but memoised on ``app.state`` so the second
+        # + subsequent hits don't pay the (~ms) cpio-assembly cost.
+        blob = getattr(app.state, "pivot_nbdboot_cpio_gz", None)
+        if blob is None:
+            blob = build_pivot_cpio_gz()
+            app.state.pivot_nbdboot_cpio_gz = blob
+        return Response(content=blob, media_type="application/gzip")
 
     @app.get("/", include_in_schema=False)
     def root() -> RedirectResponse:
