@@ -109,10 +109,16 @@ class PlanRenderer:
 
     def render(self, machine: Machine, ctx: RenderContext) -> str:
         mode = machine.boot_mode
+        # Per-machine ``extra_cmdline`` fully overrides the deploy-wide
+        # default so an operator can pin a hardware-specific workaround
+        # to ONE quirky target without dragging every other machine's
+        # cmdline along with it. Blank per-machine value falls back to
+        # the ctx-carried (settings-then-env) default.
+        effective_extra = machine.extra_cmdline or ctx.extra_cmdline
         if mode == "ipxe-exit":
             return self._env.get_template("exit.j2").render(mac=machine.mac)
         if mode == "nbdboot":
-            return self._render_nbdboot(machine, ctx)
+            return self._render_nbdboot(machine, ctx, effective_extra)
         if mode in LIVE_ENV_MODES:
             if not self._live_env_ready():
                 # netboot-pc bake artifacts have not been staged on
@@ -129,7 +135,7 @@ class PlanRenderer:
                 boot_mode=mode,
                 host=ctx.host,
                 port=ctx.port,
-                extra_cmdline=ctx.extra_cmdline,
+                extra_cmdline=effective_extra,
             )
         # Unknown mode: refuse loudly rather than falling through.
         return self._env.get_template("unavailable.j2").render(
@@ -143,7 +149,7 @@ class PlanRenderer:
 
     # ---------- nbdboot resolution ---------------------------------
 
-    def _render_nbdboot(self, machine: Machine, ctx: RenderContext) -> str:
+    def _render_nbdboot(self, machine: Machine, ctx: RenderContext, extra_cmdline: str = "") -> str:
         image_sha = machine.image_content_sha256
         if not image_sha:
             return self._unavailable(
@@ -209,6 +215,7 @@ class PlanRenderer:
             nbd_name=export_name,
             bundle_sha=bundle_entry.content_sha256,
             overlay_size=ctx.overlay_size,
+            extra_cmdline=extra_cmdline,
         )
 
     def _unavailable(self, machine: Machine, reason: str) -> str:

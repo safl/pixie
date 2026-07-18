@@ -1,4 +1,5 @@
 {% extends "layout.html" %}
+{% from "_partials/page_description.html" import page_description %}
 {% block title %}{{ machine.mac }} - pixie{% endblock %}
 {% block subnav %}
 <div class="subnav-strip">
@@ -17,6 +18,7 @@
 </div>
 {% endblock %}
 {% block content %}
+{{ page_description('pc-display-horizontal', 'Everything pixie knows about one target: telemetry, current binding, inventory the live env posts back, and events scoped to this MAC. Editing the binding changes what pixie serves on this target\'s next PXE; labels and inventory are stored independently of the binding.') }}
 <div class="card shadow-sm mb-4">
     <div class="card-header bg-light d-flex align-items-center">
         <h2 class="h5 mb-0"><i class="bi bi-pc-display me-2"></i><code>{{ machine.mac }}</code></h2>
@@ -216,6 +218,44 @@
                         power-cycle this target, and its disks will populate here.
                     </div>
                     {% endif %}
+                </div>
+            </div>
+
+            {# ---- Per-machine extra kernel cmdline -------------------
+
+               Overrides the deploy-wide PIXIE_LIVE_ENV_EXTRA_CMDLINE
+               for THIS machine. Blank falls back to the global; a
+               non-blank value fully replaces (does not concatenate)
+               so an operator can pin a hardware quirk to one target
+               without every other machine seeing the same tokens.
+               Consumed by the nbdboot + pixie-live-env templates. #}
+            <div data-policy-relevant="nbdboot pixie-flash-once pixie-flash-always pixie-inventory pixie-tui">
+                <label for="extra_cmdline" class="form-label fw-semibold">
+                    Extra kernel cmdline
+                    <span class="policy-usage small text-muted fw-normal ms-1"></span>
+                </label>
+                <input type="text" id="extra_cmdline" name="extra_cmdline"
+                       class="form-control font-monospace"
+                       value="{{ machine.extra_cmdline or '' }}"
+                       placeholder="fall back to global default"
+                       list="extra-cmdline-suggestions"
+                       maxlength="256">
+                <datalist id="extra-cmdline-suggestions">
+                    <option value="pci=realloc=on,nocrs">
+                    <option value="intel_iommu=off">
+                    <option value="pci=nommconf">
+                </datalist>
+                <div class="form-text">
+                    Tokens appended verbatim to the kernel cmdline for
+                    <em>this machine only</em>. A non-blank value fully
+                    overrides the deploy-wide
+                    <code>PIXIE_LIVE_ENV_EXTRA_CMDLINE</code>. Blank
+                    falls back to the global (currently effective:
+                    {% if global_live_env_extra_cmdline %}
+                    <code>{{ global_live_env_extra_cmdline }}</code>
+                    {% else %}<em>none</em>{% endif %}).
+                    Whitespace-separated; single line. Known-good values
+                    per hardware in <a href="https://github.com/safl/pixie/blob/main/docs/hardware-quirks.md" target="_blank" rel="noreferrer">docs/hardware-quirks.md</a>.
                 </div>
             </div>
 
@@ -529,6 +569,7 @@
         targetSelect && targetSelect.tagName === "SELECT"
         && targetSelect.querySelectorAll('option:not([value=""]):not([disabled])').length > 0
     );
+    const extraCmdlineInput = form.querySelector("#extra_cmdline");
     const saveBtn = form.querySelector("#save-binding");
     const flashHint = form.querySelector("#flash-guard-hint");
     const dirtyHint = document.getElementById("bind-dirty-hint");
@@ -558,6 +599,7 @@
         boot_mode: pickedMode() || "",
         image_content_sha256: imgSelect ? imgSelect.value : "",
         target_disk_serial: (targetSelect && targetSelect.tagName === "SELECT") ? targetSelect.value : "",
+        extra_cmdline: extraCmdlineInput ? extraCmdlineInput.value : "",
     };
 
     function pickedMode() {
@@ -647,6 +689,7 @@
         if (imgSelect && imgSelect.value !== initial.image_content_sha256) return true;
         if (targetSelect && targetSelect.tagName === "SELECT"
             && targetSelect.value !== initial.target_disk_serial) return true;
+        if (extraCmdlineInput && extraCmdlineInput.value !== initial.extra_cmdline) return true;
         return false;
     }
 
@@ -696,6 +739,7 @@
     modeInputs.forEach((r) => r.addEventListener("change", refreshAll));
     if (imgSelect) imgSelect.addEventListener("change", refreshAll);
     if (targetSelect) targetSelect.addEventListener("change", refreshAll);
+    if (extraCmdlineInput) extraCmdlineInput.addEventListener("input", refreshAll);
 
     // Re-enable every mode-gated control at submit time so the
     // browser POSTs the current values even for fields the current

@@ -49,6 +49,7 @@ from pixie.events._kinds import (
     CATALOG_FETCH_DONE,
     CATALOG_FETCH_FAILED,
     CATALOG_FETCH_STARTED,
+    CATALOG_FETCH_UNCHANGED,
     CATALOG_IMPORT_FAILED,
     CATALOG_IMPORT_OK,
     EXPORT_NBDKIT_SPAWNED,
@@ -274,6 +275,180 @@ def _require_ui_auth(request: Request) -> None:
 #: the /ui/events log link. Tuned once here rather than sprinkled
 #: through the /ui/catalog + /ui/machines handlers as a magic 10.
 _RECENT_EVENTS_LIMIT = 10
+
+
+def _deployment_envvar_docs() -> list[dict[str, str]]:
+    """Documentation rows for the Settings > Deployment card. Kept in
+    ONE place so the docs and the actual env-var constants (elsewhere
+    in this module + in ``_auth``) can't drift silently. Rendered
+    verbatim in ``settings.html``; each row = one variable."""
+    from pixie.web._auth import ADMIN_PASSWORD_ENV
+
+    return [
+        {
+            "name": ADMIN_PASSWORD_ENV,
+            "default": "",
+            "purpose": (
+                "Password for the /ui/login form. MUST be set; pixie"
+                " refuses UI writes when unset. The compose bundle"
+                " ships with a random default operators are expected"
+                " to replace."
+            ),
+        },
+        {
+            "name": "PIXIE_PUBLIC_HOST",
+            "default": "127.0.0.1",
+            "purpose": (
+                "LAN hostname or IP pixie tells iPXE targets to fetch"
+                " artifacts from. Set to the pixie host's LAN address"
+                " on the deploy so PXE targets can reach it. The"
+                " compose bundle sources this from PIXIE_HOST_ADDR"
+                " in envvars."
+            ),
+        },
+        {
+            "name": "PIXIE_NBD_PUBLIC_HOST",
+            "default": "PIXIE_PUBLIC_HOST",
+            "purpose": (
+                "Separate NBD-server hostname if pixie is fronted by a"
+                " reverse proxy for HTTP but NBD is direct. Usually"
+                " equal to PIXIE_PUBLIC_HOST."
+            ),
+        },
+        {
+            "name": STATE_DIR_ENV,
+            "default": str(DEFAULT_STATE_DIR),
+            "purpose": (
+                "State root. Holds state.db, blobs (fetched image"
+                " bytes), artifacts (extracted netboot bundles), and"
+                " live-env by default."
+            ),
+        },
+        {
+            "name": LIVE_ENV_DIR_ENV,
+            "default": "$PIXIE_DATA_DIR/live-env",
+            "purpose": (
+                "Where the pixie live-env vmlinuz + initrd +"
+                " live.squashfs are staged. The pixie-* boot modes"
+                " degrade to an unavailable plan when this dir is"
+                " missing or incomplete."
+            ),
+        },
+        {
+            "name": "PIXIE_LIVE_ENV_EXTRA_CMDLINE",
+            "default": "",
+            "purpose": (
+                "Extra kernel-cmdline tokens appended to every"
+                " pixie-live-env chain. Global default; a machine"
+                " with its own extra_cmdline binding overrides. See"
+                " the Live-env card above for the live-editable"
+                " override."
+            ),
+        },
+        {
+            "name": FETCH_POOL_SIZE_ENV,
+            "default": str(DEFAULT_FETCH_POOL_SIZE),
+            "purpose": (
+                "How many catalog fetches run in parallel. Bump for"
+                " a fast pipe with lots of catalog entries; lower on"
+                " a shared network so a fetch storm doesn't starve"
+                " concurrent flashes."
+            ),
+        },
+        {
+            "name": NBD_BIND_ENV,
+            "default": DEFAULT_NBD_BIND,
+            "purpose": (
+                "Address nbdkit binds each per-image export to. Under"
+                " --network=host on the compose deploy, 0.0.0.0"
+                " reaches the LAN."
+            ),
+        },
+        {
+            "name": NBD_PORT_BASE_ENV,
+            "default": "10809",
+            "purpose": (
+                "First TCP port nbdkit reserves for exports; each"
+                " subsequent export lands on the next free port."
+            ),
+        },
+        {
+            "name": NBDKIT_BIN_ENV,
+            "default": DEFAULT_NBDKIT_BIN,
+            "purpose": "Path to the nbdkit binary. Defaults to `nbdkit` on $PATH.",
+        },
+        {
+            "name": TFTP_ENABLED_ENV,
+            "default": "false",
+            "purpose": (
+                "Set to 1 / true / yes / on to bring pixie's in-process"
+                " TFTP responder up on startup. Requires udp/69, hence"
+                " root; the compose file's --network=host + running as"
+                " root inside the container handles this."
+            ),
+        },
+        {
+            "name": TFTP_BIND_ENV,
+            "default": DEFAULT_TFTP_BIND,
+            "purpose": "Address pixie's TFTP responder listens on.",
+        },
+        {
+            "name": TFTP_PORT_ENV,
+            "default": str(DEFAULT_TFTP_PORT),
+            "purpose": "UDP port for pixie's TFTP responder. Standard PXE assumes 69.",
+        },
+        {
+            "name": TFTP_ROOT_ENV,
+            "default": "(package-bundled iPXE binaries)",
+            "purpose": (
+                "Directory pixie serves over TFTP. Defaults to the"
+                " iPXE binaries pixie ships (undionly.kpxe, ipxe.efi)."
+            ),
+        },
+        {
+            "name": TFTP_BIN_ENV,
+            "default": DEFAULT_TFTP_BIN,
+            "purpose": "Path to the in.tftpd binary. Only used when TFTP is enabled.",
+        },
+    ]
+
+
+def _deployment_state() -> dict[str, Any]:
+    """Snapshot of the resolved deployment knobs for rendering in the
+    Settings > Deployment card's DHCP + listen sections. Reads the
+    resolvers above (each hides the env-var fallback chain) so the
+    card shows the actual values pixie is using right now."""
+    host = (os.environ.get("PIXIE_PUBLIC_HOST") or "").strip() or "127.0.0.1"
+    return {
+        "host": host,
+        "port": 8080,  # pixie's HTTP listener is hard-coded on the compose bundle
+        "tftp_enabled": _tftp_enabled(),
+        "tftp_bind": _resolve_tftp_bind(),
+        "tftp_port": _resolve_tftp_port(),
+        "tftp_root": str(_resolve_tftp_root()),
+        "nbd_bind": _resolve_nbd_bind(),
+        "nbd_port_base": _resolve_nbd_port_base(),
+    }
+
+
+def _fetch_would_be_noop(entry: Any, store: Any) -> bool:
+    """Would :func:`pixie.catalog._fetcher.fetch` take its fast path
+    for this entry? True iff the entry is flagged fetched AND the
+    corresponding on-disk artifact (blob for a disk image, unpacked
+    manifest.json for a tar.gz netboot bundle) is still present.
+
+    Used by the ``/ui/catalog/fetch`` handler to distinguish an
+    Update click that would produce no visible change from one that
+    would actually re-download bytes. The operator gets a
+    catalog.fetch.unchanged event + a short-lived "already at latest"
+    pill instead of a millisecond flicker on the fetching badge."""
+    if not getattr(entry, "content_sha256", ""):
+        return False
+    if entry.format == "tar.gz":
+        manifest = store.artifact_path(entry.content_sha256, "manifest.json")
+        return bool(manifest.is_file())
+    blob = store.blob_path(entry.content_sha256)
+    return bool(blob.is_file())
 
 
 def _recent_events_for(events_log: EventsLog, subject_kind: str) -> list[Event]:
@@ -836,6 +1011,9 @@ def create_app() -> FastAPI:
                 "events": events,
                 "bindable_entries": bindable_entries,
                 "boot_mode_meta": BOOT_MODE_META,
+                "global_live_env_extra_cmdline": (
+                    request.app.state.settings_store.resolve_live_env_extra_cmdline()
+                ),
                 "authed": True,
                 "page": "machines",
             },
@@ -848,6 +1026,7 @@ def create_app() -> FastAPI:
         boot_mode: str = Form(...),
         image_content_sha256: str = Form(""),
         target_disk_serial: str = Form(""),
+        extra_cmdline: str = Form(""),
         _auth: None = Depends(_require_ui_auth),
     ) -> RedirectResponse:
         """Persist a boot-mode binding. Labels are edited on their
@@ -872,6 +1051,7 @@ def create_app() -> FastAPI:
                 image_content_sha256=image_content_sha256.strip().lower(),
                 labels=existing_labels,
                 target_disk_serial=target_disk_serial,
+                extra_cmdline=extra_cmdline,
             )
         return RedirectResponse(url="/ui/machines", status_code=status.HTTP_303_SEE_OTHER)
 
@@ -1250,9 +1430,49 @@ def create_app() -> FastAPI:
         states = request.app.state.fetch_states
         if states.get(name, {}).get("state") == "fetching":
             return RedirectResponse(url="/ui/catalog", status_code=status.HTTP_303_SEE_OTHER)
-        states[name] = {"state": "fetching", "started_at": _now_iso(), "error": None}
         is_update = bool(entry.content_sha256)
         events = getattr(request.app.state, "events_log", None)
+
+        # Unchanged fast path: if this is an Update click on an
+        # entry that IS already fetched AND its blob (or unpacked
+        # artifact set) is still on disk, the fetcher would take
+        # its own fast path and return immediately -- the operator
+        # sees no visible change, only a millisecond flicker on
+        # the state pill. Detect that here and record a short-lived
+        # "unchanged" acknowledgement instead so the row shows
+        # "already at latest" for ~8 s and the events log carries
+        # the operator's click as a catalog.fetch.unchanged event.
+        if is_update and _fetch_would_be_noop(entry, store):
+            states[name] = {
+                "state": "unchanged",
+                "at_iso": _now_iso(),
+                "content_sha256": entry.content_sha256,
+            }
+            if events is not None:
+                events.emit(
+                    CATALOG_FETCH_UNCHANGED,
+                    subject_kind="entry",
+                    subject_id=name,
+                    summary=f"{name}: already at latest (sha {entry.content_sha256[:12]})",
+                    details={"content_sha256": entry.content_sha256},
+                )
+
+            # Auto-clear the acknowledgement after a short window so
+            # a page revisit an hour later doesn't still show it. Uses
+            # the fetch pool as the timer host (a real fetch would use
+            # a pool slot too, so budgeting matches).
+            def _clear_unchanged() -> None:
+                import time as _time
+
+                _time.sleep(8.0)
+                cur = states.get(name)
+                if cur is not None and cur.get("state") == "unchanged":
+                    states.pop(name, None)
+
+            request.app.state.fetch_pool.submit(_clear_unchanged)
+            return RedirectResponse(url="/ui/catalog", status_code=status.HTTP_303_SEE_OTHER)
+
+        states[name] = {"state": "fetching", "started_at": _now_iso(), "error": None}
         if events is not None:
             events.emit(
                 CATALOG_FETCH_STARTED,
@@ -1545,10 +1765,14 @@ def create_app() -> FastAPI:
         fmt_effective = store.resolve_datetime_format()
         cmdline_override = store.get(KEY_LIVE_ENV_EXTRA_CMDLINE) or ""
         cmdline_effective = store.resolve_live_env_extra_cmdline()
+        deployment_envvars = _deployment_envvar_docs()
+        deployment_state = _deployment_state()
         return {
             "version": pixie.__version__,
             "authed": True,
             "page": "settings",
+            "deployment_envvars": deployment_envvars,
+            "deployment": deployment_state,
             "display_tz": {
                 "override": tz_override,
                 "effective": tz_effective,

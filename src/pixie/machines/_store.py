@@ -145,6 +145,7 @@ CREATE TABLE IF NOT EXISTS machines (
     image_content_sha256   TEXT NOT NULL DEFAULT '',
     labels                 TEXT NOT NULL DEFAULT '',
     target_disk_serial     TEXT NOT NULL DEFAULT '',
+    extra_cmdline          TEXT NOT NULL DEFAULT '',
     inventory_json         TEXT NOT NULL DEFAULT '',
     inventory_at           TEXT NOT NULL DEFAULT '',
     discovered_at          TEXT NOT NULL,
@@ -180,6 +181,8 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE machines ADD COLUMN labels TEXT NOT NULL DEFAULT ''")
     if "target_disk_serial" not in cols:
         conn.execute("ALTER TABLE machines ADD COLUMN target_disk_serial TEXT NOT NULL DEFAULT ''")
+    if "extra_cmdline" not in cols:
+        conn.execute("ALTER TABLE machines ADD COLUMN extra_cmdline TEXT NOT NULL DEFAULT ''")
     # Retired 2026-07 pre-1.0: sanboot_drive was carried on the bind
     # form as an iPXE ``sanboot`` BIOS drive slug, but pixie never
     # actually rendered it into any iPXE template -- the ipxe-exit
@@ -233,6 +236,14 @@ class Machine:
     image_content_sha256: str = ""
     labels: list[str] = field(default_factory=list)
     target_disk_serial: str = ""
+    extra_cmdline: str = ""
+    """Per-machine kernel-cmdline tokens appended to the pixie-live-env
+    + nbdboot chains AFTER the global ``PIXIE_LIVE_ENV_EXTRA_CMDLINE``
+    fallback. Blank means "no per-machine tokens, use the global";
+    non-blank fully overrides the global for THIS machine (does not
+    concatenate). Intended for the odd hardware quirk that needs a
+    workaround on ONE target without dragging the deploy-wide default
+    with it."""
     inventory: dict[str, Any] = field(default_factory=dict)
     inventory_at: str = ""
     discovered_at: str = field(default_factory=now_iso)
@@ -254,6 +265,8 @@ class Machine:
             out["labels"] = list(self.labels)
         if self.target_disk_serial:
             out["target_disk_serial"] = self.target_disk_serial
+        if self.extra_cmdline:
+            out["extra_cmdline"] = self.extra_cmdline
         if self.last_seen_ip:
             out["last_seen_ip"] = self.last_seen_ip
         if self.inventory:
@@ -301,6 +314,7 @@ class MachinesStore:
         image_content_sha256: str = "",
         labels: Sequence[str] | None = None,
         target_disk_serial: str = "",
+        extra_cmdline: str = "",
     ) -> Machine:
         """Operator-driven write: set boot mode + optional image ref.
         Creates the row if it doesn't exist; preserves discovery
@@ -311,6 +325,12 @@ class MachinesStore:
         ``target_disk_serial`` is the disk serial the live env's flash
         pipeline matches at flash time -- an operator picks it from
         the machine's reported inventory.
+        ``extra_cmdline`` is a space-separated string of tokens appended
+        to the kernel cmdline on the live-env + nbdboot chains for
+        this ONE machine, overriding the global
+        ``PIXIE_LIVE_ENV_EXTRA_CMDLINE`` fallback. Newlines are
+        rejected so a stray paste can't smuggle a second cmdline into
+        the iPXE render.
         """
         canon = normalise_mac(mac)
         if boot_mode not in BOOT_MODES:
@@ -319,6 +339,11 @@ class MachinesStore:
             raise ValueError("image_content_sha256 must be 64 lowercase hex chars")
         labels_json = _labels_to_json(list(labels or []))
         target_serial = (target_disk_serial or "").strip()
+        extra = (extra_cmdline or "").strip()
+        if "\n" in extra or "\r" in extra:
+            raise ValueError(
+                "extra_cmdline must be a single line (newlines truncate the iPXE render)"
+            )
 
         now = now_iso()
         with _DB_WRITE_LOCK, self._conn() as conn:
@@ -356,9 +381,9 @@ class MachinesStore:
                     """
                     INSERT INTO machines (
                         mac, boot_mode, image_content_sha256,
-                        labels, target_disk_serial,
+                        labels, target_disk_serial, extra_cmdline,
                         discovered_at, last_seen_at, last_seen_ip, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, '', ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, '', ?)
                     """,
                     (
                         canon,
@@ -366,6 +391,7 @@ class MachinesStore:
                         image_content_sha256,
                         labels_json,
                         target_serial,
+                        extra,
                         now,
                         now,
                         now,
@@ -377,7 +403,7 @@ class MachinesStore:
                     UPDATE machines
                     SET boot_mode = ?, image_content_sha256 = ?,
                         labels = ?, target_disk_serial = ?,
-                        updated_at = ?
+                        extra_cmdline = ?, updated_at = ?
                     WHERE mac = ?
                     """,
                     (
@@ -385,6 +411,7 @@ class MachinesStore:
                         image_content_sha256,
                         labels_json,
                         target_serial,
+                        extra,
                         now,
                         canon,
                     ),
@@ -577,12 +604,16 @@ def _row(r: sqlite3.Row) -> Machine:
         labels = _labels_from_json(r["labels"] or "")
     with contextlib.suppress(IndexError, KeyError):
         target_serial = r["target_disk_serial"] or ""
+    extra_cmdline = ""
+    with contextlib.suppress(IndexError, KeyError):
+        extra_cmdline = r["extra_cmdline"] or ""
     return Machine(
         mac=r["mac"],
         boot_mode=r["boot_mode"],
         image_content_sha256=r["image_content_sha256"],
         labels=labels,
         target_disk_serial=target_serial,
+        extra_cmdline=extra_cmdline,
         inventory=inv,
         inventory_at=inv_at,
         discovered_at=r["discovered_at"],

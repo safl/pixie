@@ -196,6 +196,22 @@
         .subnav-strip a:hover {
             color: #fff;
         }
+        /* Jump links (subnav-jumps) sit next to each other with a
+           visible gap so an operator scanning the strip sees them as
+           distinct anchors instead of one run-together phrase. The
+           parent flex sets gap=0.6rem for TOP-LEVEL children of the
+           strip, but the anchors nest inside a single .subnav-jumps
+           span; give that span its own gap. */
+        .subnav-strip .subnav-jumps {
+            gap: 1.1rem;
+        }
+        .subnav-strip .subnav-jumps > a {
+            padding: 0.1rem 0.15rem;
+            border-radius: 0.2rem;
+        }
+        .subnav-strip .subnav-jumps > a:hover {
+            background-color: rgba(255, 255, 255, 0.08);
+        }
         /* Surface shading ladder: card-header > thead > table body, each
            step lighter going down. Same three-tone recipe bty uses so a
            pixie machines / catalog table reads with the same depth cues
@@ -208,6 +224,37 @@
         }
         .card > .card-header.bg-light {
             background-color: #d2dbe6 !important;
+        }
+        /* Bootstrap's default .alert-warning is very-pale-yellow with a
+           faint amber text -- readable on print but low-contrast on
+           screen, especially for the small-text hints pixie uses on the
+           bind form + inventory "no data yet" callouts. Darken the text
+           and firm up the border so warnings actually catch the eye. */
+        .alert-warning {
+            color: #664200;
+            background-color: #fff3cd;
+            border-color: #ffd35a;
+        }
+        .alert-warning code {
+            color: #664200;
+        }
+        .alert-warning a {
+            color: #664200;
+            text-decoration: underline;
+        }
+        /* Page description strip: a one-paragraph orientation shown
+           at the top of every operator page (dashboard, catalog,
+           machines, events, settings, machine detail). Left accent
+           border marks it as "meta" content, distinct from the cards
+           below. Font size is smaller than the card body prose so a
+           returning operator can skim past it. */
+        .page-description {
+            padding: 0.5rem 0.85rem;
+            border-left: 3px solid var(--bs-primary);
+            background-color: rgba(13, 110, 253, 0.04);
+            border-radius: 0 0.2rem 0.2rem 0;
+            font-size: 0.9rem;
+            line-height: 1.4;
         }
     </style>
     <script src="/static/htmx.min.js"></script>

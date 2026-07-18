@@ -1,6 +1,7 @@
 {% extends "layout.html" %}
 {% from "_partials/table_helpers.html" import search_input, sort_header, pagination_inline %}
 {% from "_partials/recent_events.html" import recent_events_card %}
+{% from "_partials/page_description.html" import page_description %}
 {% block title %}Catalog - pixie{% endblock %}
 {% block subnav %}
 <nav class="navbar subnav-strip" aria-label="Section sub-navigation">
@@ -30,6 +31,7 @@
 </nav>
 {% endblock %}
 {% block content %}
+{{ page_description('journal-code', 'Images pixie can flash or netboot. Add an entry with a source URL, then fetch it to pull the bytes onto pixie. An entry is bindable once fetched; deletion is safe only after every machine pointing at it is rebound.') }}
 <div class="card" id="entries">
     {# Card header: title/label on the left, filter form inline in
        the middle, pagination + per-page on the right -- same
@@ -139,6 +141,21 @@
                         </span>
                         {% if st.error %}
                         <div class="text-muted small">{{ st.error }}</div>
+                        {% endif %}
+                        {% elif st.state == "unchanged" %}
+                        {# The operator clicked Update but the entry was
+                           already at the current sha and the on-disk
+                           bytes were intact. The pill lingers ~8 s (the
+                           handler auto-clears it) so the click has a
+                           visible acknowledgement, then the row falls
+                           back to the plain "fetched" badge. #}
+                        <span class="badge text-bg-info" title="the on-disk bytes match the currently-recorded sha; nothing to fetch">
+                            <i class="bi bi-check2-all me-1"></i>already at latest
+                        </span>
+                        {% if e.content_sha256 %}
+                        <div class="text-muted small font-monospace">
+                            {{ e.content_sha256[:12] }}
+                        </div>
                         {% endif %}
                         {% elif e.content_sha256 %}
                         <span class="badge text-bg-success">
