@@ -1,0 +1,86 @@
+name: Docs
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build:
+    name: Build docs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: astral-sh/setup-uv@v8.1.0
+        with:
+          python-version: "3.12"
+      - name: Install LaTeX (for PDF build)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            texlive-latex-recommended \
+            texlive-latex-extra \
+            texlive-fonts-recommended \
+            tex-gyre \
+            fonts-freefont-otf \
+            latexmk \
+            make
+      - name: Install docs tooling
+        run: uv tool install ./docs/tooling
+      - name: Build HTML
+        working-directory: docs
+        run: pixie-docs-build-html
+      - name: Build PDF
+        working-directory: docs
+        run: pixie-docs-build-pdf
+      - uses: actions/upload-artifact@v7
+        with:
+          name: docs-html
+          path: docs/_build/html
+      - uses: actions/upload-artifact@v7
+        with:
+          name: docs-pdf
+          path: docs/_build/latex/pixie.pdf
+
+  deploy:
+    name: Deploy to GitHub Pages
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+      contents: read
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: docs-html
+          path: html/
+      - uses: actions/configure-pages@v6
+      # When the deploy job is re-attempted within the same workflow
+      # run, the prior attempt's ``github-pages`` artifact survives.
+      # ``upload-pages-artifact`` happily adds a second one with the
+      # same name, then ``deploy-pages`` aborts on "Multiple artifacts
+      # named github-pages were unexpectedly found for this workflow
+      # run". Delete any pre-existing copy before the upload so the
+      # re-run is idempotent.
+      - name: Drop any prior github-pages artifact from this run
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          ids=$(gh api "repos/${{ github.repository }}/actions/runs/${RUN_ID}/artifacts" \
+            --jq '.artifacts[] | select(.name == "github-pages") | .id')
+          for id in ${ids}; do
+            echo "deleting stale github-pages artifact id=${id}"
+            gh api --method DELETE "repos/${{ github.repository }}/actions/artifacts/${id}"
+          done
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: html/
+      - id: deployment
+        uses: actions/deploy-pages@v5

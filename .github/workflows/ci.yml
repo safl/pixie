@@ -10,9 +10,24 @@ name: ci
 #   * ``build-media``: build the live-env media (netboot-pc + usbboot-pc
 #     variants) via the cijoe pipelines under cijoe/tasks/. Requires
 #     live-build + passwordless sudo; the runner has both.
+#   * ``build-wheel``: sdist + wheel for PyPI. Runs on every push +
+#     PR so the packaging story is exercised regardless of tag state.
+#   * ``publish-pypi``: trusted publishing of the wheel + sdist,
+#     fires ONLY on ``v*`` tag pushes. PyPI is for life -- a published
+#     version cannot be re-uploaded -- so the job gates on every
+#     prior job (test + integration + build-container + build-wheel
+#     + build-media + every PXE chain test) succeeding first.
 #
-# Publish jobs to PyPI + ghcr.io land in a follow-up PR once the
-# first operator-usable release is ready.
+# First publish (claiming the pixie-lab name) requires a one-time
+# PyPI setup: register a Pending Publisher on https://pypi.org
+# targeting:
+#   PyPI Project Name:  pixie-lab
+#   Owner:              safl
+#   Repository:         pixie
+#   Workflow filename:  ci.yml
+#   Environment name:   pypi
+# Then push a ``v*`` tag (e.g. ``v0.1.0``) and publish-pypi claims
+# and uploads the release.
 
 on:
   pull_request:
@@ -532,3 +547,58 @@ jobs:
           name: test-pxe-tui-workspace
           path: cijoe/_build/test-pxe
           if-no-files-found: warn
+
+  build-wheel:
+    name: Build wheel + sdist
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: astral-sh/setup-uv@v8.1.0
+        with:
+          python-version: "3.12"
+      - run: uv build
+      - uses: actions/upload-artifact@v7
+        with:
+          name: dist
+          path: dist/
+          if-no-files-found: error
+
+  publish-pypi:
+    name: Publish to PyPI
+    # Strictly last: gates on every prior job (test, integration,
+    # build-container, build-wheel, build-media, every PXE chain
+    # test) succeeding first. PyPI is for life; a version can never
+    # be re-uploaded, so we only ship once the whole release
+    # pipeline has gone through cleanly.
+    needs:
+      - test
+      - integration
+      - build-container
+      - build-wheel
+      - build-media
+      - test-pxe
+      - test-pxe-nbdboot
+      - test-pxe-inventory
+      - test-pxe-tui
+      - test-pxe-flash
+      - test-pxe-flash-always
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    environment:
+      name: pypi
+      url: https://pypi.org/p/pixie-lab
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          # Idempotent on retries -- if the version is already on PyPI
+          # (a previous half-failed run uploaded the wheel and a
+          # later job is retrying), succeed silently rather than
+          # fail.
+          skip-existing: true
