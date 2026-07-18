@@ -46,10 +46,10 @@ help:
 	@echo "  ipxe          build pixie's custom iPXE -> IPXE_OUT/ipxe.efi (default dist/ipxe/)"
 	@echo "  test-pxe      end-to-end PXE bootstrap chain test"
 	@echo "                  (needs podman + QEMU + KVM + dnsmasq; a few min wall clock)"
-	@echo "  test-pxe-ramboot  end-to-end PXE ramboot chain test"
+	@echo "  test-pxe-nbdboot  end-to-end PXE nbdboot chain test"
 	@echo "                  (same deps as test-pxe + a prior VARIANT=netboot-pc bake)"
 	@echo "  test-pxe-inventory  end-to-end PXE pixie-inventory chain test"
-	@echo "                  (same deps as test-pxe-ramboot; no catalog seed)"
+	@echo "                  (same deps as test-pxe-nbdboot; no catalog seed)"
 	@echo "  test-pxe-flash  end-to-end PXE pixie-flash-once chain test"
 	@echo "                  (same deps as test-pxe-inventory; small synthetic image)"
 	@echo "  test-pxe-flash-always  end-to-end PXE pixie-flash-always chain test"
@@ -124,19 +124,19 @@ test-pxe:
 
 # Ramboot chain test: bring up pixie, seed the catalog with a bundle
 # assembled from the netboot-pc bake artifacts + a synthetic disk
-# image, bind the client MAC to boot_mode=ramboot, PXE-boot QEMU, and
-# assert every marker in cijoe/configs/test-pxe-ramboot.toml shows up
-# through the initramfs's ramboot script. Depends on a prior
+# image, bind the client MAC to boot_mode=nbdboot, PXE-boot QEMU, and
+# assert every marker in cijoe/configs/test-pxe-nbdboot.toml shows up
+# through the initramfs.s nbdboot script. Depends on a prior
 # ``pixie-netboot-pc-x86_64`` bake staged under
 # ``~/system_imaging/disk/`` (or PIXIE_NETBOOT_ARTIFACT_DIR).
-test-pxe-ramboot:
-	cd cijoe && cijoe tasks/test-pxe-ramboot.yaml --monitor -c configs/test-pxe-ramboot.toml
+test-pxe-nbdboot:
+	cd cijoe && cijoe tasks/test-pxe-nbdboot.yaml --monitor -c configs/test-pxe-nbdboot.toml
 
 # Inventory chain test: bring up pixie with the netboot-pc bake
 # bind-mounted as its live-env dir, bind the client MAC to
 # boot_mode=pixie-inventory, PXE-boot QEMU, and assert the live-env
 # actually boots + posts an inventory blob back to pixie. Same
-# artifact dependency as test-pxe-ramboot (needs the netboot-pc
+# artifact dependency as test-pxe-nbdboot (needs the netboot-pc
 # bake).
 test-pxe-inventory:
 	cd cijoe && cijoe tasks/test-pxe-inventory.yaml --monitor -c configs/test-pxe-inventory.toml

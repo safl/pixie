@@ -22,7 +22,7 @@ Minimal end-to-end proof that pixie's PXE stack is wired correctly:
 6. On failure, dump the tail of the serial log + the tail of
    ``podman logs pixie-pxe-test`` for the post-mortem.
 
-The bind + flash portion (catalog seed + ramboot + NBD serve) is
+The bind + flash portion (catalog seed + nbdboot + NBD serve) is
 NOT exercised here; landing that needs the fetch-verb wire-up and
 pre-seeded artifacts. This test proves the *bootstrap* chain works
 end-to-end: real firmware PXE, real DHCP, real TFTP, real iPXE
@@ -49,14 +49,14 @@ PIXIE_HTTP_PORT = 8080
 CONTAINER_NAME = "pixie-pxe-test"
 CONTAINER_TAG = "pixie:pxetest"
 HEALTHZ_TIMEOUT = 120
-# ramboot / inventory / tui: pixie live env boot is done in ~5 min
+# nbdboot / inventory / tui: pixie live env boot is done in ~5 min
 # (netboot-pc squashfs fetch + Debian live-boot pivot dominate).
 # Full flash exercises the real oras pull (~2.6 GiB) + img.gz
 # decompress + dd of the uncompressed image (~10 GiB sparse) which
 # adds ~10 min. Keep the base short-mode timeout as-is and let
 # ``mode=flash`` bump its own budget.
 CHAIN_TIMEOUT = 300
-CHAIN_TIMEOUT_FLASH = 1800  # 30 min for the real-nosi flash / ramboot pipeline
+CHAIN_TIMEOUT_FLASH = 1800  # 30 min for the real-nosi flash / nbdboot pipeline
 FETCH_TIMEOUT = 120  # short-mode default (unused by the real-nosi tests)
 FETCH_TIMEOUT_ORAS = 900  # 15 min for the real-nosi oras pull + blob write
 # QEMU virtio-blk serial the test binds pixie-flash-once to. Chosen
@@ -91,13 +91,13 @@ NOSI_FLASH_ENTRY_NAME = f"nosi debian-13-headless (x86_64, {NOSI_FLASH_TAG})"
 NOSI_FLASH_FORMAT = "img.gz"
 NOSI_TUI_ENTRY_NAME = f"nosi debian-13-headless netboot bundle (x86_64, {NOSI_FLASH_TAG})"
 NOSI_TUI_FORMAT = "tar.gz"
-# Ramboot binds a real nosi disk image + its paired netboot bundle.
+# nbdboot binds a real nosi disk image + its paired netboot bundle.
 # The bundle is what iPXE fetches (kernel + initrd); the disk image
 # is what pixie's NBD export serves as the guest's root. Same pinned
 # tag as flash + tui so a bump moves all three tests together. The
 # names must match nosi's catalog.toml verbatim.
-NOSI_RAMBOOT_DISK_ENTRY_NAME = NOSI_FLASH_ENTRY_NAME
-NOSI_RAMBOOT_BUNDLE_ENTRY_NAME = NOSI_TUI_ENTRY_NAME
+NOSI_NBDBOOT_DISK_ENTRY_NAME = NOSI_FLASH_ENTRY_NAME
+NOSI_NBDBOOT_BUNDLE_ENTRY_NAME = NOSI_TUI_ENTRY_NAME
 # Bigger backing store than the other tests (which use 8 GiB and
 # never populate more than ~64 KiB) so the real debian-13-headless
 # image can dd into it without hitting qcow2 grow-and-write errors
@@ -128,10 +128,10 @@ def main(args, cijoe) -> int:
         client_log.unlink()
 
     mode = str(cfg.get("mode", "bootstrap")).lower()
-    if mode not in ("bootstrap", "ramboot", "inventory", "flash", "tui"):
+    if mode not in ("bootstrap", "nbdboot", "inventory", "flash", "tui"):
         log.error(
             f"unknown [test.pxe] mode={mode!r}; expected "
-            "'bootstrap', 'ramboot', 'inventory', 'flash', or 'tui'"
+            "'bootstrap', 'nbdboot', 'inventory', 'flash', or 'tui'"
         )
         return errno.EINVAL
 
@@ -145,7 +145,7 @@ def main(args, cijoe) -> int:
         dnsmasq = _start_dnsmasq(cfg, tftproot, workspace)
 
         # ``inventory`` + ``flash`` + ``tui`` all boot into pixie's
-        # own live env (only bootstrap + ramboot do not), so the
+        # own live env (only bootstrap + nbdboot do not), so the
         # live-env media must be staged inside the container ahead
         # of time. Verify the caller's workspace has the three files
         # before we start podman so a missing bake fails fast rather
@@ -188,20 +188,20 @@ def main(args, cijoe) -> int:
                 log.error(f"inventory bind failed: rc={seed_err}")
                 _dump_container_logs()
                 return seed_err
-        elif mode == "ramboot":
-            # No workspace HTTP server: ramboot's disk image + netboot
+        elif mode == "nbdboot":
+            # No workspace HTTP server: nbdboot.s disk image + netboot
             # bundle come from the real nosi catalog via oras through
             # pixie's own fetcher. Netboot bundle (~70 MiB tar.gz) is
             # fast; the disk image (~2.6 GiB img.gz -> ~10 GiB
             # decompressed to blob) dominates fetch wall clock.
             log.info(
-                "Seeding pixie catalog + binding machine to ramboot "
+                "Seeding pixie catalog + binding machine to nbdboot "
                 f"(real nosi catalog: {NOSI_CATALOG_URL}, disk: "
-                f"{NOSI_RAMBOOT_DISK_ENTRY_NAME!r})"
+                f"{NOSI_NBDBOOT_DISK_ENTRY_NAME!r})"
             )
-            seed_err = _seed_ramboot_and_bind(seed_base, admin_password, cfg)
+            seed_err = _seed_nbdboot_and_bind(seed_base, admin_password, cfg)
             if seed_err:
-                log.error(f"ramboot seed failed: rc={seed_err}")
+                log.error(f"nbdboot seed failed: rc={seed_err}")
                 _dump_container_logs()
                 return seed_err
         elif mode == "flash":
@@ -245,13 +245,13 @@ def main(args, cijoe) -> int:
         markers = _build_markers(cfg)
         # ``mode=flash`` runs the full real-image pipeline (oras
         # pull + img.gz decompress + dd of ~10 GiB) inside the live
-        # env; ``mode=ramboot`` also pulls the real nosi image but
+        # env; ``mode=nbdboot`` also pulls the real nosi image but
         # serves it over NBD so guest writes go to nbdkit's cow
         # overlay in RAM instead of the guest disk -- most of the
         # wall clock there is the oras pull + decompress to pixie's
         # blob store, similar order of magnitude. Everything else
         # finishes well within the 5 min short-mode budget.
-        chain_deadline = CHAIN_TIMEOUT_FLASH if mode in ("flash", "ramboot") else CHAIN_TIMEOUT
+        chain_deadline = CHAIN_TIMEOUT_FLASH if mode in ("flash", "nbdboot") else CHAIN_TIMEOUT
         seen = _wait_for_chain_markers(client_log, markers, chain_deadline)
         missing = [k for k, ok in seen.items() if not ok]
         if missing:
@@ -277,10 +277,10 @@ def main(args, cijoe) -> int:
         # the same inventory POST code path pixie-tui + pixie-flash-*
         # rely on.
         #
-        # ``ramboot`` used to pivot into pixie's own live env and
+        # ``nbdboot`` used to pivot into pixie's own live env and
         # POST inventory that way; the real-nosi rework boots into
         # Debian userspace which does not run pixie's CLI. The
-        # ramboot-specific coverage there is the chain markers
+        # nbdboot-specific coverage there is the chain markers
         # (kernel + systemd + "Debian" in the console banner) --
         # nothing to verify server-side.
         #
@@ -431,7 +431,7 @@ def _run_container(image: str, admin_password: str, *, live_env_dir: Path | None
     vmlinuz + initrd + squashfs into the container at
     ``/var/lib/pixie/live-env`` (pixie's default live-env dir), which
     the inventory + flash chain modes need for the ``pixie-live-env.j2``
-    template to resolve. Not used in the bootstrap / ramboot modes."""
+    template to resolve. Not used in the bootstrap / nbdboot modes."""
     subprocess.run(
         ["podman", "rm", "-f", CONTAINER_NAME],
         stdout=subprocess.DEVNULL,
@@ -698,22 +698,22 @@ def _terminate(proc, what: str, sudo: bool = False) -> None:
         proc.kill()
 
 
-def _seed_ramboot_and_bind(seed_base: str, admin_password: str, cfg) -> int:
+def _seed_nbdboot_and_bind(seed_base: str, admin_password: str, cfg) -> int:
     """Import the real nosi catalog, trigger fetch on the paired
     disk-image + netboot-bundle entries, wait for both content_sha256
-    values, then PUT /machines/<mac> with boot_mode=ramboot bound to
+    values, then PUT /machines/<mac> with boot_mode=nbdboot bound to
     the disk sha. Returns 0 on success, an errno on any failure
     (already logged).
 
     The disk-image entry's ``netboot_src`` is set by
     ``parse_catalog_toml`` at import time via the two-pass netboot_ref
-    (name) -> src (URL) resolution -- pixie's ramboot render then
+    (name) -> src (URL) resolution -- pixie.s nbdboot render then
     resolves the sibling bundle by that URL without the test doing
     anything special. On real hardware this is exactly the operator's
-    flow: import catalog, Download bundle + disk, bind ramboot."""
+    flow: import catalog, Download bundle + disk, bind nbdboot."""
     catalog_url = str(cfg.get("nosi_catalog_url", NOSI_CATALOG_URL))
-    disk_entry = str(cfg.get("nosi_ramboot_disk_entry_name", NOSI_RAMBOOT_DISK_ENTRY_NAME))
-    bundle_entry = str(cfg.get("nosi_ramboot_bundle_entry_name", NOSI_RAMBOOT_BUNDLE_ENTRY_NAME))
+    disk_entry = str(cfg.get("nosi_nbdboot_disk_entry_name", NOSI_NBDBOOT_DISK_ENTRY_NAME))
+    bundle_entry = str(cfg.get("nosi_nbdboot_bundle_entry_name", NOSI_NBDBOOT_BUNDLE_ENTRY_NAME))
     mac = cfg["client_mac"]
 
     try:
@@ -734,7 +734,7 @@ def _seed_ramboot_and_bind(seed_base: str, admin_password: str, cfg) -> int:
             return errno.ENOENT
 
     # Fetch the netboot bundle first so pixie has the artifact
-    # directory before the ramboot renderer needs it, then the disk
+    # directory before the nbdboot renderer needs it, then the disk
     # image (the slow leg -- ~2.6 GiB oras pull + img.gz decompress
     # to blob).
     if err := _fetch_entry(seed_base, cookie, bundle_entry):
@@ -759,7 +759,7 @@ def _seed_ramboot_and_bind(seed_base: str, admin_password: str, cfg) -> int:
     except Exception as exc:
         log.error(f"machine bind failed: {exc}")
         return errno.EPROTO
-    log.info(f"Machine {mac} bound to boot_mode=ramboot (real nosi disk + bundle)")
+    log.info(f"Machine {mac} bound to boot_mode=nbdboot (real nosi disk + bundle)")
     return 0
 
 
@@ -876,7 +876,7 @@ def _verify_server_inventory(base: str, mac: str) -> int:
 
 
 def _bind_machine(base: str, cookie: str, mac: str, image_sha: str) -> None:
-    body = {"boot_mode": "ramboot", "image_content_sha256": image_sha}
+    body = {"boot_mode": "nbdboot", "image_content_sha256": image_sha}
     data = json.dumps(body).encode("utf-8")
     req = urllib.request.Request(
         f"{base}/machines/{mac}",
@@ -1043,7 +1043,7 @@ def _seed_flash_and_bind(seed_base: str, admin_password: str, cfg) -> int:
     (``NOSI_FLASH_IMAGE``); pixie's own fetcher pulls it from
     ghcr.io through the oras client. Fetch is the slow leg (~2.6
     GiB compressed) -- allow ``FETCH_TIMEOUT_ORAS`` for it rather
-    than the short local-http budget the ramboot/tui modes use."""
+    than the short local-http budget the nbdboot/tui modes use."""
     catalog_url = str(cfg.get("nosi_catalog_url", NOSI_CATALOG_URL))
     entry_name = str(cfg.get("nosi_flash_entry_name", NOSI_FLASH_ENTRY_NAME))
     mac = cfg["client_mac"]

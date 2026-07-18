@@ -1,9 +1,9 @@
-# pixie PXE ramboot chain test: containerized pixie + a bridged QEMU
+# pixie PXE nbdboot chain test: containerized pixie + a bridged QEMU
 # client that pulls the real nosi netboot bundle + disk image, then
-# ramboots via pixie's NBD export.
+# does nbdboot via pixie's NBD export.
 #
 # Usage:
-#   cijoe tasks/test-pxe-ramboot.yaml --monitor -c configs/test-pxe-ramboot.toml
+#   cijoe tasks/test-pxe-nbdboot.yaml --monitor -c configs/test-pxe-nbdboot.toml
 #
 # Pre-conditions:
 # - podman, qemu-system-x86_64, dnsmasq, ipxe (NBPs under /usr/lib/ipxe),
@@ -14,13 +14,13 @@
 #   and to github.com (real nosi catalog.toml download).
 
 [pixie]
-variant = "test-pxe-ramboot"
+variant = "test-pxe-nbdboot"
 
 [cijoe.workflow]
 fail_fast = true
 
 [test.pxe]
-mode = "ramboot"
+mode = "nbdboot"
 
 # pixie container image tag (built by pxe_prepare from this checkout).
 pixie_image = "pixie:pxetest"
@@ -47,7 +47,7 @@ dhcp_range_lo = "192.168.99.50"
 dhcp_range_hi = "192.168.99.150"
 
 # Ramboot markers. Chain: iPXE loaded, HTTP re-DHCP, chain to
-# bootstrap, per-MAC ramboot plan fetch, iPXE fetches vmlinuz +
+# bootstrap, per-MAC nbdboot plan fetch, iPXE fetches vmlinuz +
 # initrd out of pixie's ``/artifacts/`` (unpacked from the fetched
 # netboot bundle), kernel boots, initramfs mounts the disk image over
 # NBD, Debian pivots to userspace, systemd starts, getty prints login
@@ -83,7 +83,7 @@ needle = "systemd["
 # Debian userspace-specific marker: the systemd generator emits the
 # distro name on the console via the /etc/os-release ID during
 # NAME-branded target banners. Present on every Debian boot -- if
-# it doesn't appear here, ramboot got as far as systemd starting
+# it doesn't appear here, nbdboot got as far as systemd starting
 # but Debian userspace itself did not come up.
 [[test.pxe.chain_markers]]
 key = "debian-userspace"

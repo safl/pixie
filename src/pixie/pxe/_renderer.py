@@ -1,12 +1,12 @@
 """Plan renderer: machine + catalog -> iPXE script.
 
-Owns the boot-mode dispatch table and the ramboot resolution:
+Owns the boot-mode dispatch table and the nbdboot resolution:
 
 * ``ipxe-exit``     -> ``ipxe/exit.j2`` unconditionally.
-* ``ramboot``       -> walk catalog[image_sha] -> netboot_src -> catalog[netboot_src]
+* ``nbdboot``       -> walk catalog[image_sha] -> netboot_src -> catalog[netboot_src]
   to find the netboot-bundle catalog entry, use its ``content_sha256``
   as the artifacts key, ensure an NBD export exists for the disk-image
-  blob, and render ``ipxe/ramboot.j2`` with the resolved fields. If any
+  blob, and render ``ipxe/nbdboot.j2`` with the resolved fields. If any
   step fails (no bound image, netboot bundle not fetched, NBD spawn
   refused) the renderer emits the ``unavailable.j2`` template with the
   reason baked into the plan comment.
@@ -118,8 +118,8 @@ class PlanRenderer:
         mode = machine.boot_mode
         if mode == "ipxe-exit":
             return self._env.get_template("exit.j2").render(mac=machine.mac)
-        if mode == "ramboot":
-            return self._render_ramboot(machine, ctx)
+        if mode == "nbdboot":
+            return self._render_nbdboot(machine, ctx)
         if mode in _LIVE_ENV_MODES:
             if not self._live_env_ready():
                 # netboot-pc bake artifacts have not been staged on
@@ -148,9 +148,9 @@ class PlanRenderer:
     def render_bootstrap(self, ctx: RenderContext) -> str:
         return self._env.get_template("bootstrap.j2").render(host=ctx.host, port=ctx.port)
 
-    # ---------- ramboot resolution ---------------------------------
+    # ---------- nbdboot resolution ---------------------------------
 
-    def _render_ramboot(self, machine: Machine, ctx: RenderContext) -> str:
+    def _render_nbdboot(self, machine: Machine, ctx: RenderContext) -> str:
         image_sha = machine.image_content_sha256
         if not image_sha:
             return self._unavailable(
@@ -167,7 +167,7 @@ class PlanRenderer:
             return self._unavailable(
                 machine,
                 f"catalog entry {disk_entry.name!r} has no netboot_src; "
-                "advertise a sibling bundle before selecting ramboot",
+                "advertise a sibling bundle before selecting nbdboot",
             )
         bundle_entry = self._catalog.get_entry_by_src(disk_entry.netboot_src)
         if bundle_entry is None:
@@ -207,7 +207,7 @@ class PlanRenderer:
                 machine, f"nbdkit refused to start for export {export_name!r}: {exc}"
             )
 
-        return self._env.get_template("ramboot.j2").render(
+        return self._env.get_template("nbdboot.j2").render(
             mac=machine.mac,
             host=ctx.host,
             port=ctx.port,

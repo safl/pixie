@@ -1,6 +1,6 @@
 """Pure-Python unit tests for the machines module.
 
-The end-to-end flows (discovery upsert on /pxe/<mac>, ramboot plan
+The end-to-end flows (discovery upsert on /pxe/<mac>, nbdboot plan
 rendering with a live nbdkit) live in ``tests/integration/``. These
 tests cover surface that never touches a subprocess.
 """
@@ -39,7 +39,7 @@ def test_boot_modes_is_the_locked_set() -> None:
                 "pixie-flash-always",
                 "pixie-inventory",
                 "pixie-tui",
-                "ramboot",
+                "nbdboot",
             }
         )
         == BOOT_MODES
@@ -76,7 +76,7 @@ def test_put_machine_rejects_unknown_boot_mode(client: TestClient) -> None:
 def test_put_machine_rejects_bad_content_sha(client: TestClient) -> None:
     r = _authed(client).put(
         "/machines/aa:bb:cc:dd:ee:03",
-        json={"boot_mode": "ramboot", "image_content_sha256": "not-a-sha"},
+        json={"boot_mode": "nbdboot", "image_content_sha256": "not-a-sha"},
     )
     assert r.status_code == 422
 
@@ -175,10 +175,10 @@ def test_put_machine_flash_rejects_unknown_target_serial(client: TestClient) -> 
 
 
 def test_put_machine_non_flash_modes_skip_disk_guard(client: TestClient) -> None:
-    """ipxe-exit / ramboot / pixie-inventory / pixie-tui do not touch
+    """ipxe-exit / nbdboot / pixie-inventory / pixie-tui do not touch
     the target disk; binding them without an inventory succeeds."""
     c = _authed(client)
-    for mode in ("ipxe-exit", "ramboot", "pixie-inventory", "pixie-tui"):
+    for mode in ("ipxe-exit", "nbdboot", "pixie-inventory", "pixie-tui"):
         r = c.put(
             f"/machines/aa:bb:cc:dd:ee:{ord(mode[0]):02x}",
             json={"boot_mode": mode},
@@ -306,13 +306,13 @@ def test_pxe_plan_ipxe_exit_default_for_new_mac(client: TestClient) -> None:
     assert client.get(f"/machines/{mac}").status_code == 200
 
 
-def test_pxe_plan_ramboot_without_bound_image_falls_back(client: TestClient) -> None:
-    """Binding ramboot without a fetched image renders the
+def test_pxe_plan_nbdboot_without_bound_image_falls_back(client: TestClient) -> None:
+    """Binding nbdboot without a fetched image renders the
     ``unavailable`` template with the reason baked in the comment;
     the target does NOT boot a mismatched kernel."""
     c = _authed(client)
     mac = "de:ad:be:ef:00:01"
-    c.put(f"/machines/{mac}", json={"boot_mode": "ramboot"})
+    c.put(f"/machines/{mac}", json={"boot_mode": "nbdboot"})
     r = c.get(f"/pxe/{mac}")
     assert r.status_code == 200
     assert r.text.startswith("#!ipxe")

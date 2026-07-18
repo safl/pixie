@@ -369,10 +369,10 @@ def pxe_plan_json(request: Request, mac: str) -> dict[str, Any]:
         if plan_format:
             plan["format"] = plan_format
         return plan
-    if mode == "ramboot":
-        # ramboot targets normally boot the image's own kernel +
+    if mode == "nbdboot":
+        # nbdboot targets normally boot the image's own kernel +
         # initrd -- no pixie CLI in the picture -- so this branch
-        # only fires under the ramboot chain test, which pivots
+        # only fires under the nbdboot chain test, which pivots
         # through the pixie live env as a stand-in. Return
         # ``interactive`` (not ``exit``): ``exit`` triggers a
         # ``sys.exit(0)`` inside the CLI that races the
@@ -380,7 +380,7 @@ def pxe_plan_json(request: Request, mac: str) -> dict[str, Any]:
         # occasionally kills the CLI before inventory reaches
         # pixie. ``interactive`` keeps the CLI up (wizard on
         # tty1) which is harmless in the test and never runs
-        # on a real ramboot boot.
+        # on a real nbdboot boot.
         return {"mode": "interactive"}
     # ipxe-exit / unknown -> nothing to do from the live env's side.
     return {"mode": "exit"}

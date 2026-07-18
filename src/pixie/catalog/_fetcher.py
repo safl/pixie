@@ -417,7 +417,7 @@ def _unpack_netboot_bundle(tar_gz_path: Path, artifact_dir: Path) -> None:
             )
 
         # Validate manifest.json is well-formed (its presence flips
-        # readiness in the ramboot flow; a garbled file would show up
+        # readiness in the nbdboot flow; a garbled file would show up
         # as a mysterious boot failure otherwise).
         try:
             manifest = json.loads((staging / "manifest.json").read_text(encoding="utf-8"))

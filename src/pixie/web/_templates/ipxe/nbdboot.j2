@@ -1,13 +1,19 @@
 #!ipxe
-# pixie plan for {{ mac }} - boot_mode=ramboot
+# pixie plan for {{ mac }} - boot_mode=nbdboot
 #
-# Image-native ramboot: the target fetches the image's own kernel +
+# Image-native nbdboot: the target fetches the image's own kernel +
 # initrd from pixie's artifacts directory (content-addressed to the
 # tar.gz bundle sha) and attaches its root over NBD from the
 # per-machine export that pixie spawns for the disk image blob
 # (content-addressed to the disk-image sha).
 #
-# Design departures from the trio's older ipxe_ramboot:
+# Kernel cmdline still carries ``boot=ramboot`` (Debian live-boot
+# maps that to /scripts/ramboot in the initrd, which is what nosi's
+# shipped netboot bundles ship as their NBD-mount handler). Renaming
+# the wire token would break every currently-shipped nosi bundle;
+# the operator-facing boot_mode was renamed instead.
+#
+# Design departures from the trio's older ipxe_ramboot template:
 #
 # - URLs are content-addressed. A rename of the catalog entry does
 #   not silently point the target at different bytes; a redeploy of

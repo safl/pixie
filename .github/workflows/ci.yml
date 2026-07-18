@@ -221,8 +221,8 @@ jobs:
           path: cijoe/_build/test-pxe
           if-no-files-found: warn
 
-  test-pxe-ramboot:
-    name: PXE ramboot chain test (containerized pixie + client QEMU VM)
+  test-pxe-nbdboot:
+    name: PXE nbdboot chain test (containerized pixie + client QEMU VM)
     # No build-media dependency: this test no longer uses pixie's own
     # netboot-pc bake. It fetches a real nosi netboot bundle + disk
     # image via oras from ghcr.io -- kernel/initrd from nosi's
@@ -257,14 +257,14 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@v8.1.0
 
-      - name: Run PXE ramboot chain test
-        run: make test-pxe-ramboot
+      - name: Run PXE nbdboot chain test
+        run: make test-pxe-nbdboot
 
       - name: Upload cijoe output
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: cijoe-output-test-pxe-ramboot
+          name: cijoe-output-test-pxe-nbdboot
           path: cijoe/cijoe-output
           if-no-files-found: warn
 
@@ -272,7 +272,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: test-pxe-ramboot-workspace
+          name: test-pxe-nbdboot-workspace
           path: cijoe/_build/test-pxe
           if-no-files-found: warn
 
@@ -280,7 +280,7 @@ jobs:
     name: PXE inventory chain test (containerized pixie + client QEMU VM)
     # Depends on the netboot-pc bake for the live-env media that
     # pixie serves at /boot/pixie-live-env/. No disk image assembly
-    # here (unlike ramboot), so the runner does not need
+    # here (unlike nbdboot), so the runner does not need
     # squashfs-tools / rsync / mkfs.ext4.
     needs: build-media
     runs-on: ubuntu-latest

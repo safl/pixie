@@ -120,18 +120,18 @@
         <div class="mt-1 small">
             Deleting <code>{{ entry.name }}</code> orphans the fetched netboot bundle
             <code>{{ orphans_bundle_name }}</code>. The bundle stays on disk but no
-            disk-image entry will point at it -- ramboot for this image will not work
+            disk-image entry will point at it -- nbdboot for this image will not work
             until you either restore this entry or delete the bundle too.
         </div>
         {% endif %}
-        {% if breaks_ramboot_for %}
+        {% if breaks_nbdboot_for %}
         <div class="mt-1 small">
-            Deleting <code>{{ entry.name }}</code> breaks ramboot for
-            {{ breaks_ramboot_for|length }} disk image{{ 's' if breaks_ramboot_for|length != 1 else '' }}
-            that name{{ '' if breaks_ramboot_for|length != 1 else 's' }} it as
+            Deleting <code>{{ entry.name }}</code> breaks nbdboot for
+            {{ breaks_nbdboot_for|length }} disk image{{ 's' if breaks_nbdboot_for|length != 1 else '' }}
+            that name{{ '' if breaks_nbdboot_for|length != 1 else 's' }} it as
             <code>netboot_src</code>:
             <ul class="mb-0 mt-1">
-                {% for name in breaks_ramboot_for %}
+                {% for name in breaks_nbdboot_for %}
                 <li><code>{{ name }}</code></li>
                 {% endfor %}
             </ul>
@@ -266,7 +266,7 @@
         <p class="text-muted mb-0 small">
             <i class="bi bi-dash-circle me-1"></i>
             Not currently exported. An NBD export is spawned automatically when a machine
-            is bound to <code>boot_mode=ramboot</code> pointing at this entry.
+            is bound to <code>boot_mode=nbdboot</code> pointing at this entry.
         </p>
         {% else %}
         <dl class="row mb-0">
@@ -304,7 +304,7 @@
         <p class="text-muted mb-0 small">
             <i class="bi bi-question-circle me-1"></i>
             No catalog entry matches <code>{{ entry.netboot_src }}</code>.
-            Import the sibling bundle to enable ramboot for this disk image.
+            Import the sibling bundle to enable nbdboot for this disk image.
         </p>
         {% else %}
         <p class="mb-2 small">

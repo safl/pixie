@@ -111,7 +111,7 @@ COMPOSE_ENV_FILES=envvars podman compose up -d
 ```
 
 The container's HTTP server binds ``127.0.0.1:{http_port}`` and, when
-targets bind ramboot, spawns one nbdkit per export starting at TCP
+targets bind nbdboot, spawns one nbdkit per export starting at TCP
 ``{nbd_port}``. ``pixie-lab deploy`` runs the compose bring-up for
 you, filling in envvars if it's empty.
 

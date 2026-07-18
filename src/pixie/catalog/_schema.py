@@ -4,12 +4,12 @@ A catalog entry captures what the operator staged and what pixie
 learned about it after Fetch. Two entry shapes share the schema:
 
 **Disk-image entry** (``format`` in ``BINDABLE_FORMATS``): flashable
-onto a target disk and mountable over NBD for ramboot. May carry a
+onto a target disk and mountable over NBD for nbdboot. May carry a
 ``netboot_src`` URL pointing at a sibling netboot-bundle entry.
 
 **Netboot-bundle entry** (``format = "tar.gz"``): a build-time
 extract of vmlinuz + initrd + manifest.json from a disk image, so
-image-native ramboot serves the image's own kernel. Fetched entries
+image-native nbdboot serves the image's own kernel. Fetched entries
 of this shape unpack into
 ``<state_dir>/artifacts/<content_sha256>/``.
 
@@ -30,7 +30,7 @@ from pixie._util import now_iso
 _log = logging.getLogger(__name__)
 
 # Formats that pixie can flash to a target disk (via the flash engine
-# in a later PR) and serve over NBD for ramboot. Netboot bundles carry
+# in a later PR) and serve over NBD for nbdboot. Netboot bundles carry
 # ``tar.gz`` and land in a different serving path (artifacts, not
 # blobs).
 BINDABLE_FORMATS: frozenset[str] = frozenset(
@@ -151,9 +151,9 @@ def parse_catalog_toml(raw: bytes | str) -> list[CatalogEntry]:
     entries: list[CatalogEntry] = []
     # Legacy netboot_ref (name-string) capture: nosi's published
     # catalog.toml uses ``netboot_ref = "<sibling entry name>"``
-    # rather than the URL-based ``netboot_src``. Pixie's ramboot
+    # rather than the URL-based ``netboot_src``. Pixie's nbdboot
     # renderer resolves the pair through ``netboot_src`` only, so a
-    # name-based ref would leave every ramboot bind unrenderable.
+    # name-based ref would leave every nbdboot bind unrenderable.
     # Capture the ref during the first pass, then resolve name ->
     # src through the just-parsed set below.
     _pending_ref: dict[str, str] = {}

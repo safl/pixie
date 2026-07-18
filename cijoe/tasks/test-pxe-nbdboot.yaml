@@ -1,19 +1,19 @@
 doc: |
-  pixie PXE ramboot chain test
+  pixie PXE nbdboot chain test
   =============================
 
-  End-to-end proof that a real nosi ramboot works on a QEMU client
+  End-to-end proof that a real nosi nbdboot works on a QEMU client
   through pixie:
 
   1. ``pxe_prepare``: build the ``pixie:pxetest`` container image
      from this checkout.
-  2. ``pxe_run_chain_test`` with ``mode = "ramboot"``: brings up
+  2. ``pxe_run_chain_test`` with ``mode = "nbdboot"``: brings up
      pixie, POSTs ``/ui/catalog/import`` with the pinned nosi
      catalog URL, triggers fetch on the paired
      ``debian-13-headless-netboot`` bundle + ``debian-13-headless``
      disk image, waits for both content_sha256 values (~15 min
      budget for the disk-image oras pull + img.gz decompress),
-     PUTs the client MAC to ``boot_mode=ramboot`` bound to the
+     PUTs the client MAC to ``boot_mode=nbdboot`` bound to the
      disk sha, then PXE-boots the QEMU client and asserts every
      marker in ``[test.pxe.chain_markers]`` shows up on the client
      serial log -- iPXE loaded, artifacts fetched, kernel booted,
@@ -21,12 +21,12 @@ doc: |
 
   What's covered here: real catalog retrieval + real oras pulls +
   real img.gz decompression to pixie's blob store + pixie's NBD
-  export spawn + iPXE ramboot chain + real Debian pivot into
+  export spawn + iPXE nbdboot chain + real Debian pivot into
   userspace served over NBD. No test-side HTTP shim, no
   locally-assembled bundle, no synthetic ext4 disk.
 
   What's NOT covered: an OS-level post-boot task (cloud-init
-  runthrough, sshd bring-up, etc.) -- the ramboot pipeline is
+  runthrough, sshd bring-up, etc.) -- the nbdboot pipeline is
   proved once systemd + Debian userspace come up; further
   assertions would need a scripted terminal driver.
 

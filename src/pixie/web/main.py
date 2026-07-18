@@ -635,7 +635,7 @@ def create_app() -> FastAPI:
                     if (forward is not None and entry.bindable and forward.fetched)
                     else None
                 ),
-                "breaks_ramboot_for": [e.name for e in backward] if not entry.bindable else [],
+                "breaks_nbdboot_for": [e.name for e in backward] if not entry.bindable else [],
                 "blob_using_machines": [
                     m.mac
                     for m in request.app.state.machines_store.list()
@@ -1079,7 +1079,7 @@ def create_app() -> FastAPI:
     #
     # Compact JSON of the operator-visible per-machine fields the
     # list + detail templates render live. The machines page + detail
-    # page poll this so a target booting into ramboot updates
+    # page poll this so a target booting into nbdboot updates
     # ``last_seen_at`` + ``last_seen_ip`` + inventory-disks count
     # without a page reload. Keyed by MAC so the JS updates the
     # matching row in place. Auth-required because the payload names
@@ -1316,7 +1316,7 @@ def create_app() -> FastAPI:
             # Compute the relations for this entry so we know whether
             # deletion would break someone.
             all_entries = store.list_entries()
-            breaks_ramboot_for: list[str] = []
+            breaks_nbdboot_for: list[str] = []
             orphans_bundle: str | None = None
             if entry.bindable:
                 # Deleting a disk image orphans its sibling bundle
@@ -1330,11 +1330,11 @@ def create_app() -> FastAPI:
                     if sibling is not None and sibling.fetched:
                         orphans_bundle = sibling.name
             else:
-                # Deleting a bundle breaks ramboot for every disk
+                # Deleting a bundle breaks nbdboot for every disk
                 # image whose netboot_src pointed at it.
                 if entry.src:
-                    breaks_ramboot_for = [e.name for e in all_entries if e.netboot_src == entry.src]
-            if breaks_ramboot_for or orphans_bundle:
+                    breaks_nbdboot_for = [e.name for e in all_entries if e.netboot_src == entry.src]
+            if breaks_nbdboot_for or orphans_bundle:
                 # Bounce with a marker so /ui/catalog/<name> can
                 # render the warning inline.
                 return RedirectResponse(
@@ -1367,7 +1367,7 @@ def create_app() -> FastAPI:
         the full pipeline again next time.
 
         Relation-aware: if any machine has ``image_content_sha256 ==
-        entry.content_sha256`` (i.e. is bound to ramboot for this
+        entry.content_sha256`` (i.e. is bound to nbdboot for this
         entry) OR a running NBD export serves the blob, bounce to
         the entry's detail page with ``warn_delete_blob=1`` so the
         operator can either point the machine at a different image
