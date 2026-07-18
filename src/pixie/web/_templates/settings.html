@@ -5,6 +5,7 @@
     <div class="container">
         <span class="subnav-jumps d-flex align-items-center flex-wrap">
             <a href="#display">Display</a>
+            <a href="#live-env">Live-env</a>
         </span>
     </div>
 </nav>
@@ -83,6 +84,63 @@
                 </button>
                 <span class="text-muted small ms-2">
                     Blank fields CLEAR the override. Env / default takes over.
+                </span>
+            </div>
+        </form>
+    </div>
+</div>
+
+<div class="card shadow-sm mb-4" id="live-env">
+    <div class="card-header bg-light fw-semibold d-flex flex-wrap align-items-center gap-3 py-2">
+        <span class="text-nowrap"><i class="bi bi-cpu me-1"></i>Live-env</span>
+        <span class="text-muted small">
+            per-deploy kernel-cmdline workarounds for hardware quirks
+        </span>
+    </div>
+    <div class="card-body">
+        <form method="post" action="/ui/settings/live-env/edit" class="row g-3">
+            <div class="col-12">
+                <label for="extra_cmdline" class="form-label">
+                    Extra kernel cmdline
+                    <span class="badge text-bg-{% if live_env_extra_cmdline.override %}primary{% else %}secondary{% endif %} ms-1">
+                        {% if live_env_extra_cmdline.override %}override{% elif live_env_extra_cmdline.effective %}env{% else %}default{% endif %}
+                    </span>
+                </label>
+                <input type="text" id="extra_cmdline" name="extra_cmdline"
+                       class="form-control font-monospace"
+                       value="{{ live_env_extra_cmdline.override }}"
+                       placeholder="e.g. pci=realloc=on,nocrs"
+                       list="live-env-cmdline-suggestions">
+                <datalist id="live-env-cmdline-suggestions">
+                    <option value="pci=realloc=on,nocrs">
+                </datalist>
+                <div class="form-text">
+                    Tokens appended verbatim to the <code>pixie-live-env</code>
+                    kernel cmdline (after <code>pixie.mac=</code> /
+                    <code>bty.mac=</code>, so last-token-wins on any
+                    conflict). Whitespace-separated; single line.
+                    Blank falls back to <code>{{ live_env_extra_cmdline.env }}</code>
+                    then no append.
+                    Currently effective:
+                    {% if live_env_extra_cmdline.effective %}
+                        <code>{{ live_env_extra_cmdline.effective }}</code>
+                    {% else %}
+                        <em class="text-muted">(none)</em>
+                    {% endif %}.
+                    Known-good values per hardware in
+                    <a href="https://github.com/safl/pixie/blob/main/docs/hardware-quirks.md" target="_blank" rel="noreferrer">docs/hardware-quirks.md</a>.
+                    {% if live_env_extra_cmdline.updated_at %}
+                    <br>Last updated: <code>{{ live_env_extra_cmdline.updated_at | fmt_ts }}</code>.
+                    {% endif %}
+                </div>
+            </div>
+            <div class="col-12">
+                <button type="submit" class="btn btn-primary">
+                    <i class="bi bi-check2 me-1"></i>Save
+                </button>
+                <span class="text-muted small ms-2">
+                    Takes effect on the NEXT <code>GET /pxe/&lt;mac&gt;</code>;
+                    a target already mid-boot must be power-cycled.
                 </span>
             </div>
         </form>

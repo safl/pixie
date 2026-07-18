@@ -181,3 +181,77 @@ def test_db_override_wins_over_env_var(tmp_path: Path, monkeypatch: pytest.Monke
     store.set_value(KEY_DISPLAY_TZ, "Europe/Copenhagen")
     out = format_ts("2026-07-16T14:30:00Z", store)
     assert "16:30:00" in out  # Copenhagen, not New_York's 10:30
+
+
+def test_live_env_extra_cmdline_resolution(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """live_env.extra_cmdline resolves override -> env -> empty. The
+    /pxe/<mac> render reads through this so an operator can pin a
+    hardware workaround (docs/hardware-quirks.md) from the Settings
+    page without a compose restart."""
+    from pixie.web._settings_store import KEY_LIVE_ENV_EXTRA_CMDLINE, SettingsStore
+
+    monkeypatch.delenv("PIXIE_LIVE_ENV_EXTRA_CMDLINE", raising=False)
+    store = SettingsStore(tmp_path / "state.db")
+    assert store.resolve_live_env_extra_cmdline() == ""
+    monkeypatch.setenv("PIXIE_LIVE_ENV_EXTRA_CMDLINE", "pci=realloc=on,nocrs")
+    assert store.resolve_live_env_extra_cmdline() == "pci=realloc=on,nocrs"
+    # DB override wins even with env set.
+    store.set_value(KEY_LIVE_ENV_EXTRA_CMDLINE, "amd_iommu=off")
+    assert store.resolve_live_env_extra_cmdline() == "amd_iommu=off"
+    store.clear(KEY_LIVE_ENV_EXTRA_CMDLINE)
+    assert store.resolve_live_env_extra_cmdline() == "pci=realloc=on,nocrs"
+
+
+def test_ui_settings_live_env_edit_persists(client: TestClient) -> None:
+    """POST /ui/settings/live-env/edit stores the tokens; a subsequent
+    GET /pxe/<mac> lands them on the kernel line."""
+    from pathlib import Path as _Path
+
+    c = _authed(client)
+    r = c.post(
+        "/ui/settings/live-env/edit",
+        data={"extra_cmdline": "pci=realloc=on,nocrs"},
+        follow_redirects=False,
+    )
+    assert r.status_code == 303
+
+    # Stage live-env media + a bound machine so /pxe/<mac> renders
+    # the live-env template rather than the unavailable fallback.
+    live_env = client.app.state.live_env_dir  # type: ignore[attr-defined]
+    assert isinstance(live_env, _Path)
+    live_env.mkdir(parents=True, exist_ok=True)
+    for name in ("vmlinuz", "initrd", "live.squashfs"):
+        (live_env / name).write_bytes(b"stub")
+    try:
+        c.put("/machines/aa:bb:cc:dd:ee:41", json={"boot_mode": "pixie-inventory"})
+        body = c.get("/pxe/aa:bb:cc:dd:ee:41").text
+        kernel_line = next(line for line in body.splitlines() if line.startswith("kernel "))
+        assert "pci=realloc=on,nocrs" in kernel_line
+    finally:
+        for name in ("vmlinuz", "initrd", "live.squashfs"):
+            (live_env / name).unlink(missing_ok=True)
+
+
+def test_ui_settings_live_env_rejects_newline(client: TestClient) -> None:
+    """A newline would truncate the single-line iPXE ``kernel``
+    directive; reject at write time with a 400 + inline error rather
+    than serving a broken plan."""
+    c = _authed(client)
+    r = c.post(
+        "/ui/settings/live-env/edit",
+        data={"extra_cmdline": "pci=realloc=on,nocrs\namd_iommu=off"},
+    )
+    assert r.status_code == 400
+    assert "single line" in r.text
+
+
+def test_ui_settings_live_env_blank_clears(client: TestClient) -> None:
+    """Blank input clears the override so the value falls back to the
+    env / empty. Mirrors the display-settings semantics."""
+    from pixie.web._settings_store import KEY_LIVE_ENV_EXTRA_CMDLINE
+
+    c = _authed(client)
+    store = c.app.state.settings_store  # type: ignore[attr-defined]
+    store.set_value(KEY_LIVE_ENV_EXTRA_CMDLINE, "pci=realloc=on,nocrs")
+    c.post("/ui/settings/live-env/edit", data={"extra_cmdline": ""})
+    assert store.get(KEY_LIVE_ENV_EXTRA_CMDLINE) is None
