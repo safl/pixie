@@ -39,7 +39,6 @@ import pixie
 from pixie.catalog._routes import router as catalog_router
 from pixie.catalog._store import CatalogStore
 from pixie.events import EventsLog
-from pixie.events._log import Event
 from pixie.events._kinds import (
     AUTH_LOGIN_FAILED,
     AUTH_LOGIN_SUCCEEDED,
@@ -56,6 +55,7 @@ from pixie.events._kinds import (
     TFTP_STARTED,
     TFTP_STOPPED,
 )
+from pixie.events._log import Event
 from pixie.events._routes import router as events_router
 from pixie.exports._routes import router as exports_router
 from pixie.exports._store import ExportsStore
