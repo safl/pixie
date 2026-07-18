@@ -38,7 +38,7 @@ BOOT_MODES: frozenset[str] = frozenset(
         "pixie-flash-always",
         "pixie-inventory",
         "pixie-tui",
-        "ramboot",
+        "nbdboot",
     }
 )
 DEFAULT_BOOT_MODE = "ipxe-exit"
@@ -113,6 +113,18 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
     # Dropped from the schema (no back-compat shim); the column is
     # gone from fresh state.dbs and stays as an unused column on
     # existing ones. SQLite is forgiving of unread columns.
+    # Renamed 2026-07: ``boot_mode='ramboot'`` -> ``'nbdboot'``. The
+    # earlier name evoked "loads root into RAM" which is not what
+    # this mode does -- it's a netboot that mounts the root over
+    # NBD. Operator-facing rename only: kernel cmdline still says
+    # ``boot=ramboot`` and pixie-media's ``/scripts/ramboot`` still
+    # ships under that name so currently-published nosi netboot
+    # bundles keep working. Longer-term the mode-specific pivot
+    # script should not be baked into nosi's artifact at all --
+    # decoupling is a follow-up (see nbdboot.j2 template comment).
+    # Migrate silently -- an existing state.db from before the
+    # rename still resolves.
+    conn.execute("UPDATE machines SET boot_mode = 'nbdboot' WHERE boot_mode = 'ramboot'")
 
 
 def parse_labels(raw: str) -> list[str]:

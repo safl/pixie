@@ -14,10 +14,10 @@ HTTP shim. That was replaced with an ``oras://`` pull of a real
 nosi image (see ``_seed_flash_and_bind`` in the chain test) so
 the pipeline exercises real oras resolution + real img.gz
 decompression + a full-size dd instead of a marker-at-offset-0
-smoke test. The tar.gz-bundle path (``mode=ramboot``) still uses
+smoke test. The tar.gz-bundle path (``mode=nbdboot``) still uses
 the workspace HTTP server + a locally-assembled payload; the
 choice there is deliberate (nosi's netboot bundles don't quite
-match ramboot's expected bundle layout yet).
+match nbdboot.s expected bundle layout yet).
 
 Retargetable: False
 """

@@ -1,5 +1,5 @@
 """End-to-end: a machine bound to a fetched catalog entry produces a
-ramboot iPXE plan whose kernel + initrd URLs point at the real
+nbdboot iPXE plan whose kernel + initrd URLs point at the real
 extracted netboot bundle, and whose NBD URL points at a real running
 nbdkit that speaks NBD.
 
@@ -15,7 +15,7 @@ We prove the full stack works by:
    directly on the DB is the cheapest way to skip the real HTTP
    download; the on-disk bytes ARE real).
 5. Binding a machine to the disk-image entry with
-   ``boot_mode=ramboot``.
+   ``boot_mode=nbdboot``.
 6. ``GET /pxe/<mac>`` and asserting the rendered iPXE:
    - starts with ``#!ipxe``,
    - references ``/artifacts/<bundle-sha>/vmlinuz`` +
@@ -95,7 +95,7 @@ def _nbd_handshake_ok(host: str, port: int, timeout: float = 3.0) -> bool:
         return raw == _NBD_MAGIC
 
 
-def test_ramboot_plan_end_to_end(api: dict[str, object]) -> None:
+def test_nbdboot_plan_end_to_end(api: dict[str, object]) -> None:
     base = str(api["base_url"])
     cookie = str(api["cookie"])
     state_dir = Path(str(api["state_dir"]))
@@ -166,7 +166,7 @@ def test_ramboot_plan_end_to_end(api: dict[str, object]) -> None:
     r = _put_json(
         base,
         f"/machines/{mac}",
-        {"boot_mode": "ramboot", "image_content_sha256": disk_sha},
+        {"boot_mode": "nbdboot", "image_content_sha256": disk_sha},
         cookie=cookie,
     )
     assert r.status == 200, r.read().decode()
@@ -192,7 +192,7 @@ def test_ramboot_plan_end_to_end(api: dict[str, object]) -> None:
     # A REAL NBD server on the other end (no shim). Prove it by
     # reading the first 8 bytes of the handshake.
     assert _nbd_handshake_ok("127.0.0.1", nbd_port), (
-        f"port {nbd_port} did not speak NBD after ramboot bind"
+        f"port {nbd_port} did not speak NBD after nbdboot bind"
     )
 
     # The auto-spawned export lands on ``GET /exports`` too, keyed on
@@ -204,7 +204,7 @@ def test_ramboot_plan_end_to_end(api: dict[str, object]) -> None:
     assert matching[0]["nbd_port"] == nbd_port
 
 
-def test_ramboot_without_bundle_unpacked_returns_unavailable(api: dict[str, object]) -> None:
+def test_nbdboot_without_bundle_unpacked_returns_unavailable(api: dict[str, object]) -> None:
     """When the netboot bundle is declared but its artifacts are NOT
     on disk (i.e. the tar.gz was never unpacked, perhaps because the
     fetch aborted), the renderer refuses to render a mismatched
@@ -246,7 +246,7 @@ def test_ramboot_without_bundle_unpacked_returns_unavailable(api: dict[str, obje
     _put_json(
         base,
         f"/machines/{mac}",
-        {"boot_mode": "ramboot", "image_content_sha256": disk_sha},
+        {"boot_mode": "nbdboot", "image_content_sha256": disk_sha},
         cookie=cookie,
     )
 

@@ -55,9 +55,9 @@ def test_legacy_netboot_ref_resolves_when_target_present(
     ``netboot_ref = <name-string>`` alongside the URL-based
     ``netboot_src`` some tags carry. When the referenced entry is
     in the same catalog batch, the parser resolves the name to its
-    src URL + populates ``netboot_src`` -- without this the ramboot
+    src URL + populates ``netboot_src`` -- without this the nbdboot
     plan renderer refuses ("no netboot_src") and pixie-tui, pixie-
-    inventory + pixie-flash-* all still work but ramboot bind is
+    inventory + pixie-flash-* all still work but nbdboot bind is
     unusable."""
     caplog.set_level(logging.WARNING, logger="pixie.catalog._schema")
     toml = b"""
@@ -89,7 +89,7 @@ format = "tar.gz"
 
 def test_legacy_netboot_ref_orphan_warns(caplog: pytest.LogCaptureFixture) -> None:
     """A netboot_ref that names an absent entry cannot resolve to a
-    URL; leave netboot_src empty + log a warning. The ramboot plan
+    URL; leave netboot_src empty + log a warning. The nbdboot plan
     render will surface "no netboot_src" -- readable failure, not a
     silent orphan."""
     caplog.set_level(logging.WARNING, logger="pixie.catalog._schema")

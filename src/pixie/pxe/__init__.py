@@ -6,7 +6,7 @@ chain-loads ``/pxe/<mac>``, which returns the target-specific iPXE
 plan derived from the machine's boot mode:
 
 * ``ipxe-exit`` -> chain out of iPXE, boot the local disk.
-* ``ramboot`` -> image-native kernel + initrd from the artifacts
+* ``nbdboot`` -> image-native kernel + initrd from the artifacts
   directory of the image's netboot bundle, root over NBD from the
   auto-created export against the disk-image blob.
 

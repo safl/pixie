@@ -2,15 +2,15 @@
 
 Pixie's catalog holds two peer entry shapes: **disk images**
 (``format`` = ``img.gz`` / ``img.zst`` / ``img.xz`` / ``img`` / ...)
-that pixie can flash to a target disk or serve over NBD for ramboot,
+that pixie can flash to a target disk or serve over NBD for nbdboot,
 and **netboot bundles** (``format`` = ``tar.gz``) whose contents pixie
 unpacks into a content-addressed artifacts directory (vmlinuz +
-initrd + manifest.json) so image-native ramboot has kernel + initrd
+initrd + manifest.json) so image-native nbdboot has kernel + initrd
 URLs to serve.
 
 Disk-image entries can carry a ``netboot_src`` field pointing at the
 sibling bundle by URL; the two are peer catalog entries rather than
-one nested under the other, so a ramboot-only workflow can fetch a
+one nested under the other, so a nbdboot-only workflow can fetch a
 bundle standalone and never touch a disk image.
 
 There is ONE verb: :func:`pixie.catalog.fetch.fetch`. Downloads +

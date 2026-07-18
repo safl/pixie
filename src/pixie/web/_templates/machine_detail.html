@@ -21,9 +21,9 @@
     <div class="card-header bg-light d-flex align-items-center">
         <h2 class="h5 mb-0"><i class="bi bi-pc-display me-2"></i><code>{{ machine.mac }}</code></h2>
         <span class="ms-auto">
-            {% if machine.boot_mode == 'ramboot' %}
+            {% if machine.boot_mode == 'nbdboot' %}
             <span class="badge text-bg-primary">
-                <i class="bi bi-hdd-network me-1"></i>ramboot
+                <i class="bi bi-hdd-network me-1"></i>nbdboot
             </span>
             {% else %}
             <span class="badge text-bg-secondary">
@@ -83,7 +83,7 @@
 
 {% set boot_mode_labels = {
     'ipxe-exit': 'ipxe-exit (boot local disk)',
-    'ramboot': 'ramboot (image over NBD)',
+    'nbdboot': 'nbdboot (image over NBD)',
     'pixie-flash-once': 'pixie-flash-once (flash image once, then boot disk)',
     'pixie-flash-always': 'pixie-flash-always (re-flash every boot)',
     'pixie-inventory': 'pixie-inventory (collect inventory, then boot)',
@@ -107,28 +107,28 @@
                 </select>
             </div>
             <div class="col-md-6"
-                 data-policy-relevant="pixie-flash-once pixie-flash-always ramboot">
+                 data-policy-relevant="pixie-flash-once pixie-flash-always nbdboot">
                 <label for="image_content_sha256" class="form-label">
                     Image
                     <span class="policy-usage small text-muted fw-normal ms-1"></span>
                 </label>
                 {% set entry_shas = bindable_entries | map(attribute='content_sha256') | list %}
                 <select id="image_content_sha256" name="image_content_sha256"
-                        class="form-select" data-ramboot-gate="1">
+                        class="form-select" data-nbdboot-gate="1">
                     <option value="" {% if not machine.image_content_sha256 %}selected{% endif %}>
                         (unbound)
                     </option>
                     {% for e in bindable_entries %}
-                    {# ``data-ramboot-ready`` mirrors ``e.fetched``: bytes on
+                    {# ``data-nbdboot-ready`` mirrors ``e.fetched``: bytes on
                        disk means pixie can serve the image over NBD for
-                       ramboot. The inline script below disables options
-                       whose value is "false" when ``boot_mode=ramboot`` so
+                       nbdboot. The inline script below disables options
+                       whose value is "false" when ``boot_mode=nbdboot`` so
                        an operator can't accidentally bind an unfetched
-                       image for a ramboot target. Flash modes leave every
+                       image for a nbdboot target. Flash modes leave every
                        option enabled (the flash pipeline will refuse a
                        missing blob at plan time). #}
                     <option value="{{ e.content_sha256 }}"
-                            data-ramboot-ready="{{ 'true' if e.fetched else 'false' }}"
+                            data-nbdboot-ready="{{ 'true' if e.fetched else 'false' }}"
                             {% if machine.image_content_sha256 == e.content_sha256 %}selected{% endif %}>
                         {{ e.name }}{% if e.arch %} ({{ e.arch }}){% endif %}{% if not e.fetched %} -- not fetched{% endif %}
                     </option>
@@ -416,7 +416,7 @@
     // <mode>)" so the general/consumed-by split stays visible. Each
     // relevant field carries ``data-policy-relevant`` listing the modes
     // that consume it; the value survives a mode switch (a sha bound
-    // under ramboot is not cleared when the operator flips to
+    // under nbdboot is not cleared when the operator flips to
     // pixie-inventory to run a discovery pass).
     const modeSelect = document.getElementById("boot_mode");
     if (!modeSelect) return;
@@ -437,7 +437,7 @@
             // temporarily re-enables every ``data-policy-relevant``
             // control right before POST so its stored value survives
             // a mode flip (a sanboot calibrated under ipxe-exit
-            // stays around when the operator swaps to ramboot). The
+            // stays around when the operator swaps to nbdboot). The
             // "readonly" attribute is not enough on <select>, which
             // ignores it entirely.
             el.querySelectorAll("input, select, textarea").forEach((ctrl) => {
@@ -462,20 +462,20 @@
     }
 
     // Ramboot gate on the image picker: when the operator flips to
-    // boot_mode=ramboot, disable options whose ``data-ramboot-ready`` is
+    // boot_mode=nbdboot, disable options whose ``data-nbdboot-ready`` is
     // "false" (blob not fetched -> pixie can't serve it over NBD). Flash
     // modes leave every option enabled -- the flash renderer refuses a
     // missing blob at plan time. If the currently-selected option gets
     // disabled by the switch, drop the binding so the operator doesn't
     // Save a stale mismatch.
-    const imgSelect = document.querySelector("select[data-ramboot-gate]");
+    const imgSelect = document.querySelector("select[data-nbdboot-gate]");
 
     function applyRambootGate() {
         if (!imgSelect) return;
-        const isRamboot = modeSelect.value === "ramboot";
-        imgSelect.querySelectorAll("option[data-ramboot-ready]").forEach((opt) => {
-            const ready = opt.getAttribute("data-ramboot-ready") === "true";
-            opt.disabled = isRamboot && !ready;
+        const isNbdboot = modeSelect.value === "nbdboot";
+        imgSelect.querySelectorAll("option[data-nbdboot-ready]").forEach((opt) => {
+            const ready = opt.getAttribute("data-nbdboot-ready") === "true";
+            opt.disabled = isNbdboot && !ready;
         });
         if (imgSelect.selectedOptions.length && imgSelect.selectedOptions[0].disabled) {
             imgSelect.value = "";

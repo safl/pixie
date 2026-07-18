@@ -22,14 +22,14 @@ def test_emit_and_list_roundtrip(tmp_path: Path) -> None:
         "machine.bound",
         subject_kind="machine",
         subject_id="aa:bb:cc:dd:ee:ff",
-        summary="aa:bb:cc:dd:ee:ff -> ramboot",
-        details={"boot_mode": "ramboot"},
+        summary="aa:bb:cc:dd:ee:ff -> nbdboot",
+        details={"boot_mode": "nbdboot"},
     )
     rows = log.list()
     # Newest-first ordering.
     assert [r.kind for r in rows] == ["machine.bound", "catalog.entry.added"]
     # Details round-trip through JSON.
-    assert rows[0].details == {"boot_mode": "ramboot"}
+    assert rows[0].details == {"boot_mode": "nbdboot"}
 
 
 def test_filter_by_kind(tmp_path: Path) -> None:

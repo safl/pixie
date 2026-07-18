@@ -120,7 +120,7 @@ from the live-env pixie CLI."""
 #
 # The renderer fires exactly one of ``pxe.plan.rendered`` /
 # ``pxe.plan.unavailable`` per GET /pxe/<mac>. Status POSTs from the
-# target's live env / ramboot initrd flow through ``pxe.status.received``.
+# target's live env / nbdboot initrd flow through ``pxe.status.received``.
 
 PXE_PLAN_RENDERED = "pxe.plan.rendered"
 """GET /pxe/<mac> emitted a bootable iPXE plan for a known
@@ -136,7 +136,7 @@ plan comment carries."""
 PXE_STATUS_RECEIVED = "pxe.status.received"
 """POST /pxe/<mac>/status from the target initrd or live env.
 ``details.status`` is the raw status token
-(``ramboot.up``, ``ramboot.nbd_connect_failed``, ...)."""
+(``ramboot.up``, ``ramboot.nbd_connect_failed``, ``ramboot.die``, ...)."""
 
 # ---------- TFTP subprocess supervisor ------------------------------
 #

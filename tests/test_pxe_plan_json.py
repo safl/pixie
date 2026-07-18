@@ -5,7 +5,7 @@ Two contracts covered here:
 - The JSON plan the LIVE-ENV pixie CLI reads after boot returns the
   right ``mode`` for each ``boot_mode`` (pixie-inventory -> inventory,
   pixie-tui -> interactive, pixie-flash-* -> interactive until the
-  target-disk field lands, ipxe-exit / ramboot / unknown -> exit).
+  target-disk field lands, ipxe-exit / nbdboot / unknown -> exit).
 - The renderer's ``pixie-*`` branch degrades to ``unavailable`` when
   no live-env artifacts are staged, and renders the ``pixie-live-env``
   iPXE chain when they are.
@@ -49,7 +49,7 @@ def _seed_machine(client: TestClient, mac: str, boot_mode: str) -> None:
         ("pixie-flash-once", "interactive"),
         ("pixie-flash-always", "interactive"),
         ("ipxe-exit", "exit"),
-        ("ramboot", "interactive"),
+        ("nbdboot", "interactive"),
     ],
 )
 def test_plan_json_maps_boot_mode(client: TestClient, boot_mode: str, expected_mode: str) -> None:

@@ -2,7 +2,7 @@
 hashes on the way down, and unpacks tar.gz bundles into the content-
 addressed artifacts tree.
 
-Existing ``test_pxe.py::test_ramboot_plan_end_to_end`` places blobs +
+Existing ``test_pxe.py::test_nbdboot_plan_end_to_end`` places blobs +
 artifacts on disk directly and patches the DB to skip the fetch step;
 this suite exercises the fetch pipeline itself against real HTTP.
 
@@ -20,7 +20,7 @@ Flow:
      bundle and their bytes match what went into the tar.gz.
    - The bundle's ``content_sha256`` in the catalog matches the
      externally-computed sha256 of the served tar.gz.
-6. Bind a machine to the disk entry's sha with boot_mode=ramboot;
+6. Bind a machine to the disk entry's sha with boot_mode=nbdboot;
    ``GET /pxe/<mac>`` returns a plan that references
    ``/artifacts/<bundle-sha>/vmlinuz`` + ``/artifacts/<bundle-sha>/
    initrd`` (the plan renderer picked the SAME bundle sha the fetch
@@ -225,11 +225,11 @@ def test_fetch_disk_image_hashes_but_does_not_unpack(
     assert not art.exists(), "raw disk-image fetch should not create an artifacts dir"
 
 
-def test_fetched_bundle_powers_ramboot_plan(
+def test_fetched_bundle_powers_nbdboot_plan(
     api: dict[str, object], http_server: str, bundle_bytes: bytes
 ) -> None:
     """The plan renderer consumes the REAL fetched artifacts (not
-    hand-placed bytes as in test_pxe.py) and produces a ramboot plan
+    hand-placed bytes as in test_pxe.py) and produces a nbdboot plan
     that references the bundle's fetch-time-computed sha."""
     base = str(api["base_url"])
     cookie = str(api["cookie"])
@@ -262,8 +262,8 @@ def test_fetched_bundle_powers_ramboot_plan(
     _post_json(base, "/catalog/entries/disk-b/fetch", {}, cookie=cookie)
     disk_entry = _wait_fetched(base, "disk-b")
 
-    # Bind the machine to the disk-image entry with ramboot mode.
-    body = {"boot_mode": "ramboot", "image_content_sha256": disk_entry["content_sha256"]}
+    # Bind the machine to the disk-image entry with nbdboot mode.
+    body = {"boot_mode": "nbdboot", "image_content_sha256": disk_entry["content_sha256"]}
     req = urllib.request.Request(
         f"{base}/machines/{mac}",
         data=json.dumps(body).encode("utf-8"),

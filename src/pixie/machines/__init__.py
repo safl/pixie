@@ -5,7 +5,7 @@ answer when a target PXEs. Discovery is implicit: the first time a
 MAC hits ``GET /pxe/<mac>`` the row is created with the default boot
 mode (``ipxe-exit`` -- chain out of iPXE, boot the local disk). An
 operator later binds a machine to a catalog entry via the JSON API or
-the operator UI, flipping ``boot_mode`` to ``ramboot``.
+the operator UI, flipping ``boot_mode`` to ``nbdboot``.
 
 The bound image is referenced by content sha256 (not URL sha; not
 name-string). Content addressing means a machine binding survives a

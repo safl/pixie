@@ -200,7 +200,7 @@ def pxe_plan(request: Request, mac: str) -> PlainTextResponse:
 async def pxe_status(request: Request, mac: str) -> PlainTextResponse:
     """Accept a status token from the target's initrd or live env.
 
-    Bty's ramboot dracut hook + pixie's own tui both fire tokens like
+    Pixie.s ramboot initrd + pixie-tui both fire tokens like
     ``ramboot.up`` / ``ramboot.nbd_connect_failed`` / ``ramboot.die``
     so an operator watching /ui/events sees the boot flow land or
     fail. The body carries either ``status=<token>`` in a form or a
@@ -226,7 +226,7 @@ async def pxe_status(request: Request, mac: str) -> PlainTextResponse:
             status_token = raw.strip()
     if not status_token:
         # Fall back to a raw body read for the wget-style
-        # ``--post-data=status=X`` shape busybox uses in the ramboot
+        # ``--post-data=status=X`` shape busybox uses in the nbdboot
         # initrd (application/x-www-form-urlencoded handled above,
         # but old busybox drops the content-type header).
         raw_body = (await request.body()).decode("utf-8", errors="replace").strip()
@@ -369,10 +369,10 @@ def pxe_plan_json(request: Request, mac: str) -> dict[str, Any]:
         if plan_format:
             plan["format"] = plan_format
         return plan
-    if mode == "ramboot":
-        # ramboot targets normally boot the image's own kernel +
+    if mode == "nbdboot":
+        # nbdboot targets normally boot the image's own kernel +
         # initrd -- no pixie CLI in the picture -- so this branch
-        # only fires under the ramboot chain test, which pivots
+        # only fires under the nbdboot chain test, which pivots
         # through the pixie live env as a stand-in. Return
         # ``interactive`` (not ``exit``): ``exit`` triggers a
         # ``sys.exit(0)`` inside the CLI that races the
@@ -380,7 +380,7 @@ def pxe_plan_json(request: Request, mac: str) -> dict[str, Any]:
         # occasionally kills the CLI before inventory reaches
         # pixie. ``interactive`` keeps the CLI up (wizard on
         # tty1) which is harmless in the test and never runs
-        # on a real ramboot boot.
+        # on a real nbdboot boot.
         return {"mode": "interactive"}
     # ipxe-exit / unknown -> nothing to do from the live env's side.
     return {"mode": "exit"}
