@@ -529,7 +529,8 @@ class BtyTui:
             - ``plan.mode == "inventory"`` -> post disk inventory, then
               reboot (boot_mode=pixie-inventory; next contact serves the ipxe-exit chain)
             - ``plan.mode == "exit"``    -> exit cleanly (nothing to do
-              from pixie's side; firmware sanboot handles the rest)
+              from pixie's side; the firmware falls through to its
+              native boot order and picks the next bootable device)
             - 404 / network failure       -> interactive wizard with
               server's ``/catalog.toml`` as the catalog source
           ``catalog`` is ignored in server-driven mode -- the server's

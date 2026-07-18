@@ -31,16 +31,22 @@ _DB_WRITE_LOCK = threading.Lock()
 # ``unavailable`` plan for them so a bound target boots into a
 # readable "live env not yet baked" screen rather than kernel-panicking
 # on a bty-media initrd.
-BOOT_MODES: frozenset[str] = frozenset(
+LIVE_ENV_MODES: frozenset[str] = frozenset(
     {
-        "ipxe-exit",
         "pixie-flash-once",
         "pixie-flash-always",
         "pixie-inventory",
         "pixie-tui",
-        "nbdboot",
     }
 )
+"""Boot modes that chain the target into pixie's own netboot-pc live
+env. Extracted as its own set so ``pxe/_renderer.py`` and the store
+share one source of truth: if a mode is added on one side only, the
+renderer silently falls through the plan-render match and the bound
+target boots into ``unavailable.j2``. Kept close to :data:`BOOT_MODES`
+so a reader adding a mode sees both spots at once."""
+
+BOOT_MODES: frozenset[str] = frozenset({"ipxe-exit", "nbdboot"}) | LIVE_ENV_MODES
 DEFAULT_BOOT_MODE = "ipxe-exit"
 
 # Normalise MAC to lower-case colon form. Rejects anything else.

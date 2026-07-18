@@ -28,7 +28,7 @@ from pixie.catalog._schema import CatalogEntry
 from pixie.catalog._store import CatalogStore
 from pixie.exports._store import Export, ExportsStore
 from pixie.exports._supervisor import NbdServer
-from pixie.machines._store import Machine
+from pixie.machines._store import LIVE_ENV_MODES, Machine
 
 _log = logging.getLogger(__name__)
 
@@ -43,19 +43,12 @@ def _export_name_for(image_sha: str) -> str:
 
 DEFAULT_OVERLAY_SIZE = "10G"
 
-# Boot modes that chain into pixie's own live env (flash + inventory
-# + TUI drivers). Kept as a set so ``mode in _LIVE_ENV_MODES`` scales
-# past two entries without a chain of ``or`` checks. The renderer
-# emits an ``unavailable`` plan for these until the live-env media
-# is baked with the pixie CLI wired in.
-_LIVE_ENV_MODES: frozenset[str] = frozenset(
-    {
-        "pixie-flash-once",
-        "pixie-flash-always",
-        "pixie-inventory",
-        "pixie-tui",
-    }
-)
+# The pixie-* live-env boot modes are the store's
+# :data:`LIVE_ENV_MODES` set; imported rather than re-authored so a
+# new mode added to the store's :data:`BOOT_MODES` frontier can't
+# fall through here silently (which used to render as
+# ``unknown boot_mode``, indistinguishable from an unbounded
+# operator typo).
 
 
 @dataclass
@@ -120,7 +113,7 @@ class PlanRenderer:
             return self._env.get_template("exit.j2").render(mac=machine.mac)
         if mode == "nbdboot":
             return self._render_nbdboot(machine, ctx)
-        if mode in _LIVE_ENV_MODES:
+        if mode in LIVE_ENV_MODES:
             if not self._live_env_ready():
                 # netboot-pc bake artifacts have not been staged on
                 # this deploy yet; degrade to the readable

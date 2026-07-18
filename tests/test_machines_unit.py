@@ -283,6 +283,28 @@ def test_ui_labels_edit_form_persists_and_independent_of_bind(
     assert "labels" not in row3
 
 
+def test_ui_labels_edit_rejects_malformed_label(client: TestClient) -> None:
+    """A label that violates :data:`_LABEL_RE` (leading punctuation,
+    chars outside ``[A-Za-z0-9 ._-]``, over 64 chars) surfaces as
+    400 with the parser's message in ``detail``. Silent-suppress
+    was the previous shape and made "why did my label edit not
+    take" a real debug ratdance on the operator side."""
+    c = _authed(client)
+    mac = "aa:bb:cc:dd:ee:30"
+
+    r = c.post(
+        f"/ui/machines/{mac}/labels/edit",
+        data={"labels": "@bad"},
+        follow_redirects=False,
+    )
+    assert r.status_code == 400
+    assert "alphanumeric-leading" in r.json()["detail"]
+    # State must not have partially applied: the machine row still
+    # has no labels field.
+    row = c.get(f"/machines/{mac}").json()
+    assert "labels" not in row
+
+
 def test_pxe_bootstrap_serves_ipxe_prefix(client: TestClient) -> None:
     """The bootstrap route never fails on a first contact (a fresh
     target has no machine row yet, and the bootstrap doesn't touch
