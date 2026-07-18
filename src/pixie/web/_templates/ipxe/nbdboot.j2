@@ -7,13 +7,15 @@
 # per-machine export that pixie spawns for the disk image blob
 # (content-addressed to the disk-image sha).
 #
-# Kernel cmdline carries ``boot=nbdboot``: Debian live-boot in
-# pixie's own netboot-pc bake maps that to ``/scripts/nbdboot`` in
-# the initrd (installed by ``pixie-media``'s live-build hook chain).
-# nosi's shipped netboot bundles need to be rebuilt against a
-# pixie-media release that ships the renamed script -- an older
-# nosi bundle looking for ``boot=ramboot`` will fall through and
-# never issue nbd-client. Pre-1.0: no wire-compat shim.
+# Kernel cmdline carries ``boot=nbdboot``: Debian live-boot in the
+# initrd maps that to ``/scripts/nbdboot`` (installed by pixie-media's
+# live-build hook chain -- ``ramboot`` / ``nbdboot`` is a pixie-ism,
+# not something nosi authors). Nosi's netboot bundles inherit the
+# script from pixie-media at bake time; a nosi release baked
+# against pixie-media pre-rename bakes ``/scripts/ramboot`` and
+# won't NBD-mount when pixie sends ``boot=nbdboot``. Coordinated
+# release: pixie + pixie-media + nosi bump together. Pre-1.0: no
+# wire-compat shim.
 #
 # Design departures from the trio's older ipxe_ramboot template:
 #

@@ -116,13 +116,15 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
     # Renamed 2026-07: ``boot_mode='ramboot'`` -> ``'nbdboot'``. The
     # earlier name evoked "loads root into RAM" which is not what
     # this mode does -- it's a netboot that mounts the root over
-    # NBD. Full rename: kernel cmdline says ``boot=nbdboot``, the
-    # initramfs-tools boot driver ``/scripts/nbdboot`` handles the
-    # mountroot() path, and every wire status token (``nbdboot.up``
-    # etc) matches. Nosi netboot bundles must be rebuilt against
-    # a pixie-media release that ships the renamed script; an
-    # older bundle looking for ``boot=ramboot`` will fall through
-    # and never NBD-mount. Migrate silently.
+    # NBD. "ramboot" was a pixie-ism (via bty-media -> pixie-media),
+    # not a nosi convention, so the full rename lives entirely
+    # inside our own build chain: kernel cmdline says
+    # ``boot=nbdboot``, ``/scripts/nbdboot`` (pixie-media) is the
+    # mountroot() driver, wire status tokens are ``nbdboot.*``.
+    # Nosi bundles inherit the script at bake time; a coordinated
+    # pixie + pixie-media + nosi release ships them together.
+    # Migrate silently -- an existing state.db from before the
+    # rename still resolves.
     conn.execute("UPDATE machines SET boot_mode = 'nbdboot' WHERE boot_mode = 'ramboot'")
 
 
