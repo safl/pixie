@@ -35,11 +35,11 @@ class BindBody(BaseModel):
     """Operator binding: pick a boot mode + optional image ref by
     content sha. Empty ``image_content_sha256`` clears the binding.
 
-    Extended fields (``labels`` / ``sanboot_drive`` / ``target_disk_serial``)
-    let the operator tag the machine + tune the flash / ipxe-exit
-    chain without a second round-trip. Fields default to no-op values
-    so a pre-extension client can PUT with only ``boot_mode`` and get
-    the same behaviour it did before.
+    Extended fields (``labels`` / ``target_disk_serial``) let the
+    operator tag the machine + tune the flash chain without a second
+    round-trip. Fields default to no-op values so a pre-extension
+    client can PUT with only ``boot_mode`` and get the same behaviour
+    it did before.
     """
 
     boot_mode: str = Field(..., description=f"one of {sorted(BOOT_MODES)}")
@@ -53,10 +53,6 @@ class BindBody(BaseModel):
             "Free-form tags: alphanumeric-leading, a-z / 0-9 / space / ._-, "
             "max 64 chars each, max 16 tags."
         ),
-    )
-    sanboot_drive: str = Field(
-        default="",
-        description="iPXE BIOS drive slug (e.g. '0x80' for first disk). Consumed by ipxe-exit.",
     )
     target_disk_serial: str = Field(
         default="",
@@ -108,14 +104,23 @@ def upsert_machine(
     try:
         # ``labels`` in the JSON body is already a list; run it through
         # ``parse_labels`` (via a comma-join) so the same validator
-        # rejects bogus tokens on both the JSON + form paths.
+        # rejects bogus tokens on both the JSON + form paths. Labels
+        # ride the bind body for JSON-API convenience but the bind
+        # form no longer offers them -- labels are edited on their
+        # own row on the machine detail page.
         labels = parse_labels(", ".join(str(x) for x in (body.labels or [])))
+        # ``labels`` on ``BindBody`` defaults to an empty list. Passing
+        # that empty list to ``upsert_binding`` would clobber any
+        # existing labels on a bind that only wanted to touch the
+        # boot mode. Preserve the previous labels when the caller did
+        # not supply any new ones -- honours a partial-update PUT
+        # without needing PATCH.
+        labels_arg = labels if labels else (list(previous.labels) if previous else [])
         row = _get_machines(request).upsert_binding(
             canon,
             boot_mode=body.boot_mode,
             image_content_sha256=body.image_content_sha256.strip().lower(),
-            labels=labels,
-            sanboot_drive=body.sanboot_drive,
+            labels=labels_arg,
             target_disk_serial=body.target_disk_serial,
         )
     except ValueError as exc:

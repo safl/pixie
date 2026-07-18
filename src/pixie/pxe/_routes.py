@@ -273,7 +273,6 @@ async def pxe_status(request: Request, mac: str) -> PlainTextResponse:
                     boot_mode="ipxe-exit",
                     image_content_sha256=row.image_content_sha256,
                     labels=list(row.labels),
-                    sanboot_drive=row.sanboot_drive,
                     target_disk_serial=row.target_disk_serial,
                 )
     return PlainTextResponse("", status_code=204)

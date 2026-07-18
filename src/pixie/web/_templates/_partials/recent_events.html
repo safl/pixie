@@ -1,0 +1,47 @@
+{# Small events card used on every list page (catalog / machines) and
+   on machine-detail. Renders up to N events (the caller picks how
+   many) with a link to /ui/events for the full log. Called with:
+
+     events         (list of Event rows)
+     scope          ("catalog" | "machine" | ...)  -- shown in the
+                    header + "all events" link's ?filter
+     empty_message  optional custom prompt when events is empty
+#}
+{% macro recent_events_card(events, scope, empty_message="") %}
+<div class="card shadow-sm mb-4">
+    <div class="card-header bg-light d-flex align-items-center">
+        <h2 class="h6 mb-0">
+            <i class="bi bi-clock-history me-2"></i>Recent {{ scope }} events
+        </h2>
+        <a href="/ui/events" class="ms-auto small">All events</a>
+    </div>
+    {% if events %}
+    <div class="table-responsive">
+        <table class="table table-sm table-hover align-middle mb-0">
+            <thead>
+                <tr>
+                    <th scope="col" class="small text-muted" style="width: 12rem;">When</th>
+                    <th scope="col" class="small text-muted" style="width: 16rem;">Kind</th>
+                    <th scope="col" class="small text-muted">Summary</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for e in events %}
+                <tr>
+                    <td class="small text-muted text-nowrap">{{ e.ts | fmt_ts }}</td>
+                    <td class="small"><code>{{ e.kind }}</code></td>
+                    <td class="small">{{ e.summary or "" }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% else %}
+    <div class="card-body">
+        <p class="text-muted small mb-0">
+            {{ empty_message or "No " ~ scope ~ " events recorded yet." }}
+        </p>
+    </div>
+    {% endif %}
+</div>
+{% endmacro %}

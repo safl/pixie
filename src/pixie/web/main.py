@@ -555,6 +555,12 @@ def create_app() -> FastAPI:
             }.items()
             if v
         }
+        # Ten most recent catalog-scoped events (add / delete / fetch
+        # started / done / failed). Renders under the entry table with
+        # a link to /ui/events for the full log. Same shape lands on
+        # the machines list + machine-detail pages so a per-portion
+        # events surface is where the operator expects it to be.
+        catalog_events = events_log.list(subject_kind="entry", limit=10)
         return templates.TemplateResponse(
             request,
             "catalog.html",
@@ -567,6 +573,7 @@ def create_app() -> FastAPI:
                 "sort": sort_state,
                 "page_state": page_state,
                 "preserved": preserved,
+                "catalog_events": catalog_events,
                 "authed": True,
                 "page": "catalog",
             },
@@ -689,7 +696,6 @@ def create_app() -> FastAPI:
                 "image_content_sha256",
                 "last_seen_ip",
                 "labels",
-                "sanboot_drive",
                 "target_disk_serial",
             ),
         )
@@ -720,6 +726,12 @@ def create_app() -> FastAPI:
             }.items()
             if v
         }
+        # Ten most recent machine-scoped events (bound / discovered /
+        # inventory / status). Rendered under the machine table with
+        # a link to /ui/events for the full log; the per-machine
+        # detail page already does the same but filtered on that one
+        # MAC.
+        machine_events = request.app.state.events_log.list(subject_kind="machine", limit=10)
         return templates.TemplateResponse(
             request,
             "machines.html",
@@ -730,6 +742,7 @@ def create_app() -> FastAPI:
                 "sort": sort_state,
                 "page_state": page_state,
                 "preserved": preserved,
+                "machine_events": machine_events,
                 "authed": True,
                 "page": "machines",
             },
@@ -789,29 +802,56 @@ def create_app() -> FastAPI:
         mac: str = Form(...),
         boot_mode: str = Form(...),
         image_content_sha256: str = Form(""),
-        labels: str = Form(""),
-        sanboot_drive: str = Form(""),
         target_disk_serial: str = Form(""),
         _auth: None = Depends(_require_ui_auth),
     ) -> RedirectResponse:
+        """Persist a boot-mode binding. Labels are edited on their
+        own row (see ``/ui/machines/{mac}/labels/edit``) so a bind
+        does not risk clobbering the operator's tagging.
+
+        UI-side: silently redirect back on invalid input; a full
+        field-error flash chain lands in a follow-up. Labels on
+        the row survive the bind untouched via ``upsert_binding``
+        pulling them off the current row."""
+        import contextlib as _contextlib
+
+        from pixie.machines._store import BadMac
+
+        with _contextlib.suppress(BadMac, ValueError):
+            store = request.app.state.machines_store
+            current = store.get(mac)
+            existing_labels = list(current.labels) if current else []
+            store.upsert_binding(
+                mac,
+                boot_mode=boot_mode,
+                image_content_sha256=image_content_sha256.strip().lower(),
+                labels=existing_labels,
+                target_disk_serial=target_disk_serial,
+            )
+        return RedirectResponse(url="/ui/machines", status_code=status.HTTP_303_SEE_OTHER)
+
+    @app.post("/ui/machines/{mac}/labels/edit")
+    def ui_machines_labels_edit(
+        request: Request,
+        mac: str,
+        labels: str = Form(""),
+        _auth: None = Depends(_require_ui_auth),
+    ) -> RedirectResponse:
+        """Edit the labels on one machine row. Independent of the
+        bind form: labels are metadata (search, filter, grouping)
+        and have no effect on the plan render, so a label edit does
+        not need a boot_mode + image + target_disk_serial round-trip.
+
+        Blank clears the labels. ``parse_labels`` enforces the same
+        alphanumeric-leading shape the JSON PUT path does."""
         import contextlib as _contextlib
 
         from pixie.machines._store import BadMac, parse_labels
 
-        # UI-side: silently redirect back on invalid input; a full
-        # field-error flash chain lands in a follow-up. ``labels`` is a
-        # comma-separated string in the form; parse_labels enforces the
-        # same shape the JSON PUT path does.
+        redirect_to = f"/ui/machines/{mac}"
         with _contextlib.suppress(BadMac, ValueError):
-            request.app.state.machines_store.upsert_binding(
-                mac,
-                boot_mode=boot_mode,
-                image_content_sha256=image_content_sha256.strip().lower(),
-                labels=parse_labels(labels),
-                sanboot_drive=sanboot_drive,
-                target_disk_serial=target_disk_serial,
-            )
-        return RedirectResponse(url="/ui/machines", status_code=status.HTTP_303_SEE_OTHER)
+            request.app.state.machines_store.set_labels(mac, parse_labels(labels))
+        return RedirectResponse(url=redirect_to, status_code=status.HTTP_303_SEE_OTHER)
 
     @app.post("/ui/machines/delete")
     def ui_machines_delete(
@@ -940,6 +980,28 @@ def create_app() -> FastAPI:
         machines = machines_store.list()
         images = [e for e in entries if getattr(e, "bindable", False)]
         bundles = [e for e in entries if not getattr(e, "bindable", False)]
+        # Live-env media state. ``pixie-tui`` / ``pixie-inventory`` /
+        # ``pixie-flash-*`` all need vmlinuz + initrd + live.squashfs
+        # staged under ``PIXIE_LIVE_ENV_DIR`` (defaults to
+        # ``<state>/live-env``). Surface the staged / missing signal
+        # + per-file byte counts so the operator can tell at a glance
+        # whether the pixie boot modes are live or would fall back to
+        # the "unavailable" plan.
+        live_env_dir = request.app.state.live_env_dir
+        live_env_ready = False
+        live_env_files: dict[str, int | None] = {
+            "vmlinuz": None,
+            "initrd": None,
+            "live.squashfs": None,
+        }
+        if live_env_dir is not None:
+            for name in live_env_files:
+                p = live_env_dir / name
+                try:
+                    live_env_files[name] = p.stat().st_size if p.is_file() else None
+                except OSError:
+                    live_env_files[name] = None
+            live_env_ready = all(v is not None for v in live_env_files.values())
         return {
             "machines_total": len(machines),
             "machines_bound": sum(1 for m in machines if m.image_content_sha256),
@@ -953,6 +1015,9 @@ def create_app() -> FastAPI:
             "exports_total": len(exports),
             "exports_running": sum(1 for e in exports if e.status == "running"),
             "exports_error": sum(1 for e in exports if e.status == "error"),
+            "live_env_ready": live_env_ready,
+            "live_env_dir": str(live_env_dir) if live_env_dir is not None else "",
+            "live_env_files": live_env_files,
         }
 
     @app.get("/ui/dashboard-live.json")
@@ -1044,7 +1109,6 @@ def create_app() -> FastAPI:
                 "inventory_at_display": format_ts(m.inventory_at or "", store),
                 "disks_count": len(disks) if isinstance(disks, list) else 0,
                 "has_lshw": bool((m.inventory or {}).get("lshw")),
-                "sanboot_drive": m.sanboot_drive,
                 "target_disk_serial": m.target_disk_serial,
             }
         return JSONResponse(out)

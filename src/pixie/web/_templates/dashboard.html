@@ -84,6 +84,61 @@
     </div>
 </div>
 
+{# Live-env media state. The pixie live env (netboot-pc bake) has to
+   be staged under PIXIE_LIVE_ENV_DIR before any pixie-* boot mode
+   works; without it the plan renderer emits an "unavailable" iPXE
+   chain and a bound target sits at a legible "media not staged"
+   screen. Surface the readiness signal + per-file bytes so an
+   operator can tell at a glance whether the boot modes are live. #}
+<div class="card shadow-sm mb-4">
+    <div class="card-header bg-light d-flex align-items-center">
+        <h2 class="h5 mb-0"><i class="bi bi-boombox me-2"></i>Live-env media</h2>
+        {% if stats.live_env_ready %}
+        <span class="badge text-bg-success ms-auto">
+            <i class="bi bi-check-circle me-1"></i>ready
+        </span>
+        {% else %}
+        <span class="badge text-bg-warning ms-auto">
+            <i class="bi bi-exclamation-triangle me-1"></i>not staged
+        </span>
+        {% endif %}
+    </div>
+    <div class="card-body">
+        {% if stats.live_env_ready %}
+        <p class="small mb-2">
+            The three files below are staged at
+            <code>{{ stats.live_env_dir }}</code> and
+            <code>pixie-tui</code>, <code>pixie-inventory</code>, and
+            <code>pixie-flash-*</code> can serve the live env from
+            <code>/boot/pixie-live-env/</code>.
+        </p>
+        {% else %}
+        <p class="small text-warning mb-2">
+            Live-env media is missing under
+            <code>{{ stats.live_env_dir or '(unset)' }}</code>.
+            Every <code>pixie-*</code> boot_mode falls back to the
+            "unavailable" iPXE plan until the three files below are
+            present. Copy vmlinuz + initrd + live.squashfs from the
+            latest <code>pixie-netboot-pc-x86_64</code> bake into
+            that directory. Restart the container is NOT required
+            (the renderer checks the files each render).
+        </p>
+        {% endif %}
+        <dl class="row small mb-0">
+            {% for name, size in stats.live_env_files.items() %}
+            <dt class="col-sm-3 font-monospace">{{ name }}</dt>
+            <dd class="col-sm-9">
+                {% if size is not none %}
+                <span class="text-success"><i class="bi bi-check-circle me-1"></i>{{ (size / 1024 / 1024) | round(1) }} MiB</span>
+                {% else %}
+                <span class="text-warning"><i class="bi bi-x-circle me-1"></i>missing</span>
+                {% endif %}
+            </dd>
+            {% endfor %}
+        </dl>
+    </div>
+</div>
+
 <div class="card shadow-sm">
     <div class="card-header bg-light d-flex align-items-center">
         <h2 class="h5 mb-0"><i class="bi bi-clock-history me-2"></i>Recent events</h2>

@@ -1,5 +1,6 @@
 {% extends "layout.html" %}
 {% from "_partials/table_helpers.html" import search_input, sort_header, pagination_inline %}
+{% from "_partials/recent_events.html" import recent_events_card %}
 {% block title %}Machines - pixie{% endblock %}
 {% block subnav %}
 <nav class="navbar subnav-strip" aria-label="Section sub-navigation">
@@ -86,12 +87,11 @@
                         {% if m.last_seen_ip %}<br><code>{{ m.last_seen_ip }}</code>{% endif %}
                     </td>
                     <td class="text-end text-nowrap">
-                        <a href="/ui/machines/{{ m.mac }}"
-                           class="btn btn-sm btn-outline-primary"
-                           title="Open {{ m.mac }} detail"
-                           aria-label="Open {{ m.mac }} detail">
-                            <i class="bi bi-search" aria-hidden="true"></i>
-                        </a>
+                        {# The MAC cell already links to the detail page;
+                           an "open" icon here is redundant. Keep only
+                           the destructive action, which needs its own
+                           control (a confirm-prompt on a link would be
+                           surprising). #}
                         <form method="post" action="/ui/machines/delete" class="d-inline"
                               onsubmit="return confirm('Delete machine record for {{ m.mac }}? Inventory + binding will be lost.');">
                             <input type="hidden" name="mac" value="{{ m.mac }}">
@@ -180,4 +180,5 @@
     setInterval(poll, POLL_MS);
 })();
 </script>
+{{ recent_events_card(machine_events, "machine") }}
 {% endblock %}
