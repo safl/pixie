@@ -81,138 +81,221 @@
     </div>
 </div>
 
-{% set boot_mode_labels = {
-    'ipxe-exit': 'ipxe-exit (boot local disk)',
-    'nbdboot': 'nbdboot (image over NBD)',
-    'pixie-flash-once': 'pixie-flash-once (flash image once, then boot disk)',
-    'pixie-flash-always': 'pixie-flash-always (re-flash every boot)',
-    'pixie-inventory': 'pixie-inventory (collect inventory, then boot)',
-    'pixie-tui': 'pixie-tui (interactive wizard on the live env)',
-} %}
 <div class="card shadow-sm mb-4" id="binding">
-    <div class="card-header bg-light">
+    <div class="card-header bg-light d-flex align-items-center">
         <h2 class="h5 mb-0"><i class="bi bi-pencil me-2"></i>Edit binding</h2>
+        <span class="ms-auto small text-primary d-none" id="bind-dirty-hint">
+            <i class="bi bi-dot"></i>Unsaved changes
+        </span>
     </div>
     <div class="card-body">
-        <form method="post" action="/ui/machines/bind" class="row g-3">
+        <form method="post" action="/ui/machines/bind" id="bind-form" class="d-flex flex-column gap-3">
             <input type="hidden" name="mac" value="{{ machine.mac }}">
-            <div class="col-md-6">
-                <label for="boot_mode" class="form-label">Boot mode</label>
-                <select id="boot_mode" name="boot_mode" class="form-select">
-                    {% for mode in boot_modes %}
-                    <option value="{{ mode }}" {% if machine.boot_mode == mode %}selected{% endif %}>
-                        {{ boot_mode_labels.get(mode, mode) }}
-                    </option>
+
+            {# ---- Boot-mode radio-card picker ------------------------
+
+               Six cards in a 3-across grid. The underlying
+               ``<input type="radio">`` is visually hidden but keeps
+               the form serialisation + keyboard accessibility that a
+               plain click-a-card widget would drop. The label wraps
+               both the radio and the visual card so anywhere on the
+               card selects the mode. #}
+            <div>
+                <label class="form-label fw-semibold">Boot mode</label>
+                <div class="row g-2 mode-picker" role="radiogroup" aria-label="Boot mode">
+                    {% for mode_value, meta in boot_mode_meta %}
+                    <div class="col-lg-4 col-sm-6">
+                        <label class="mode-card d-block h-100 mb-0" data-mode="{{ mode_value }}">
+                            <input type="radio" name="boot_mode" value="{{ mode_value }}"
+                                   class="visually-hidden mode-radio"
+                                   {% if machine.boot_mode == mode_value %}checked{% endif %}>
+                            <div class="mode-card-body card h-100 border">
+                                <div class="card-body p-3 d-flex flex-column">
+                                    <div class="d-flex align-items-center mb-1">
+                                        <i class="bi bi-{{ meta.icon }} me-2 text-primary" style="font-size: 1.15rem;"></i>
+                                        <span class="fw-semibold">{{ meta.short }}</span>
+                                        <span class="ms-auto mode-check text-primary" aria-hidden="true">
+                                            <i class="bi bi-check-circle-fill"></i>
+                                        </span>
+                                    </div>
+                                    <div class="small text-muted flex-grow-1">{{ meta.desc }}</div>
+                                    <div class="small text-body-tertiary mt-2 font-monospace">
+                                        {{ mode_value }}
+                                    </div>
+                                </div>
+                            </div>
+                        </label>
+                    </div>
                     {% endfor %}
-                </select>
-            </div>
-            <div class="col-md-6"
-                 data-policy-relevant="pixie-flash-once pixie-flash-always nbdboot">
-                <label for="image_content_sha256" class="form-label">
-                    Image
-                    <span class="policy-usage small text-muted fw-normal ms-1"></span>
-                </label>
-                {% set entry_shas = bindable_entries | map(attribute='content_sha256') | list %}
-                <select id="image_content_sha256" name="image_content_sha256"
-                        class="form-select" data-nbdboot-gate="1">
-                    <option value="" {% if not machine.image_content_sha256 %}selected{% endif %}>
-                        (unbound)
-                    </option>
-                    {% for e in bindable_entries %}
-                    {# ``data-nbdboot-ready`` mirrors ``e.fetched``: bytes on
-                       disk means pixie can serve the image over NBD for
-                       nbdboot. The inline script below disables options
-                       whose value is "false" when ``boot_mode=nbdboot`` so
-                       an operator can't accidentally bind an unfetched
-                       image for a nbdboot target. Flash modes leave every
-                       option enabled (the flash pipeline will refuse a
-                       missing blob at plan time). #}
-                    <option value="{{ e.content_sha256 }}"
-                            data-nbdboot-ready="{{ 'true' if e.fetched else 'false' }}"
-                            {% if machine.image_content_sha256 == e.content_sha256 %}selected{% endif %}>
-                        {{ e.name }}{% if e.arch %} ({{ e.arch }}){% endif %}{% if not e.fetched %} -- not fetched{% endif %}
-                    </option>
-                    {% endfor %}
-                    {# Fallback option: keep a bound sha visible even if the
-                       matching catalog entry has been deleted, so an
-                       operator can see (and clear) the stale binding rather
-                       than losing it silently. #}
-                    {% if machine.image_content_sha256 and machine.image_content_sha256 not in entry_shas %}
-                    <option value="{{ machine.image_content_sha256 }}" selected>
-                        {{ machine.image_content_sha256 }} (no matching catalog entry)
-                    </option>
-                    {% endif %}
-                </select>
-                {% if not bindable_entries %}
-                <div class="form-text text-muted">
-                    No fetched images yet. <a href="/ui/catalog">Add and fetch one on the Catalog page.</a>
                 </div>
-                {% endif %}
             </div>
 
-            {# ``target_disk_serial`` is the only bind-scoped tuning
-               beyond boot_mode + image. The JS gate on
-               ``data-policy-relevant`` dims it + appends "(not used
-               by <mode>)" when the current mode ignores it, so an
-               operator's disk pick survives a mode flip. #}
-            <div class="col-md-6" data-policy-relevant="pixie-flash-once pixie-flash-always">
-                <label for="target_disk_serial" class="form-label">
-                    Target disk
-                    <span class="policy-usage small text-muted fw-normal ms-1"></span>
-                </label>
-                {% set disks = (machine.inventory or {}).get("disks") or [] %}
-                {% if disks %}
-                <select id="target_disk_serial" name="target_disk_serial" class="form-select">
-                    <option value="">- none picked (flash will refuse) -</option>
-                    {% for d in disks %}
-                    {% set serial = d.get("serial") or "" %}
-                    {% if serial %}
-                    <option value="{{ serial }}"
-                            {% if serial == machine.target_disk_serial %}selected{% endif %}>
-                        {{ d.get("path") or "?" }} | {{ d.get("size") or "?" }}{% if d.get("model") %} | {{ d.get("model") }}{% endif %} | serial: {{ serial }}
-                    </option>
-                    {% else %}
-                    <option disabled>
-                        {{ d.get("path") or "?" }} | (no serial; cannot flash-target)
-                    </option>
+            <div class="row g-3">
+                {# ---- Image picker --------------------------------- #}
+                <div class="col-md-6"
+                     data-policy-relevant="pixie-flash-once pixie-flash-always nbdboot">
+                    <label for="image_content_sha256" class="form-label fw-semibold">
+                        Image
+                        <span class="policy-usage small text-muted fw-normal ms-1"></span>
+                    </label>
+                    {% set entry_shas = bindable_entries | map(attribute='content_sha256') | list %}
+                    <select id="image_content_sha256" name="image_content_sha256"
+                            class="form-select" data-nbdboot-gate="1">
+                        <option value="" {% if not machine.image_content_sha256 %}selected{% endif %}>
+                            (unbound)
+                        </option>
+                        {% for e in bindable_entries %}
+                        {# ``data-nbdboot-ready`` mirrors ``e.fetched``: bytes
+                           on disk means pixie can serve the image over NBD
+                           for nbdboot. The inline script disables options
+                           whose value is "false" when ``boot_mode=nbdboot``
+                           so an operator can't accidentally bind an
+                           unfetched image for a nbdboot target. Flash modes
+                           leave every option enabled (the flash pipeline
+                           will refuse a missing blob at plan time). #}
+                        <option value="{{ e.content_sha256 }}"
+                                data-nbdboot-ready="{{ 'true' if e.fetched else 'false' }}"
+                                data-image-name="{{ e.name }}"
+                                {% if machine.image_content_sha256 == e.content_sha256 %}selected{% endif %}>
+                            {{ e.name }}{% if e.arch %} ({{ e.arch }}){% endif %}{% if not e.fetched %} -- not fetched{% endif %}
+                        </option>
+                        {% endfor %}
+                        {# Fallback: keep a bound sha visible even if its
+                           catalog entry was deleted, so an operator can see
+                           and clear the stale binding rather than losing it
+                           silently. #}
+                        {% if machine.image_content_sha256 and machine.image_content_sha256 not in entry_shas %}
+                        <option value="{{ machine.image_content_sha256 }}" selected>
+                            {{ machine.image_content_sha256 }} (no matching catalog entry)
+                        </option>
+                        {% endif %}
+                    </select>
+                    {% if not bindable_entries %}
+                    <div class="form-text text-muted">
+                        No fetched images yet. <a href="/ui/catalog">Add and fetch one on the Catalog page.</a>
+                    </div>
                     {% endif %}
-                    {% endfor %}
-                </select>
-                <div class="form-text">
-                    Live env matches the SERIAL against current disks at flash
-                    time; a swapped or renumbered drive refuses the flash rather
-                    than risking the wrong disk.
                 </div>
-                {% else %}
-                <input type="hidden" name="target_disk_serial"
-                       value="{{ machine.target_disk_serial or '' }}">
-                <div class="alert alert-warning small mb-0">
-                    No inventory posted yet. Set boot_mode=<code>pixie-inventory</code>
-                    and power-cycle the machine; the live env will report its disks
-                    and this picker will populate.
+
+                {# ---- Target disk picker --------------------------- #}
+                <div class="col-md-6" data-policy-relevant="pixie-flash-once pixie-flash-always">
+                    <label for="target_disk_serial" class="form-label fw-semibold">
+                        Target disk
+                        <span class="policy-usage small text-muted fw-normal ms-1"></span>
+                    </label>
+                    {% set disks = (machine.inventory or {}).get("disks") or [] %}
+                    {% if disks %}
+                    <select id="target_disk_serial" name="target_disk_serial" class="form-select">
+                        <option value="">- none picked (flash will refuse) -</option>
+                        {% for d in disks %}
+                        {% set serial = d.get("serial") or "" %}
+                        {% if serial %}
+                        <option value="{{ serial }}"
+                                {% if serial == machine.target_disk_serial %}selected{% endif %}>
+                            {{ d.get("path") or "?" }} | {{ d.get("size") or "?" }}{% if d.get("model") %} | {{ d.get("model") }}{% endif %} | serial: {{ serial }}
+                        </option>
+                        {% else %}
+                        <option disabled>
+                            {{ d.get("path") or "?" }} | (no serial; cannot flash-target)
+                        </option>
+                        {% endif %}
+                        {% endfor %}
+                    </select>
+                    <div class="form-text">
+                        The live env matches this SERIAL against the current disks
+                        at flash time; a swapped or renumbered drive refuses the
+                        flash rather than risking the wrong disk.
+                    </div>
+                    {% else %}
+                    <input type="hidden" name="target_disk_serial"
+                           value="{{ machine.target_disk_serial or '' }}">
+                    <div class="alert alert-warning small mb-0 py-2">
+                        <i class="bi bi-info-circle me-1"></i>
+                        No inventory on file yet. Pick
+                        <span class="fw-semibold">Discover inventory</span> above,
+                        power-cycle this target, and its disks will populate here.
+                    </div>
+                    {% endif %}
                 </div>
-                {% endif %}
             </div>
-            <div class="col-12">
-                {# Client-side echo of the server-side flash-mode guard:
-                   the JS below disables the Save button + surfaces a
-                   red hint when boot_mode is pixie-flash-{once,always}
-                   AND either no inventory is on file OR no
-                   target_disk_serial is picked. The server rejects the
-                   same combination with 422 regardless. #}
-                <div id="flash-guard-hint"
-                     class="alert alert-warning small py-2 mb-2 d-none"
-                     role="alert">
-                    <i class="bi bi-exclamation-triangle me-1"></i>
-                    <span class="hint-body"></span>
+
+            {# ---- Preview panel --------------------------------------
+
+               Plain-English description of what will happen on the
+               next PXE from this target. Updated by JS on any input
+               change. Sits ABOVE the flash-guard hint so an operator
+               scanning the form always knows what "Save" will do
+               before they're asked whether they can Save. #}
+            <div class="border rounded p-3 bg-body-tertiary" id="bind-preview">
+                <div class="small text-muted mb-1">
+                    <i class="bi bi-eye me-1"></i>On the next PXE from this target
                 </div>
-                <button type="submit" id="save-binding" class="btn btn-primary">
-                    <i class="bi bi-check2 me-1"></i>Update binding
+                <div class="preview-body">-</div>
+            </div>
+
+            {# ---- Flash-mode guard hint ------------------------------
+
+               Client-side echo of the server-side 422 guard: the JS
+               disables Save + surfaces this hint when the picked
+               boot_mode is pixie-flash-{once,always} AND either no
+               inventory is on file OR no target_disk_serial is
+               picked. The server rejects the same combination
+               regardless. #}
+            <div id="flash-guard-hint"
+                 class="alert alert-warning small py-2 mb-0 d-none"
+                 role="alert">
+                <i class="bi bi-exclamation-triangle me-1"></i>
+                <span class="hint-body"></span>
+            </div>
+
+            <div class="d-flex align-items-center gap-3">
+                <button type="submit" id="save-binding" class="btn btn-primary" disabled>
+                    <i class="bi bi-check2 me-1"></i>Save changes
                 </button>
+                <span class="small text-muted" id="bind-clean-hint">
+                    No changes to save.
+                </span>
             </div>
         </form>
     </div>
 </div>
+
+<style>
+/* ---- Bind form: radio-card boot-mode picker ------------------
+ *
+ * A card grid backed by a hidden ``<input type=radio>`` per card:
+ * click anywhere selects, keyboard nav works via the underlying
+ * radio group, and the form serialises the pick the same way a
+ * plain <select> would.
+ *
+ * :has() drives the checked-state styling on browsers that support
+ * it (Chrome 105+, Safari 15.4+, Firefox 121+). Older browsers
+ * fall through to the .mode-card-selected class the JS below
+ * toggles. Both selectors are OR'd in every rule below. */
+.mode-card { cursor: pointer; }
+.mode-card .mode-card-body {
+    transition: border-color 120ms, box-shadow 120ms, background-color 120ms;
+}
+.mode-card:hover .mode-card-body {
+    border-color: var(--bs-primary);
+    box-shadow: 0 0.125rem 0.35rem rgba(13, 110, 253, 0.10);
+}
+.mode-card .mode-check { opacity: 0; transition: opacity 120ms; }
+.mode-card:has(.mode-radio:checked) .mode-card-body,
+.mode-card.mode-card-selected .mode-card-body {
+    border-color: var(--bs-primary);
+    border-width: 2px;
+    background-color: rgba(13, 110, 253, 0.04);
+}
+.mode-card:has(.mode-radio:checked) .mode-check,
+.mode-card.mode-card-selected .mode-check { opacity: 1; }
+/* The underlying radio is visually-hidden but still receives keyboard
+ * focus; ring the visible card body when :focus-visible fires. */
+.mode-card .mode-radio:focus-visible + .mode-card-body {
+    outline: 2px solid var(--bs-primary);
+    outline-offset: 2px;
+}
+</style>
 
 <div class="card shadow-sm mb-4" id="inventory">
     <div class="card-header bg-light d-flex align-items-center">
@@ -410,70 +493,123 @@
 
 <script>
 (function () {
-    // Machine config is GENERAL (a property of the row); each boot_mode
-    // READS a subset. Ported from bty: instead of hiding image / target
-    // fields a mode ignores, we DIM them and tag them "(not used by
-    // <mode>)" so the general/consumed-by split stays visible. Each
-    // relevant field carries ``data-policy-relevant`` listing the modes
-    // that consume it; the value survives a mode switch (a sha bound
-    // under nbdboot is not cleared when the operator flips to
-    // pixie-inventory to run a discovery pass).
-    const modeSelect = document.getElementById("boot_mode");
-    if (!modeSelect) return;
-    const targets = document.querySelectorAll("[data-policy-relevant]");
+    // ---- Bind-form controller -------------------------------------
+    //
+    // Coordinates four independent behaviours over the same form:
+    //   1. Radio-card checked-state fallback for browsers without
+    //      :has() support (Firefox < 121 mostly).
+    //   2. Mode-relevance dimming: image + target-disk pickers get
+    //      an "opacity-50" + "(not used by <mode>)" label when the
+    //      picked mode ignores them. The pick VALUE survives so a
+    //      sha calibrated under ipxe-exit stays around when the
+    //      operator flips to nbdboot.
+    //   3. Nbdboot-ready gate on the image picker: only fetched
+    //      catalog entries are selectable under boot_mode=nbdboot
+    //      (pixie needs the bytes on disk to serve them over NBD).
+    //   4. Flash-mode guard: pixie-flash-{once,always} refuses to
+    //      Save without both inventory + a picked target disk. The
+    //      server enforces the same constraint with a 422; the
+    //      client-side mirror surfaces the reason BEFORE the click.
+    //   5. Dirty tracking on the Save button: enabled iff any field
+    //      differs from its initial value at page-load, cleared by
+    //      submitting the form.
+    //   6. Live "preview" panel: plain-English narration of what
+    //      the target will do on its next PXE given the current
+    //      picks. Same signal the operator would read from
+    //      /pxe/<mac>/plan, without the JSON round-trip.
+    const form = document.getElementById("bind-form");
+    if (!form) return;
+    const modeInputs = form.querySelectorAll('input[name="boot_mode"]');
+    if (!modeInputs.length) return;
+    const modeCards = form.querySelectorAll(".mode-card");
+    const targets = form.querySelectorAll("[data-policy-relevant]");
+    const imgSelect = form.querySelector("select[data-nbdboot-gate]");
+    const targetSelect = form.querySelector("#target_disk_serial");
+    const hasInventoryDisks = !!(
+        targetSelect && targetSelect.tagName === "SELECT"
+        && targetSelect.querySelectorAll('option:not([value=""]):not([disabled])').length > 0
+    );
+    const saveBtn = form.querySelector("#save-binding");
+    const flashHint = form.querySelector("#flash-guard-hint");
+    const dirtyHint = document.getElementById("bind-dirty-hint");
+    const cleanHint = document.getElementById("bind-clean-hint");
+    const previewBody = form.querySelector("#bind-preview .preview-body");
 
+    // Human-readable descriptions for the preview panel. Mirrors the
+    // BOOT_MODE_META table in pixie.machines._store but pared to a
+    // sentence-per-mode that describes the OUTCOME on the next PXE,
+    // not the mode definition (the cards themselves cover that).
+    const MODE_PREVIEWS = {
+        "ipxe-exit":          "Pixie exits the iPXE chain. The BIOS boot order picks the next bootable device on this target.",
+        "pixie-inventory":    "Pixie boots its live env; the pixie CLI posts disk + NIC inventory back, then the target reboots to firmware.",
+        "pixie-tui":          "Pixie boots its live env into an interactive TUI. An operator drives the wizard on the target's console.",
+        "pixie-flash-once":   "Pixie boots its live env, which writes {IMAGE} to disk (serial: {DISK}), then the target reboots to firmware.",
+        "pixie-flash-always": "Pixie boots its live env, which re-writes {IMAGE} to disk (serial: {DISK}) on every PXE. Any local changes are lost.",
+        "nbdboot":            "Pixie streams {IMAGE} over NBD; root is an overlay-on-tmpfs of the image. Nothing writes back to the source.",
+    };
+    const FLASH_MODES = new Set(["pixie-flash-once", "pixie-flash-always"]);
+    const NBDBOOT = "nbdboot";
+    const IMAGE_MODES = new Set([NBDBOOT, "pixie-flash-once", "pixie-flash-always"]);
+
+    // Snapshot of the initial pick per field, taken at DOMContentLoaded.
+    // A field is DIRTY iff its current value differs from this snapshot.
+    // The form submit clears dirty (the page re-renders anyway).
+    const initial = {
+        boot_mode: pickedMode() || "",
+        image_content_sha256: imgSelect ? imgSelect.value : "",
+        target_disk_serial: (targetSelect && targetSelect.tagName === "SELECT") ? targetSelect.value : "",
+    };
+
+    function pickedMode() {
+        for (const r of modeInputs) if (r.checked) return r.value;
+        return "";
+    }
+
+    function pickedImageName() {
+        if (!imgSelect) return "";
+        const opt = imgSelect.selectedOptions[0];
+        if (!opt) return "";
+        return opt.getAttribute("data-image-name") || opt.value || "";
+    }
+
+    function pickedDiskLabel() {
+        if (!targetSelect || targetSelect.tagName !== "SELECT") return "";
+        const opt = targetSelect.selectedOptions[0];
+        if (!opt || !opt.value) return "";
+        return opt.value;
+    }
+
+    // 1. Radio-card :has() fallback ---------------------------------
+    function syncCardSelectedClass() {
+        modeCards.forEach((card) => {
+            const radio = card.querySelector(".mode-radio");
+            card.classList.toggle("mode-card-selected", !!(radio && radio.checked));
+        });
+    }
+
+    // 2. Mode-relevance dimming -------------------------------------
     function applyUsage() {
-        const current = modeSelect.value;
+        const current = pickedMode();
         targets.forEach((el) => {
             const allowed = (el.getAttribute("data-policy-relevant") || "").split(/\s+/);
             const consumed = allowed.includes(current);
             el.classList.toggle("opacity-50", !consumed);
             const note = el.querySelector(".policy-usage");
-            if (note) note.textContent = consumed ? "" : "(not used by " + current + ")";
-            // ``disabled`` on the underlying control makes the field
-            // visibly (and behaviourally) inert -- graying alone still
-            // lets a stray click / tab land on it and edit a value the
-            // current mode doesn't consume. The submit handler below
-            // temporarily re-enables every ``data-policy-relevant``
-            // control right before POST so its stored value survives
-            // a mode flip (an image_content_sha256 calibrated under
-            // ipxe-exit stays around when the operator swaps to
-            // nbdboot, without a second round-trip to re-enter it). The
-            // "readonly" attribute is not enough on <select>, which
-            // ignores it entirely.
+            if (note) note.textContent = consumed ? "" : "(not used by this mode)";
+            // ``disabled`` on the underlying control keeps a stray
+            // click or tab from landing on a value the current mode
+            // ignores. The submit handler re-enables everything so
+            // the value survives a mode flip when POSTed.
             el.querySelectorAll("input, select, textarea").forEach((ctrl) => {
                 ctrl.disabled = !consumed;
             });
         });
     }
 
-    // Re-enable every mode-gated control at submit time so the
-    // browser POSTs the current values even for fields the current
-    // mode does not consume. Persists picks calibrated under a
-    // different mode without giving up the visibly-disabled UX.
-    const bindingForm = modeSelect.closest("form");
-    if (bindingForm) {
-        bindingForm.addEventListener("submit", () => {
-            targets.forEach((el) => {
-                el.querySelectorAll("input, select, textarea").forEach((ctrl) => {
-                    ctrl.disabled = false;
-                });
-            });
-        });
-    }
-
-    // Ramboot gate on the image picker: when the operator flips to
-    // boot_mode=nbdboot, disable options whose ``data-nbdboot-ready`` is
-    // "false" (blob not fetched -> pixie can't serve it over NBD). Flash
-    // modes leave every option enabled -- the flash renderer refuses a
-    // missing blob at plan time. If the currently-selected option gets
-    // disabled by the switch, drop the binding so the operator doesn't
-    // Save a stale mismatch.
-    const imgSelect = document.querySelector("select[data-nbdboot-gate]");
-
-    function applyRambootGate() {
+    // 3. Nbdboot-ready image gate -----------------------------------
+    function applyNbdbootGate() {
         if (!imgSelect) return;
-        const isNbdboot = modeSelect.value === "nbdboot";
+        const isNbdboot = pickedMode() === NBDBOOT;
         imgSelect.querySelectorAll("option[data-nbdboot-ready]").forEach((opt) => {
             const ready = opt.getAttribute("data-nbdboot-ready") === "true";
             opt.disabled = isNbdboot && !ready;
@@ -483,56 +619,97 @@
         }
     }
 
-    // Flash-mode guard: pixie-flash-once / pixie-flash-always both
-    // need a target_disk_serial the live env matches against the
-    // machine's current disks. Without inventory the picker is empty
-    // (the server rendered a warning banner in place of the select),
-    // and without a pick the live env has nothing to flash. Mirror
-    // the store-side ``ValueError`` so the operator sees the same
-    // prerequisites BEFORE clicking Save, and drop the Save button
-    // as long as the constraint is violated.
-    const FLASH_MODES = new Set(["pixie-flash-once", "pixie-flash-always"]);
-    const saveBtn = document.getElementById("save-binding");
-    const flashHint = document.getElementById("flash-guard-hint");
-    const targetSelect = document.getElementById("target_disk_serial");
-    const hasInventoryDisks = !!(
-        targetSelect && targetSelect.tagName === "SELECT"
-        && targetSelect.querySelectorAll('option:not([value=""]):not([disabled])').length > 0
-    );
-
+    // 4. Flash-mode guard -------------------------------------------
     function applyFlashGuard() {
-        if (!saveBtn || !flashHint) return;
-        const isFlash = FLASH_MODES.has(modeSelect.value);
+        if (!flashHint) return false;
+        const isFlash = FLASH_MODES.has(pickedMode());
         let msg = "";
         if (isFlash) {
             if (!hasInventoryDisks) {
-                msg = "This mode needs inventory. Bind boot_mode=pixie-inventory + power-cycle this target first.";
+                msg = "This mode flashes a specific disk, and pixie hasn't seen this target's disks yet. Pick Discover inventory above, power-cycle, then come back.";
             } else if (!targetSelect || !targetSelect.value) {
-                msg = "This mode needs a target disk; pick one from the picker above.";
+                msg = "Pick which disk to flash. Pixie matches by serial at flash time; a swapped drive refuses the flash rather than risking the wrong disk.";
             }
         }
         const body = flashHint.querySelector(".hint-body");
         if (msg) {
             if (body) body.textContent = msg;
             flashHint.classList.remove("d-none");
-            saveBtn.disabled = true;
-        } else {
-            flashHint.classList.add("d-none");
-            saveBtn.disabled = false;
+            return true; // guard tripped -> block Save
         }
+        flashHint.classList.add("d-none");
+        return false;
     }
 
-    modeSelect.addEventListener("change", () => {
-        applyUsage();
-        applyRambootGate();
-        applyFlashGuard();
-    });
-    if (targetSelect) {
-        targetSelect.addEventListener("change", applyFlashGuard);
+    // 5. Dirty tracking + Save button state -------------------------
+    function isDirty() {
+        if (pickedMode() !== initial.boot_mode) return true;
+        if (imgSelect && imgSelect.value !== initial.image_content_sha256) return true;
+        if (targetSelect && targetSelect.tagName === "SELECT"
+            && targetSelect.value !== initial.target_disk_serial) return true;
+        return false;
     }
-    applyUsage();
-    applyRambootGate();
-    applyFlashGuard();
+
+    function applySaveState(flashGuardBlocked) {
+        if (!saveBtn) return;
+        const dirty = isDirty();
+        // Guard-blocked ALWAYS wins over dirty (safety > convenience).
+        saveBtn.disabled = flashGuardBlocked || !dirty;
+        if (dirtyHint) dirtyHint.classList.toggle("d-none", !dirty);
+        if (cleanHint) cleanHint.classList.toggle("d-none", dirty);
+    }
+
+    // 6. Preview panel narration ------------------------------------
+    function renderPreview() {
+        if (!previewBody) return;
+        const mode = pickedMode();
+        if (!mode) {
+            previewBody.textContent = "Pick a boot mode above to see what happens.";
+            return;
+        }
+        let text = MODE_PREVIEWS[mode] || mode;
+        const imgName = pickedImageName();
+        const diskLabel = pickedDiskLabel();
+        if (IMAGE_MODES.has(mode)) {
+            if (!imgName) {
+                previewBody.innerHTML = `<span class="text-warning-emphasis"><i class="bi bi-exclamation-circle me-1"></i>Pick an image above; this mode needs one.</span>`;
+                return;
+            }
+            text = text.replace("{IMAGE}", `<code>${imgName}</code>`);
+        }
+        if (FLASH_MODES.has(mode)) {
+            text = text.replace("{DISK}", diskLabel ? `<code>${diskLabel}</code>` : "-not picked-");
+        }
+        previewBody.innerHTML = text;
+    }
+
+    function refreshAll() {
+        syncCardSelectedClass();
+        applyUsage();
+        applyNbdbootGate();
+        const blocked = applyFlashGuard();
+        renderPreview();
+        applySaveState(blocked);
+    }
+
+    // Wire events.
+    modeInputs.forEach((r) => r.addEventListener("change", refreshAll));
+    if (imgSelect) imgSelect.addEventListener("change", refreshAll);
+    if (targetSelect) targetSelect.addEventListener("change", refreshAll);
+
+    // Re-enable every mode-gated control at submit time so the
+    // browser POSTs the current values even for fields the current
+    // mode does not consume, matching the server's "config is
+    // GENERAL, mode picks what to consume" contract.
+    form.addEventListener("submit", () => {
+        targets.forEach((el) => {
+            el.querySelectorAll("input, select, textarea").forEach((ctrl) => {
+                ctrl.disabled = false;
+            });
+        });
+    });
+
+    refreshAll();
 })();
 
 // Live poll: refresh the ``Last seen`` / ``Last seen IP`` cells

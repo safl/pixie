@@ -155,8 +155,15 @@ def test_ui_machine_detail_bind_form_prefills_current_binding(client: TestClient
         json={"boot_mode": "nbdboot", "image_content_sha256": sha},
     )
     body = c.get("/ui/machines/aa:bb:cc:dd:ee:04").text
-    # boot_mode select is pre-selected to nbdboot
-    assert 'value="nbdboot" selected' in body
+    # Boot-mode radio-card picker: the nbdboot radio input is
+    # rendered with ``checked``. Assert both attributes appear on the
+    # same radio; the raw substring uses newlines because the
+    # template splits the ``<input>`` across lines for readability,
+    # so match by regex instead of anchored substring.
+    import re
+
+    nbdboot_radio = re.compile(r'<input\b[^>]*\bvalue="nbdboot"[^>]*\bchecked\b', re.DOTALL)
+    assert nbdboot_radio.search(body), body[:2000]
     # image sha select has an option with the current sha value
     # (may or may not be pre-selected depending on whether the sha
     # corresponds to a fetched catalog entry; the test just seeded
@@ -193,6 +200,61 @@ def test_ui_machine_detail_image_picker_has_boot_mode_gate_markup(
     assert 'data-nbdboot-ready="true"' in body
     assert 'data-nbdboot-ready="false"' in body
     assert "-- not fetched" in body
+
+
+def test_ui_machine_detail_renders_boot_mode_radio_card_grid(client: TestClient) -> None:
+    """The bind form uses a radio-card grid, not a plain <select>. All
+    six BOOT_MODES render as their own ``<label class="mode-card">``
+    with a hidden radio input and the short-label + description from
+    :data:`BOOT_MODE_META`. Guards the presentation contract so a
+    future edit that drops a mode from the metadata table (or drops
+    the picker in favour of a select) fails a specific assertion
+    rather than a wall of missing-string tests."""
+    import html as _html
+
+    from pixie.machines._store import BOOT_MODE_META
+
+    c = _authed(client)
+    c.post(
+        "/ui/machines/bind",
+        data={"mac": "aa:bb:cc:dd:ee:07", "boot_mode": "ipxe-exit"},
+    )
+    # Jinja auto-escapes apostrophes in the descriptions to ``&#39;``;
+    # unescape the response body before matching the metadata verbatim.
+    body = _html.unescape(c.get("/ui/machines/aa:bb:cc:dd:ee:07").text)
+
+    for mode_value, meta in BOOT_MODE_META:
+        assert f'data-mode="{mode_value}"' in body, f"missing mode card: {mode_value}"
+        # Short label + description land verbatim in the card body.
+        assert meta["short"] in body
+        assert meta["desc"] in body
+        # Radio input carries the mode value.
+        assert f'value="{mode_value}"' in body
+
+
+def test_ui_machine_detail_bind_form_has_preview_and_save_disabled_initially(
+    client: TestClient,
+) -> None:
+    """The bind form renders the preview panel (JS fills it live) and
+    the Save button starts disabled so a page-load doesn't imply
+    unsaved changes are pending. Guards the "no changes -> can't
+    save" contract even before the JS runs."""
+    c = _authed(client)
+    c.post(
+        "/ui/machines/bind",
+        data={"mac": "aa:bb:cc:dd:ee:08", "boot_mode": "ipxe-exit"},
+    )
+    body = c.get("/ui/machines/aa:bb:cc:dd:ee:08").text
+
+    # Preview panel container present with the shell text.
+    assert 'id="bind-preview"' in body
+    assert "On the next PXE from this target" in body
+    # Save button rendered as disabled by default.
+    import re
+
+    save = re.compile(r'<button[^>]*id="save-binding"[^>]*\bdisabled\b', re.DOTALL)
+    assert save.search(body), "expected #save-binding to render with disabled attribute"
+    assert "Save changes" in body
 
 
 def test_ui_machine_detail_lists_recent_events(client: TestClient) -> None:
