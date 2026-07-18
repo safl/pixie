@@ -57,7 +57,7 @@ DEFAULT_DATETIME_FORMAT = "%Y-%m-%d %H:%M:%S %Z"
 # Extra tokens appended verbatim to the pixie-live-env kernel
 # cmdline (see pixie.pxe._routes._render_context + the
 # pixie-live-env.j2 template). Empty by default; the docstring for
-# the resolver + docs/hardware-quirks.md carry the known-good
+# the resolver + docs/src/hardware-quirks.md carry the known-good
 # values for boards we've hit in the field. The form accepts any
 # whitespace-separated tokens; newlines are rejected at set time
 # because they'd break the single-line iPXE ``kernel`` directive.
@@ -148,7 +148,7 @@ class SettingsStore:
     def resolve_live_env_extra_cmdline(self) -> str:
         """Effective live-env cmdline tail: override -> env -> empty.
 
-        Known-good values by hardware (docs/hardware-quirks.md carries
+        Known-good values by hardware (docs/src/hardware-quirks.md carries
         the canonical list):
 
         - GIGABYTE MC12-LE0 (Ryzen server board, BIOS F06+):

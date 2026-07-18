@@ -76,7 +76,7 @@ def _render_context(request: Request) -> RenderContext:
     # cmdline. Resolution chain lives on the settings store: /ui/settings
     # override (persisted in state.db) -> $PIXIE_LIVE_ENV_EXTRA_CMDLINE
     # (envvars-style pin) -> empty. Known-good values per hardware are
-    # documented in docs/hardware-quirks.md.
+    # documented in docs/src/hardware-quirks.md.
     extra_cmdline = ""
     settings = getattr(request.app.state, "settings_store", None)
     if settings is not None:
