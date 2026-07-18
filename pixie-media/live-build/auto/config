@@ -95,33 +95,9 @@ case "${PIXIE_VARIANT}" in
         # don't get claimed and confuse live-boot's NIC autoselect.
         BOOTAPPEND="boot=live components noeject plymouth.enable=0 modprobe.blacklist=nouveau,rndis_host nouveau.modeset=0 systemd.gpt_auto=0 console=tty0 console=ttyS0,115200 pixie.version=__PIXIE_VERSION__"
         ;;
-    ramboot-init)
-        # The slim live-init for pixie's ``ramboot`` boot mode (v0.62+).
-        # Same live-build dispatch shape as ``netboot-pc`` (amd64,
-        # binary=netboot) so we reuse the existing kernel package,
-        # microcode, firmware-chroot, and initramfs assembly machinery.
-        # Publishes only vmlinuz + initrd (the squashfs lb still
-        # builds is dropped by cijoe/scripts/live_build.py because
-        # the ramboot init never reaches the live-boot squashfs-mount
-        # stage). See pixie-media/live-build/config/hooks/normal/
-        # 0700-pixie-ramboot-init.hook.chroot for the in-initrd
-        # nbd-client + overlayfs + pivot_root logic this variant
-        # ships.
-        #
-        # pixie.* cmdline params: pixie-web's ipxe_ramboot.j2 template
-        # appends ``pixie.nbd=tcp://<host>:<port> pixie.image=<ref>
-        # pixie.overlay_size=<size> pixie.server=<...> pixie.mac=<...>``
-        # per-client at render time; the bootappend below only
-        # carries the chroot-static ``boot=ramboot`` selector and
-        # the console + kernel hardening tokens.
-        ARCH=amd64
-        BINARY_IMAGES=netboot
-        BOOTLOADERS_OPTS=""
-        BOOTAPPEND="boot=ramboot plymouth.enable=0 modprobe.blacklist=nouveau,rndis_host nouveau.modeset=0 systemd.gpt_auto=0 console=tty0 console=ttyS0,115200 pixie.version=__PIXIE_VERSION__"
-        ;;
     *)
         echo "auto/config: unknown PIXIE_VARIANT=${PIXIE_VARIANT}" >&2
-        echo "  valid: netboot-pc | usbboot-pc | ramboot-init" >&2
+        echo "  valid: netboot-pc | usbboot-pc" >&2
         exit 2
         ;;
 esac
