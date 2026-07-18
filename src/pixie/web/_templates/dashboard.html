@@ -151,19 +151,22 @@
                 <tr>
                     <th scope="col">When</th>
                     <th scope="col">Kind</th>
-                    <th scope="col">Subject</th>
+                    <th scope="col">Related to</th>
                     <th scope="col">Summary</th>
                 </tr>
             </thead>
             <tbody data-events-feed>
+                {# ``Related to`` reads as ``<what>: <which>``: the
+                   subject_kind badge is the category, subject_id the
+                   specific name / MAC / export name. #}
                 {% for e in events %}
                 <tr>
                     <td class="small text-muted text-nowrap">{{ e.ts | fmt_ts }}</td>
                     <td><code>{{ e.kind }}</code></td>
                     <td>
                         {% if e.subject_kind %}
-                        <code class="small">{{ e.subject_kind }}</code>
-                        <span class="text-muted small">{{ e.subject_id }}</span>
+                        <span class="badge text-bg-light border me-1">{{ e.subject_kind }}</span>
+                        <code class="small">{{ e.subject_id or '' }}</code>
                         {% else %}
                         <span class="text-muted small">-</span>
                         {% endif %}
@@ -229,8 +232,10 @@
             const feed = document.querySelector("[data-events-feed]");
             if (!feed || !body.events) return;
             const rows = body.events.map((e) => {
+                // ``Related to`` cell -- see dashboard.html thead
+                // note: badge (category) + code (specific id).
                 const subject = e.subject_kind
-                    ? `<code class="small">${e.subject_kind}</code> <span class="text-muted small">${e.subject_id || ""}</span>`
+                    ? `<span class="badge text-bg-light border me-1">${e.subject_kind}</span><code class="small">${e.subject_id || ""}</code>`
                     : `<span class="text-muted small">-</span>`;
                 return `<tr>
                     <td class="small text-muted text-nowrap">${e.ts_display || e.ts}</td>

@@ -9,37 +9,12 @@
         <span class="subnav-jumps d-flex align-items-center flex-wrap">
             <a href="#log">Log</a>
         </span>
-        {# RIGHT: inline dropdowns. Kind + subject_kind are strict-
-           equality narrowings applied BEFORE the freeform ``q``
-           filter, so they're a separate control from the search
-           box (which lives on the card header row). Submit on
-           change means the operator doesn't need a Filter button;
-           preserved query params ride along so page/sort survive
-           a filter flip. #}
-        <form method="get" action="/ui/events"
-              class="subnav-actions d-flex align-items-center gap-2 m-0 ms-auto">
-            {% if preserved.q %}<input type="hidden" name="q" value="{{ preserved.q }}">{% endif %}
-            <label for="filter-kind" class="text-white-50 small mb-0 flex-shrink-0">Kind:</label>
-            <select id="filter-kind" name="kind" onchange="this.form.submit()"
-                    class="form-select form-select-sm" style="max-width: 18rem;">
-                <option value="">(any)</option>
-                {% for k in kind_choices %}
-                <option value="{{ k }}" {% if k == kind_selected %}selected{% endif %}>{{ k }}</option>
-                {% endfor %}
-            </select>
-            <label for="filter-subject" class="text-white-50 small mb-0 flex-shrink-0">Subject:</label>
-            <select id="filter-subject" name="subject_kind" onchange="this.form.submit()"
-                    class="form-select form-select-sm" style="max-width: 10rem;">
-                <option value="">(any)</option>
-                {% for s in subject_kind_choices %}
-                <option value="{{ s }}" {% if s == subject_kind_selected %}selected{% endif %}>{{ s }}</option>
-                {% endfor %}
-            </select>
-            {% if kind_selected or subject_kind_selected %}
-            <a href="/ui/events{% if preserved.q %}?q={{ preserved.q }}{% endif %}"
-               class="btn btn-sm btn-link text-nowrap" title="Clear filters">Clear</a>
-            {% endif %}
-        </form>
+        {# The kind + related-to filter dropdowns used to live here.
+           They moved into the table's card-header row alongside the
+           freeform filter + pagination so an operator's eye lands on
+           "what am I filtering", "what am I searching for", "how
+           many are there" in one horizontal sweep -- matching the
+           layout intent documented in table_helpers.html. #}
     </div>
 </nav>
 {% endblock %}
@@ -48,7 +23,52 @@
     <div class="card-header bg-light fw-semibold d-flex flex-wrap align-items-center gap-3 py-2">
         <span class="text-nowrap"><i class="bi bi-clock-history me-1"></i>Events</span>
         <span class="vr"></span>
-        {{ search_input('/ui/events', q, preserved, 'kind / subject / summary') }}
+        {{ search_input('/ui/events', q, preserved, 'kind / related to / summary') }}
+        {# Strict-equality narrowings applied BEFORE the freeform ``q``
+           filter. Each is a tiny form that submits on ``change`` --
+           no Filter button needed. Hidden inputs preserve every OTHER
+           query param so ``page`` + ``sort`` survive a filter flip. #}
+        <form method="get" action="/ui/events"
+              class="d-flex align-items-center gap-2 m-0 flex-wrap">
+            {% if preserved.q %}<input type="hidden" name="q" value="{{ preserved.q }}">{% endif %}
+            {% if subject_kind_selected %}
+            <input type="hidden" name="subject_kind" value="{{ subject_kind_selected }}">
+            {% endif %}
+            <label for="filter-kind" class="text-muted small mb-0 flex-shrink-0">
+                <i class="bi bi-tag"></i> Kind:
+            </label>
+            <select id="filter-kind" name="kind" onchange="this.form.submit()"
+                    class="form-select form-select-sm" style="max-width: 18rem;">
+                <option value="">(any)</option>
+                {% for k in kind_choices %}
+                <option value="{{ k }}" {% if k == kind_selected %}selected{% endif %}>{{ k }}</option>
+                {% endfor %}
+            </select>
+        </form>
+        <form method="get" action="/ui/events"
+              class="d-flex align-items-center gap-2 m-0 flex-wrap">
+            {% if preserved.q %}<input type="hidden" name="q" value="{{ preserved.q }}">{% endif %}
+            {% if kind_selected %}
+            <input type="hidden" name="kind" value="{{ kind_selected }}">
+            {% endif %}
+            <label for="filter-subject" class="text-muted small mb-0 flex-shrink-0">
+                <i class="bi bi-link-45deg"></i> Related to:
+            </label>
+            <select id="filter-subject" name="subject_kind" onchange="this.form.submit()"
+                    class="form-select form-select-sm" style="max-width: 10rem;">
+                <option value="">(any)</option>
+                {% for s in subject_kind_choices %}
+                <option value="{{ s }}" {% if s == subject_kind_selected %}selected{% endif %}>{{ s }}</option>
+                {% endfor %}
+            </select>
+        </form>
+        {% if kind_selected or subject_kind_selected %}
+        <a href="/ui/events{% if preserved.q %}?q={{ preserved.q }}{% endif %}"
+           class="btn btn-sm btn-link text-nowrap p-0 text-decoration-none"
+           title="Clear kind + related-to filters">
+            <i class="bi bi-x-circle me-1"></i>Clear filters
+        </a>
+        {% endif %}
         {{ pagination_inline(page_state, preserved, label='events') }}
     </div>
     {% if events %}
@@ -58,7 +78,7 @@
                 <tr>
                     {{ sort_header('When', 'ts', sort, preserved) }}
                     {{ sort_header('Kind', 'kind', sort, preserved) }}
-                    {{ sort_header('Subject', 'subject_id', sort, preserved) }}
+                    {{ sort_header('Related to', 'subject_id', sort, preserved) }}
                     <th scope="col">Summary</th>
                 </tr>
             </thead>
@@ -68,9 +88,16 @@
                     <td class="small text-muted text-nowrap">{{ e.ts | fmt_ts }}</td>
                     <td><code>{{ e.kind }}</code></td>
                     <td>
+                        {# ``Related to`` reads as ``<what>: <which>``:
+                           e.subject_kind is the category (entry / machine /
+                           export / auth), e.subject_id is the specific
+                           name / MAC / export name. Presenting both with a
+                           category label makes the row self-describing
+                           without an operator having to memorise which
+                           bare token means which. #}
                         {% if e.subject_kind %}
-                        <div><code>{{ e.subject_kind }}</code></div>
-                        <div class="text-muted small">{{ e.subject_id }}</div>
+                        <span class="badge text-bg-light border me-1">{{ e.subject_kind }}</span>
+                        <code class="small">{{ e.subject_id or '' }}</code>
                         {% else %}
                         <span class="text-muted small">-</span>
                         {% endif %}
