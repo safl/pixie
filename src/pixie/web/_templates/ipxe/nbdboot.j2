@@ -7,15 +7,21 @@
 # per-machine export that pixie spawns for the disk image blob
 # (content-addressed to the disk-image sha).
 #
-# Kernel cmdline carries ``boot=nbdboot``: Debian live-boot in the
-# initrd maps that to ``/scripts/nbdboot`` (installed by pixie-media's
-# live-build hook chain -- ``ramboot`` / ``nbdboot`` is a pixie-ism,
-# not something nosi authors). Nosi's netboot bundles inherit the
-# script from pixie-media at bake time; a nosi release baked
-# against pixie-media pre-rename bakes ``/scripts/ramboot`` and
-# won't NBD-mount when pixie sends ``boot=nbdboot``. Coordinated
-# release: pixie + pixie-media + nosi bump together. Pre-1.0: no
-# wire-compat shim.
+# Kernel cmdline still carries ``boot=ramboot``. Debian live-boot
+# in the initrd maps that to ``/scripts/ramboot``, which was baked
+# by pixie-media's live-build hook chain -- pixie-media (via
+# bty-media) authors that script; nosi inherits it at bake time.
+# ``ramboot`` is a pixie-ism, not a nosi convention.
+#
+# Renaming the wire arg (kernel ``boot=`` + the initrd script name)
+# is intentionally deferred: currently-published nosi bundles bake
+# ``/scripts/ramboot`` and would fall through on ``boot=nbdboot``.
+# The right long-term fix is to decouple the mode-specific pivot
+# script from nosi's netboot artifact (nosi should publish a
+# generic kernel + initrd; pixie should ship the NBD-mount script
+# separately or overlay it at boot). That lands in a follow-up.
+# For now, ``boot_mode=nbdboot`` is the operator identifier; the
+# wire token stays ``ramboot`` so existing nosi bundles work.
 #
 # Design departures from the trio's older ipxe_ramboot template:
 #
@@ -50,6 +56,6 @@ set nbd-name {{ nbd_name }}
 # initrd greps for ``bty.server`` / ``bty.mac`` / ``bty.nbd`` /
 # ``bty.image``; a ``pixie.*``-only cmdline made the nbdboot
 # script fall through and never issue nbd-client.
-kernel ${pixie-base}/artifacts/{{ bundle_sha }}/vmlinuz?mac={{ mac }} boot=nbdboot ip=dhcp rd.neednet=1 nbd.nbds_max=1 nbd.max_part=16 systemd.default_device_timeout_sec=10 systemd.default_timeout_start_sec=15 console=tty0 console=ttyS1,115200 console=ttyS0,115200 earlyprintk=ttyS0,115200 plymouth.enable=0 modprobe.blacklist=nouveau,rndis_host nouveau.modeset=0 systemd.gpt_auto=0 pixie.nbd=tcp://${nbd-host}:${nbd-port} pixie.image=${nbd-name} pixie.overlay_size={{ overlay_size }} pixie.server=${pixie-base} pixie.mac={{ mac }} bty.nbd=tcp://${nbd-host}:${nbd-port} bty.image=${nbd-name} bty.overlay_size={{ overlay_size }} bty.server=${pixie-base} bty.mac={{ mac }}
+kernel ${pixie-base}/artifacts/{{ bundle_sha }}/vmlinuz?mac={{ mac }} boot=ramboot ip=dhcp rd.neednet=1 nbd.nbds_max=1 nbd.max_part=16 systemd.default_device_timeout_sec=10 systemd.default_timeout_start_sec=15 console=tty0 console=ttyS1,115200 console=ttyS0,115200 earlyprintk=ttyS0,115200 plymouth.enable=0 modprobe.blacklist=nouveau,rndis_host nouveau.modeset=0 systemd.gpt_auto=0 pixie.nbd=tcp://${nbd-host}:${nbd-port} pixie.image=${nbd-name} pixie.overlay_size={{ overlay_size }} pixie.server=${pixie-base} pixie.mac={{ mac }} bty.nbd=tcp://${nbd-host}:${nbd-port} bty.image=${nbd-name} bty.overlay_size={{ overlay_size }} bty.server=${pixie-base} bty.mac={{ mac }}
 initrd ${pixie-base}/artifacts/{{ bundle_sha }}/initrd?mac={{ mac }}
 boot

@@ -200,8 +200,8 @@ def pxe_plan(request: Request, mac: str) -> PlainTextResponse:
 async def pxe_status(request: Request, mac: str) -> PlainTextResponse:
     """Accept a status token from the target's initrd or live env.
 
-    Pixie's nbdboot initrd + pixie-tui both fire tokens like
-    ``nbdboot.up`` / ``nbdboot.nbd_connect_failed`` / ``nbdboot.die``
+    Pixie.s ramboot initrd + pixie-tui both fire tokens like
+    ``ramboot.up`` / ``ramboot.nbd_connect_failed`` / ``ramboot.die``
     so an operator watching /ui/events sees the boot flow land or
     fail. The body carries either ``status=<token>`` in a form or a
     JSON object -- normalise both to a string.
