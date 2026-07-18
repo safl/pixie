@@ -33,13 +33,18 @@ This module owns:
   wraps the script into a ``/scripts/nbdboot`` entry the kernel
   can find at boot.
 
-Downstream:
+Downstream state:
 
-- ``pxe/_renderer.py`` no longer emits ``boot=ramboot``; the
-  nbdboot template drops a second ``initrd`` line pointing at
-  :func:`pixie.web.main`'s ``/pivot/nbdboot.cpio.gz`` route.
-- ``pixie-media`` can eventually drop its own
-  ``/scripts/ramboot`` (needs a coordinated nosi rebuild).
+- ``pxe/_renderer.py`` emits ``boot=nbdboot`` on the kernel
+  cmdline; the ``nbdboot.j2`` template drops a second ``initrd``
+  directive pointing at :func:`pixie.web.main`'s
+  ``/pivot/nbdboot.cpio.gz`` route.
+- ``pixie-media`` no longer bakes any pivot script (the dead
+  ``ramboot-init`` live-build variant was retired in PR #62).
+- ``nosi`` renamed its baked dispatch to ``/scripts/nbdboot``; the
+  overlay is now belt-and-braces (nosi's stock dispatch would work
+  on its own), but keeping it in place lets pixie iterate on the
+  pivot logic without a nosi rebuild.
 """
 
 from __future__ import annotations

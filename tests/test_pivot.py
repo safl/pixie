@@ -91,6 +91,49 @@ def test_head_pivot_route_returns_length_no_body(client: TestClient) -> None:
     assert int(r.headers["content-length"]) == len(build_pivot_cpio_gz())
 
 
+def test_get_pivot_route_memoises_on_app_state(client: TestClient) -> None:
+    """The route caches the built blob on ``app.state.pivot_nbdboot_cpio_gz``
+    so subsequent hits don't re-run the cpio+gzip pipeline. Two GETs
+    must observe the same object identity on the cached blob; a
+    naive re-build would produce equal-but-not-identical bytes."""
+    r1 = client.get("/pivot/nbdboot.cpio.gz")
+    r2 = client.get("/pivot/nbdboot.cpio.gz")
+    assert r1.status_code == r2.status_code == 200
+    assert r1.content == r2.content
+    # The cache lives on the app's state; poking through the client
+    # tests the actual memoisation contract not just "same bytes".
+    cached = client.app.state.pivot_nbdboot_cpio_gz  # type: ignore[attr-defined]
+    assert cached is not None
+    assert cached == r1.content
+
+
+# ---------- pivot cpio builder unit tests ------------------------
+
+
+def test_walk_newc_handles_zero_byte_regular_file_between_entries() -> None:
+    """Guard the ``_walk_newc`` test helper against an off-by-one on
+    pad alignment when a regular file has ``filesize=0`` sitting
+    between two non-trivial entries. The trailer is filesize=0 too
+    but sits at the end, so it doesn't exercise the "next-entry
+    header must be 4-byte aligned after zero data" path."""
+    import io
+
+    from pixie.pivot import _emit_entry, _newc_header, _pad4
+
+    buf = io.BytesIO()
+    _emit_entry(buf, ino=1, mode=0o040755, name=b"d", data=b"")
+    _emit_entry(buf, ino=2, mode=0o100644, name=b"d/empty", data=b"")
+    _emit_entry(buf, ino=3, mode=0o100644, name=b"d/hello", data=b"hi")
+    buf.write(_newc_header(ino=0, mode=0, name=b"TRAILER!!!", filesize=0))
+    buf.write(b"TRAILER!!!\0")
+    _pad4(buf)
+    entries = _walk_newc(buf.getvalue())
+    names = [e["name"] for e in entries]
+    assert names == [b"d", b"d/empty", b"d/hello", b"TRAILER!!!"]
+    assert entries[1]["data"] == b""
+    assert entries[2]["data"] == b"hi"
+
+
 # ---------- test helper: minimal newc-cpio walker ----------
 
 

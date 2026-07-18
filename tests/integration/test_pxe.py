@@ -188,6 +188,15 @@ def test_nbdboot_plan_end_to_end(api: dict[str, object]) -> None:
     # template wired the variable through, not that it hard-coded
     # anything).
     assert "pixie.nbd=tcp://${nbd-host}:${nbd-port}" in plan
+    # The template emits BOTH ``pixie.*`` and ``bty.*`` prefixes for
+    # every NBD/image/overlay/server/mac token so pixie can chain
+    # either a fresh-cut netboot bundle (reads ``pixie.*``) or a
+    # nosi bundle baked before the rename (reads ``bty.*``). If a
+    # future edit updates one side only, this asserts the twin.
+    assert "bty.nbd=tcp://${nbd-host}:${nbd-port}" in plan
+    assert plan.count("nbd=tcp://${nbd-host}:${nbd-port}") == 2
+    assert plan.count("image=${nbd-name}") == 2
+    assert plan.count("mac=aa:bb:cc:dd:ee:99") == 2
 
     # A REAL NBD server on the other end (no shim). Prove it by
     # reading the first 8 bytes of the handshake.

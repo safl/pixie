@@ -28,7 +28,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from fastapi import Depends, FastAPI, Form, Request, status
+from fastapi import Depends, FastAPI, Form, HTTPException, Request, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
@@ -267,6 +267,21 @@ def _respawn_exports_at_startup(app: FastAPI) -> None:
 def _require_ui_auth(request: Request) -> None:
     if not request.session.get(SESSION_AUTHED_KEY):
         raise NotAuthenticated
+
+
+#: How many "recent events" tiles the per-portion cards show above
+#: the /ui/events log link. Tuned once here rather than sprinkled
+#: through the /ui/catalog + /ui/machines handlers as a magic 10.
+_RECENT_EVENTS_LIMIT = 10
+
+
+def _recent_events_for(events_log: Any, subject_kind: str) -> list[Any]:
+    """Tail of the events log filtered to one subject kind. Callers
+    are the per-portion recent-events cards on the catalog and
+    machines list pages (the per-machine detail page uses a filtered
+    read with ``subject_id`` + a larger limit and does not go
+    through this helper)."""
+    return events_log.list(subject_kind=subject_kind, limit=_RECENT_EVENTS_LIMIT)
 
 
 def create_app() -> FastAPI:
@@ -584,12 +599,12 @@ def create_app() -> FastAPI:
             }.items()
             if v
         }
-        # Ten most recent catalog-scoped events (add / delete / fetch
-        # started / done / failed). Renders under the entry table with
-        # a link to /ui/events for the full log. Same shape lands on
-        # the machines list + machine-detail pages so a per-portion
-        # events surface is where the operator expects it to be.
-        catalog_events = events_log.list(subject_kind="entry", limit=10)
+        # Most recent catalog-scoped events (add / delete / fetch
+        # started / done / failed). Renders under the entry table
+        # with a link to /ui/events for the full log. Same shape
+        # lands on the machines list page so a per-portion events
+        # surface is where the operator expects it to be.
+        catalog_events = _recent_events_for(events_log, "entry")
         return templates.TemplateResponse(
             request,
             "catalog.html",
@@ -755,12 +770,12 @@ def create_app() -> FastAPI:
             }.items()
             if v
         }
-        # Ten most recent machine-scoped events (bound / discovered /
+        # Most recent machine-scoped events (bound / discovered /
         # inventory / status). Rendered under the machine table with
         # a link to /ui/events for the full log; the per-machine
         # detail page already does the same but filtered on that one
         # MAC.
-        machine_events = request.app.state.events_log.list(subject_kind="machine", limit=10)
+        machine_events = _recent_events_for(request.app.state.events_log, "machine")
         return templates.TemplateResponse(
             request,
             "machines.html",
@@ -872,15 +887,19 @@ def create_app() -> FastAPI:
         not need a boot_mode + image + target_disk_serial round-trip.
 
         Blank clears the labels. ``parse_labels`` enforces the same
-        alphanumeric-leading shape the JSON PUT path does."""
-        import contextlib as _contextlib
-
+        alphanumeric-leading shape the JSON PUT path does; a bad
+        label surfaces as 400 (previously silently swallowed, which
+        made "why did my label edit not take" a debug ratdance)."""
         from pixie.machines._store import BadMac, parse_labels
 
-        redirect_to = f"/ui/machines/{mac}"
-        with _contextlib.suppress(BadMac, ValueError):
-            request.app.state.machines_store.set_labels(mac, parse_labels(labels))
-        return RedirectResponse(url=redirect_to, status_code=status.HTTP_303_SEE_OTHER)
+        try:
+            parsed = parse_labels(labels)
+            request.app.state.machines_store.set_labels(mac, parsed)
+        except BadMac as exc:
+            raise HTTPException(status_code=400, detail=f"invalid MAC: {exc}") from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return RedirectResponse(url=f"/ui/machines/{mac}", status_code=status.HTTP_303_SEE_OTHER)
 
     @app.post("/ui/machines/delete")
     def ui_machines_delete(

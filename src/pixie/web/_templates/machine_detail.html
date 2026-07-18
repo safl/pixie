@@ -436,8 +436,9 @@
             // current mode doesn't consume. The submit handler below
             // temporarily re-enables every ``data-policy-relevant``
             // control right before POST so its stored value survives
-            // a mode flip (a sanboot calibrated under ipxe-exit
-            // stays around when the operator swaps to nbdboot). The
+            // a mode flip (an image_content_sha256 calibrated under
+            // ipxe-exit stays around when the operator swaps to
+            // nbdboot, without a second round-trip to re-enter it). The
             // "readonly" attribute is not enough on <select>, which
             // ignores it entirely.
             el.querySelectorAll("input, select, textarea").forEach((ctrl) => {
