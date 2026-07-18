@@ -39,6 +39,7 @@ import pixie
 from pixie.catalog._routes import router as catalog_router
 from pixie.catalog._store import CatalogStore
 from pixie.events import EventsLog
+from pixie.events._log import Event
 from pixie.events._kinds import (
     AUTH_LOGIN_FAILED,
     AUTH_LOGIN_SUCCEEDED,
@@ -275,7 +276,7 @@ def _require_ui_auth(request: Request) -> None:
 _RECENT_EVENTS_LIMIT = 10
 
 
-def _recent_events_for(events_log: Any, subject_kind: str) -> list[Any]:
+def _recent_events_for(events_log: EventsLog, subject_kind: str) -> list[Event]:
     """Tail of the events log filtered to one subject kind. Callers
     are the per-portion recent-events cards on the catalog and
     machines list pages (the per-machine detail page uses a filtered
