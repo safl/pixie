@@ -1,4 +1,4 @@
-name: ci
+name: cicd
 
 # Jobs:
 #   * ``test``: fast unit tests on the Python matrix.
@@ -24,7 +24,7 @@ name: ci
 #   PyPI Project Name:  pixie-lab
 #   Owner:              safl
 #   Repository:         pixie
-#   Workflow filename:  ci.yml
+#   Workflow filename:  cicd.yaml
 #   Environment name:   pypi
 # Then push a ``v*`` tag (e.g. ``v0.1.0``) and publish-pypi claims
 # and uploads the release.
