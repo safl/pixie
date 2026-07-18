@@ -72,27 +72,15 @@ def _render_context(request: Request) -> RenderContext:
     host = override or (request.url.hostname or "127.0.0.1")
     port = request.url.port or 8080
     nbd_host = (os.environ.get("PIXIE_NBD_PUBLIC_HOST") or "").strip() or host
-    # PIXIE_LIVE_ENV_EXTRA_CMDLINE lets an operator pin hardware-
-    # specific kernel workarounds without rebaking the live env.
-    # Known-good values by hardware (build up as we hit more):
-    #
-    #   GIGABYTE MC12-LE0 (Ryzen server board, BIOS F06+):
-    #       PIXIE_LIVE_ENV_EXTRA_CMDLINE=pci=realloc=on,nocrs
-    #     BIOS has a "ROM BAR overlap defect" that leaves no MMIO
-    #     space for the two Intel i210 NICs; Linux's igb driver
-    #     then reports ``probe with driver igb failed with error
-    #     -5`` and the live-boot initrd has no NIC to fetch the
-    #     squashfs through. ``pci=nocrs`` tells the kernel to
-    #     ignore ACPI's PCI root-bus resource windows and compute
-    #     its own; ``pci=realloc=on`` then rebalances every
-    #     device's BARs into the (now larger) usable window. The
-    #     kernel logs ``pci 0000:xx:xx.0: working around ROM BAR
-    #     overlap defect`` when the workaround kicks in.
-    #
-    # Trailing/leading whitespace stripped; the template drops a
-    # single space between the base cmdline and this string when
-    # non-empty, so an empty value is a legal no-op.
-    extra_cmdline = (os.environ.get("PIXIE_LIVE_ENV_EXTRA_CMDLINE") or "").strip()
+    # Extra tokens appended verbatim to the pixie-live-env kernel
+    # cmdline. Resolution chain lives on the settings store: /ui/settings
+    # override (persisted in state.db) -> $PIXIE_LIVE_ENV_EXTRA_CMDLINE
+    # (envvars-style pin) -> empty. Known-good values per hardware are
+    # documented in docs/hardware-quirks.md.
+    extra_cmdline = ""
+    settings = getattr(request.app.state, "settings_store", None)
+    if settings is not None:
+        extra_cmdline = settings.resolve_live_env_extra_cmdline()
     return RenderContext(host=host, port=port, nbd_host=nbd_host, extra_cmdline=extra_cmdline)
 
 

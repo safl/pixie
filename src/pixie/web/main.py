@@ -74,6 +74,7 @@ from pixie.web._auth import (
 from pixie.web._settings_store import (
     KEY_DATETIME_FORMAT,
     KEY_DISPLAY_TZ,
+    KEY_LIVE_ENV_EXTRA_CMDLINE,
     SettingsStore,
     SettingValueError,
     format_ts,
@@ -1430,6 +1431,8 @@ def create_app() -> FastAPI:
             tz_effective = f"(invalid: {exc})"
         fmt_override = store.get(KEY_DATETIME_FORMAT) or ""
         fmt_effective = store.resolve_datetime_format()
+        cmdline_override = store.get(KEY_LIVE_ENV_EXTRA_CMDLINE) or ""
+        cmdline_effective = store.resolve_live_env_extra_cmdline()
         return {
             "version": pixie.__version__,
             "authed": True,
@@ -1447,6 +1450,13 @@ def create_app() -> FastAPI:
                 "default": "%Y-%m-%d %H:%M:%S %Z",
                 "env": "PIXIE_DATETIME_FORMAT",
                 "updated_at": store.updated_at(KEY_DATETIME_FORMAT) or "",
+            },
+            "live_env_extra_cmdline": {
+                "override": cmdline_override,
+                "effective": cmdline_effective,
+                "default": "",
+                "env": "PIXIE_LIVE_ENV_EXTRA_CMDLINE",
+                "updated_at": store.updated_at(KEY_LIVE_ENV_EXTRA_CMDLINE) or "",
             },
             "flash_error": flash_error,
         }
@@ -1510,6 +1520,39 @@ def create_app() -> FastAPI:
             store.set_value(KEY_DATETIME_FORMAT, fmt_raw)
         else:
             store.clear(KEY_DATETIME_FORMAT)
+        return RedirectResponse(url="/ui/settings", status_code=status.HTTP_303_SEE_OTHER)
+
+    @app.post("/ui/settings/live-env/edit", response_model=None)
+    def ui_settings_live_env_edit(
+        request: Request,
+        extra_cmdline: str = Form(""),
+        _auth: None = Depends(_require_ui_auth),
+    ) -> HTMLResponse | RedirectResponse:
+        """Persist the live-env extra cmdline. Blank clears the
+        override so the value falls back to $PIXIE_LIVE_ENV_EXTRA_CMDLINE
+        then empty. Rejects any newline in the input -- the tokens go
+        onto a single-line iPXE ``kernel`` directive and a newline
+        would truncate the render before the ``initrd``/``boot`` lines
+        that follow."""
+        store: SettingsStore = request.app.state.settings_store
+        raw = (extra_cmdline or "").strip()
+        if "\n" in raw or "\r" in raw:
+            return templates.TemplateResponse(
+                request,
+                "settings.html",
+                _settings_context(
+                    request,
+                    flash_error=(
+                        "Live-env extra cmdline must be a single line "
+                        "(newlines truncate the iPXE render)."
+                    ),
+                ),
+                status_code=400,
+            )
+        if raw:
+            store.set_value(KEY_LIVE_ENV_EXTRA_CMDLINE, raw)
+        else:
+            store.clear(KEY_LIVE_ENV_EXTRA_CMDLINE)
         return RedirectResponse(url="/ui/settings", status_code=status.HTTP_303_SEE_OTHER)
 
     # ---------- feature routers --------------------------------------

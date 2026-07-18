@@ -54,6 +54,16 @@ KEY_DATETIME_FORMAT = "display.datetime_format"
 ENV_DATETIME_FORMAT = "PIXIE_DATETIME_FORMAT"
 DEFAULT_DATETIME_FORMAT = "%Y-%m-%d %H:%M:%S %Z"
 
+# Extra tokens appended verbatim to the pixie-live-env kernel
+# cmdline (see pixie.pxe._routes._render_context + the
+# pixie-live-env.j2 template). Empty by default; the docstring for
+# the resolver + docs/hardware-quirks.md carry the known-good
+# values for boards we've hit in the field. The form accepts any
+# whitespace-separated tokens; newlines are rejected at set time
+# because they'd break the single-line iPXE ``kernel`` directive.
+KEY_LIVE_ENV_EXTRA_CMDLINE = "live_env.extra_cmdline"
+ENV_LIVE_ENV_EXTRA_CMDLINE = "PIXIE_LIVE_ENV_EXTRA_CMDLINE"
+
 
 class SettingValueError(ValueError):
     """A stored override failed validation at resolve time. The
@@ -133,6 +143,29 @@ class SettingsStore:
             self.get(KEY_DATETIME_FORMAT)
             or (os.environ.get(ENV_DATETIME_FORMAT) or "").strip()
             or DEFAULT_DATETIME_FORMAT
+        )
+
+    def resolve_live_env_extra_cmdline(self) -> str:
+        """Effective live-env cmdline tail: override -> env -> empty.
+
+        Known-good values by hardware (docs/hardware-quirks.md carries
+        the canonical list):
+
+        - GIGABYTE MC12-LE0 (Ryzen server board, BIOS F06+):
+          ``pci=realloc=on,nocrs`` -- BIOS ROM BAR overlap defect
+          leaves no MMIO space for the Intel i210 NICs; ``nocrs``
+          tells Linux to ignore ACPI's PCI root windows + realloc
+          rebalances every BAR into the (now larger) usable window.
+          Without the workaround the live env boots with no network,
+          live-boot never fetches the squashfs, and boot hangs
+          silently.
+
+        Empty when both DB override + env are unset -- the template
+        expects a string and skips the append when it's empty."""
+        return (
+            self.get(KEY_LIVE_ENV_EXTRA_CMDLINE)
+            or (os.environ.get(ENV_LIVE_ENV_EXTRA_CMDLINE) or "").strip()
+            or ""
         )
 
 
