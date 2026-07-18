@@ -804,7 +804,7 @@ def create_app() -> FastAPI:
         ``POST /pxe/<mac>/inventory``, driven by the live env's
         pixie CLI). Falls through to /ui/machines on a bad MAC or a
         row that doesn't exist yet."""
-        from pixie.machines._store import BOOT_MODES, BadMac
+        from pixie.machines._store import BOOT_MODE_META, BadMac
 
         try:
             machine = request.app.state.machines_store.get(mac)
@@ -835,7 +835,7 @@ def create_app() -> FastAPI:
                 "machine": machine,
                 "events": events,
                 "bindable_entries": bindable_entries,
-                "boot_modes": sorted(BOOT_MODES),
+                "boot_mode_meta": BOOT_MODE_META,
                 "authed": True,
                 "page": "machines",
             },

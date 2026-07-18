@@ -49,6 +49,74 @@ so a reader adding a mode sees both spots at once."""
 BOOT_MODES: frozenset[str] = frozenset({"ipxe-exit", "nbdboot"}) | LIVE_ENV_MODES
 DEFAULT_BOOT_MODE = "ipxe-exit"
 
+# Presentation metadata for the six boot modes. Ordered
+# passthrough -> diagnostic -> interactive -> destructive so the
+# radio-card picker on ``machine_detail.html`` reads roughly
+# left-to-right by blast radius (ipxe-exit is a no-op; the flash
+# modes rewrite the disk). Icons pulled from Bootstrap Icons.
+#
+# Kept next to :data:`BOOT_MODES` on purpose: adding a mode without
+# a metadata row here trips the assertion below, so the picker
+# cannot silently drop a mode.
+BOOT_MODE_META: tuple[tuple[str, dict[str, str]], ...] = (
+    (
+        "ipxe-exit",
+        {
+            "icon": "box-arrow-right",
+            "short": "Exit to firmware",
+            "desc": "Drop through pixie's chain; the BIOS boot order picks the next device.",
+        },
+    ),
+    (
+        "pixie-inventory",
+        {
+            "icon": "hdd-stack",
+            "short": "Discover inventory",
+            "desc": "Live env posts disk + NIC info to pixie, then exits to firmware.",
+        },
+    ),
+    (
+        "pixie-tui",
+        {
+            "icon": "terminal",
+            "short": "Interactive TUI",
+            "desc": "Operator-driven wizard on the pixie live env.",
+        },
+    ),
+    (
+        "pixie-flash-once",
+        {
+            "icon": "download",
+            "short": "Flash once",
+            "desc": "Live env writes the image to the picked disk, then exits.",
+        },
+    ),
+    (
+        "pixie-flash-always",
+        {
+            "icon": "arrow-clockwise",
+            "short": "Flash every boot",
+            "desc": "Re-flash the image on every PXE. Any local changes are discarded.",
+        },
+    ),
+    (
+        "nbdboot",
+        {
+            "icon": "hdd-network",
+            "short": "Netboot over NBD",
+            "desc": "Stream the image over NBD; root is overlay-on-tmpfs. Nothing persists.",
+        },
+    ),
+)
+
+# Guard against a mode landing in BOOT_MODES without a metadata row
+# above (or vice versa). Fires at module load so a mismatched pair
+# never reaches a running server.
+_BOOT_MODE_META_KEYS = {m for m, _ in BOOT_MODE_META}
+assert _BOOT_MODE_META_KEYS == BOOT_MODES, (
+    f"BOOT_MODE_META keys {_BOOT_MODE_META_KEYS} != BOOT_MODES {BOOT_MODES}"
+)
+
 # Normalise MAC to lower-case colon form. Rejects anything else.
 _MAC_RE = re.compile(r"^([0-9a-f]{2}:){5}[0-9a-f]{2}$")
 
