@@ -1,5 +1,6 @@
 {% extends "layout.html" %}
 {% from "_partials/table_helpers.html" import search_input, sort_header, pagination_inline %}
+{% from "_partials/recent_events.html" import recent_events_card %}
 {% block title %}Catalog - pixie{% endblock %}
 {% block subnav %}
 <nav class="navbar subnav-strip" aria-label="Section sub-navigation">
@@ -342,4 +343,5 @@
     }
 })();
 </script>
+{{ recent_events_card(catalog_events, "catalog") }}
 {% endblock %}

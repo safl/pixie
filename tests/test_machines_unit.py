@@ -97,10 +97,15 @@ def test_put_machine_ipxe_exit_roundtrip(client: TestClient) -> None:
     assert r2.json()["boot_mode"] == "ipxe-exit"
 
 
-def test_put_machine_persists_labels_sanboot_target_serial(client: TestClient) -> None:
+def test_put_machine_persists_labels_target_serial(client: TestClient) -> None:
     """Extended binding fields round-trip through the JSON PUT + GET
     pair and land on ``Machine.to_dict()``. Seeds an inventory with a
-    matching disk serial so the flash-mode guard passes."""
+    matching disk serial so the flash-mode guard passes.
+
+    Labels ride the bind body for API convenience; the UI bind form
+    no longer offers them (edited on their own row on the machine
+    detail page). ``sanboot_drive`` is retired: pixie never rendered
+    it into an iPXE plan, targets rely on the firmware boot order."""
     c = _authed(client)
     c.post(
         "/pxe/aa:bb:cc:dd:ee:20/inventory",
@@ -111,19 +116,17 @@ def test_put_machine_persists_labels_sanboot_target_serial(client: TestClient) -
         json={
             "boot_mode": "pixie-flash-once",
             "labels": ["rack-3", "gmktec-g5"],
-            "sanboot_drive": "0x81",
             "target_disk_serial": "S679NX0R123456",
         },
     )
     assert r.status_code == 200
     body = r.json()
     assert body["labels"] == ["rack-3", "gmktec-g5"]
-    assert body["sanboot_drive"] == "0x81"
     assert body["target_disk_serial"] == "S679NX0R123456"
+    assert "sanboot_drive" not in body
 
     row = c.get("/machines/aa:bb:cc:dd:ee:20").json()
     assert row["labels"] == ["rack-3", "gmktec-g5"]
-    assert row["sanboot_drive"] == "0x81"
     assert row["target_disk_serial"] == "S679NX0R123456"
 
 
@@ -183,14 +186,18 @@ def test_put_machine_non_flash_modes_skip_disk_guard(client: TestClient) -> None
         assert r.status_code == 200, f"{mode} unexpectedly rejected: {r.text}"
 
 
-def test_put_machine_rejects_bad_sanboot_drive(client: TestClient) -> None:
-    """Malformed iPXE drive slug (not ``0x<hex1-2>``) returns 422."""
+def test_put_machine_ignores_retired_sanboot_drive(client: TestClient) -> None:
+    """The ``sanboot_drive`` field was retired: pixie never rendered
+    it into any iPXE plan, targets rely on the firmware boot order.
+    A JSON PUT with the (unknown) key is accepted without error, and
+    nothing sanboot-related lands on the row."""
     c = _authed(client)
     r = c.put(
         "/machines/aa:bb:cc:dd:ee:21",
-        json={"boot_mode": "ipxe-exit", "sanboot_drive": "80h"},
+        json={"boot_mode": "ipxe-exit", "sanboot_drive": "0x80"},
     )
-    assert r.status_code == 422
+    assert r.status_code == 200
+    assert "sanboot_drive" not in r.json()
 
 
 def test_put_machine_rejects_bad_label(client: TestClient) -> None:
@@ -217,26 +224,63 @@ def test_parse_labels_enforces_count_limit() -> None:
         parse_labels(", ".join(f"label{i}" for i in range(17)))
 
 
-def test_ui_machines_bind_form_persists_extended_fields(client: TestClient) -> None:
+def test_ui_machines_bind_form_persists_boot_mode(client: TestClient) -> None:
+    """UI bind form persists boot_mode. Labels are edited via their
+    own row (see /ui/machines/{mac}/labels/edit); sanboot_drive is
+    retired. Extra keys posted here are silently ignored."""
     c = _authed(client)
     r = c.post(
         "/ui/machines/bind",
         data={
             "mac": "aa:bb:cc:dd:ee:23",
             "boot_mode": "ipxe-exit",
-            "labels": "rack-3, noisy",
             "sanboot_drive": "0x80",
         },
         follow_redirects=False,
     )
     assert r.status_code == 303
-    body = c.get("/ui/machines").text
-    assert "rack-3" in body
-    assert "noisy" in body
 
     row = c.get("/machines/aa:bb:cc:dd:ee:23").json()
+    assert row["boot_mode"] == "ipxe-exit"
+    assert "sanboot_drive" not in row
+    # No labels supplied on the bind form -> row has no labels.
+    assert "labels" not in row
+
+
+def test_ui_labels_edit_form_persists_and_independent_of_bind(
+    client: TestClient,
+) -> None:
+    """POST /ui/machines/{mac}/labels/edit persists labels without
+    touching boot_mode / image / target_disk_serial. A subsequent
+    bind form POST leaves those labels intact."""
+    c = _authed(client)
+    mac = "aa:bb:cc:dd:ee:29"
+
+    # 1. Set labels on a machine before any bind.
+    r = c.post(
+        f"/ui/machines/{mac}/labels/edit",
+        data={"labels": "rack-3, noisy"},
+        follow_redirects=False,
+    )
+    assert r.status_code == 303
+    row = c.get(f"/machines/{mac}").json()
     assert row["labels"] == ["rack-3", "noisy"]
-    assert row["sanboot_drive"] == "0x80"
+
+    # 2. A follow-up bind form POST (which now has no labels field)
+    # must leave the operator's tags alone.
+    c.post(
+        "/ui/machines/bind",
+        data={"mac": mac, "boot_mode": "pixie-tui"},
+        follow_redirects=False,
+    )
+    row2 = c.get(f"/machines/{mac}").json()
+    assert row2["boot_mode"] == "pixie-tui"
+    assert row2["labels"] == ["rack-3", "noisy"]
+
+    # 3. Blank labels input CLEARS the labels.
+    c.post(f"/ui/machines/{mac}/labels/edit", data={"labels": ""})
+    row3 = c.get(f"/machines/{mac}").json()
+    assert "labels" not in row3
 
 
 def test_pxe_bootstrap_serves_ipxe_prefix(client: TestClient) -> None:

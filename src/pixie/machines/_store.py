@@ -70,7 +70,6 @@ CREATE TABLE IF NOT EXISTS machines (
     boot_mode              TEXT NOT NULL DEFAULT 'ipxe-exit',
     image_content_sha256   TEXT NOT NULL DEFAULT '',
     labels                 TEXT NOT NULL DEFAULT '',
-    sanboot_drive          TEXT NOT NULL DEFAULT '',
     target_disk_serial     TEXT NOT NULL DEFAULT '',
     inventory_json         TEXT NOT NULL DEFAULT '',
     inventory_at           TEXT NOT NULL DEFAULT '',
@@ -83,12 +82,6 @@ CREATE TABLE IF NOT EXISTS machines (
 CREATE INDEX IF NOT EXISTS idx_machines_image_content_sha
     ON machines(image_content_sha256);
 """
-
-# Sanboot drive strings mirror iPXE's ``sanboot`` verb: ``0x80`` = first
-# BIOS disk, ``0x81`` = second, etc. Enforced at bind time (both the JSON
-# PUT + the form POST) so a stored value is guaranteed renderable into
-# the ipxe-exit chain without further validation.
-_SANBOOT_DRIVE_RE = re.compile(r"^0x[0-9a-fA-F]{1,2}$")
 
 # Boot modes that write to the target disk. Binding these requires a
 # ``target_disk_serial`` chosen from the machine's inventory, so the
@@ -111,10 +104,15 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE machines ADD COLUMN inventory_at TEXT NOT NULL DEFAULT ''")
     if "labels" not in cols:
         conn.execute("ALTER TABLE machines ADD COLUMN labels TEXT NOT NULL DEFAULT ''")
-    if "sanboot_drive" not in cols:
-        conn.execute("ALTER TABLE machines ADD COLUMN sanboot_drive TEXT NOT NULL DEFAULT ''")
     if "target_disk_serial" not in cols:
         conn.execute("ALTER TABLE machines ADD COLUMN target_disk_serial TEXT NOT NULL DEFAULT ''")
+    # Retired 2026-07 pre-1.0: sanboot_drive was carried on the bind
+    # form as an iPXE ``sanboot`` BIOS drive slug, but pixie never
+    # actually rendered it into any iPXE template -- the ipxe-exit
+    # plan just does ``exit`` and hands off to firmware boot order.
+    # Dropped from the schema (no back-compat shim); the column is
+    # gone from fresh state.dbs and stays as an unused column on
+    # existing ones. SQLite is forgiving of unread columns.
 
 
 def parse_labels(raw: str) -> list[str]:
@@ -148,7 +146,6 @@ class Machine:
     boot_mode: str = DEFAULT_BOOT_MODE
     image_content_sha256: str = ""
     labels: list[str] = field(default_factory=list)
-    sanboot_drive: str = ""
     target_disk_serial: str = ""
     inventory: dict[str, Any] = field(default_factory=dict)
     inventory_at: str = ""
@@ -169,8 +166,6 @@ class Machine:
             out["image_content_sha256"] = self.image_content_sha256
         if self.labels:
             out["labels"] = list(self.labels)
-        if self.sanboot_drive:
-            out["sanboot_drive"] = self.sanboot_drive
         if self.target_disk_serial:
             out["target_disk_serial"] = self.target_disk_serial
         if self.last_seen_ip:
@@ -219,7 +214,6 @@ class MachinesStore:
         boot_mode: str,
         image_content_sha256: str = "",
         labels: Sequence[str] | None = None,
-        sanboot_drive: str = "",
         target_disk_serial: str = "",
     ) -> Machine:
         """Operator-driven write: set boot mode + optional image ref.
@@ -227,20 +221,16 @@ class MachinesStore:
         telemetry (``discovered_at``, ``last_seen_*``) on update.
 
         ``labels`` is a pre-parsed list (caller runs :func:`parse_labels`
-        so form + JSON paths share the validator). ``sanboot_drive`` is
-        the iPXE BIOS drive slug (``0x80`` = first disk) consumed by the
-        ipxe-exit chain. ``target_disk_serial`` is the disk serial the
-        live env's flash pipeline matches at flash time -- an operator
-        picks it from the machine's reported inventory.
+        so form + JSON paths share the validator).
+        ``target_disk_serial`` is the disk serial the live env's flash
+        pipeline matches at flash time -- an operator picks it from
+        the machine's reported inventory.
         """
         canon = normalise_mac(mac)
         if boot_mode not in BOOT_MODES:
             raise ValueError(f"unknown boot_mode {boot_mode!r}; valid: {sorted(BOOT_MODES)}")
         if image_content_sha256 and not re.match(r"^[0-9a-f]{64}$", image_content_sha256):
             raise ValueError("image_content_sha256 must be 64 lowercase hex chars")
-        sanboot = (sanboot_drive or "").strip()
-        if sanboot and not _SANBOOT_DRIVE_RE.match(sanboot):
-            raise ValueError(f"sanboot_drive {sanboot!r} must be 0x<hex1-2> (iPXE BIOS drive slug)")
         labels_json = _labels_to_json(list(labels or []))
         target_serial = (target_disk_serial or "").strip()
 
@@ -280,16 +270,15 @@ class MachinesStore:
                     """
                     INSERT INTO machines (
                         mac, boot_mode, image_content_sha256,
-                        labels, sanboot_drive, target_disk_serial,
+                        labels, target_disk_serial,
                         discovered_at, last_seen_at, last_seen_ip, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, '', ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, '', ?)
                     """,
                     (
                         canon,
                         boot_mode,
                         image_content_sha256,
                         labels_json,
-                        sanboot,
                         target_serial,
                         now,
                         now,
@@ -301,7 +290,7 @@ class MachinesStore:
                     """
                     UPDATE machines
                     SET boot_mode = ?, image_content_sha256 = ?,
-                        labels = ?, sanboot_drive = ?, target_disk_serial = ?,
+                        labels = ?, target_disk_serial = ?,
                         updated_at = ?
                     WHERE mac = ?
                     """,
@@ -309,7 +298,6 @@ class MachinesStore:
                         boot_mode,
                         image_content_sha256,
                         labels_json,
-                        sanboot,
                         target_serial,
                         now,
                         canon,
@@ -352,6 +340,37 @@ class MachinesStore:
         with _DB_WRITE_LOCK, self._conn() as conn:
             cur = conn.execute("DELETE FROM machines WHERE mac = ?", (canon,))
             return cur.rowcount > 0
+
+    def set_labels(self, mac: str, labels: Sequence[str]) -> Machine:
+        """Store operator-supplied labels against the row. Creates the
+        row on first contact (mirrors ``touch_seen`` + ``set_inventory``)
+        so an operator tagging a machine before it has PXE'd works.
+
+        ``labels`` is a pre-parsed list -- callers run
+        :func:`parse_labels` so the form + JSON paths share the
+        validator. Passing an empty list CLEARS the labels."""
+        canon = normalise_mac(mac)
+        now = now_iso()
+        labels_json = _labels_to_json(list(labels or []))
+        with _DB_WRITE_LOCK, self._conn() as conn:
+            existing = conn.execute("SELECT * FROM machines WHERE mac = ?", (canon,)).fetchone()
+            if existing is None:
+                conn.execute(
+                    """
+                    INSERT INTO machines (
+                        mac, boot_mode, image_content_sha256,
+                        labels, discovered_at, last_seen_at, last_seen_ip, updated_at
+                    ) VALUES (?, ?, '', ?, ?, ?, '', ?)
+                    """,
+                    (canon, DEFAULT_BOOT_MODE, labels_json, now, now, now),
+                )
+            else:
+                conn.execute(
+                    "UPDATE machines SET labels = ?, updated_at = ? WHERE mac = ?",
+                    (labels_json, now, canon),
+                )
+            row = conn.execute("SELECT * FROM machines WHERE mac = ?", (canon,)).fetchone()
+        return _row(row)
 
     def set_inventory(self, mac: str, inventory: dict[str, Any]) -> Machine:
         """Store a fresh inventory blob against the machine row. Creates
@@ -454,7 +473,6 @@ def _row(r: sqlite3.Row) -> Machine:
     inv: dict[str, Any] = {}
     inv_at = ""
     labels: list[str] = []
-    sanboot = ""
     target_serial = ""
     # New columns post-migration; older schema pre-v0.9 may not
     # have them yet. sqlite3.Row raises IndexError on missing keys.
@@ -472,15 +490,12 @@ def _row(r: sqlite3.Row) -> Machine:
     with contextlib.suppress(IndexError, KeyError):
         labels = _labels_from_json(r["labels"] or "")
     with contextlib.suppress(IndexError, KeyError):
-        sanboot = r["sanboot_drive"] or ""
-    with contextlib.suppress(IndexError, KeyError):
         target_serial = r["target_disk_serial"] or ""
     return Machine(
         mac=r["mac"],
         boot_mode=r["boot_mode"],
         image_content_sha256=r["image_content_sha256"],
         labels=labels,
-        sanboot_drive=sanboot,
         target_disk_serial=target_serial,
         inventory=inv,
         inventory_at=inv_at,
