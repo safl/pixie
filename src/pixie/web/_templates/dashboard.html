@@ -1,16 +1,15 @@
 {% extends "layout.html" %}
+{% from "_partials/page_description.html" import page_description %}
 {% block title %}Dashboard - pixie{% endblock %}
 {% block subnav %}
 <div class="subnav-strip">
     <div class="container">
         <span class="text-white-50">Overview</span>
-        <span class="text-muted small ms-auto">
-            <i class="bi bi-broadcast me-1"></i>pixie v{{ version }}
-        </span>
     </div>
 </div>
 {% endblock %}
 {% block content %}
+{{ page_description('speedometer2', 'Live counts across pixie: machines the operator manages, catalog images pixie can serve, NBD exports pixie is running right now. All tiles refresh every 5 s from the same endpoints the pages below use.') }}
 <div class="row g-3 mb-4">
     <div class="col-md-4">
         <div class="card shadow-sm h-100">

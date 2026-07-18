@@ -1,0 +1,22 @@
+{# Per-page description strip.
+
+   Every operator page opens with a one-paragraph orientation of
+   "what you are looking at, how it changes, what you can do." The
+   goal is that a new operator hitting pixie for the first time can
+   read a page's description and know its purpose without having to
+   click around, and that a returning operator can skip it entirely.
+
+   Called with:
+     icon        Bootstrap Icons name (no ``bi-`` prefix)
+     text        One or two-sentence orientation paragraph
+
+   Ported from bty-web's ``page_description`` block. The visual shape
+   (left accent border + light-tinted background) is chosen so the
+   strip reads as a distinct "meta" element, not just another card. #}
+
+{% macro page_description(icon, text) %}
+<div class="page-description mb-3" role="doc-subtitle">
+    <i class="bi bi-{{ icon }} text-primary me-2" aria-hidden="true"></i>
+    <span class="text-body-secondary">{{ text }}</span>
+</div>
+{% endmacro %}

@@ -1,5 +1,6 @@
 {% extends "layout.html" %}
 {% from "_partials/table_helpers.html" import search_input, sort_header, pagination_inline %}
+{% from "_partials/page_description.html" import page_description %}
 {% block title %}Events - pixie{% endblock %}
 {% block subnav %}
 <nav class="navbar subnav-strip" aria-label="Section sub-navigation">
@@ -19,44 +20,48 @@
 </nav>
 {% endblock %}
 {% block content %}
+{{ page_description('clock-history', 'Chronological log of every state change pixie has emitted: machines binding + status POSTs, catalog images fetching, exports going up + down, admin logins. Filter by kind or by the subject it\'s about; freeform search narrows the summary column. The tail is truncated to the newest 2000 events by default.') }}
 <div class="card" id="log">
-    <div class="card-header bg-light fw-semibold d-flex flex-wrap align-items-center gap-3 py-2">
+    <div class="card-header bg-light fw-semibold d-flex flex-wrap align-items-center gap-2 py-2">
         <span class="text-nowrap"><i class="bi bi-clock-history me-1"></i>Events</span>
-        <span class="vr"></span>
         {{ search_input('/ui/events', q, preserved, 'kind / related to / summary') }}
         {# Strict-equality narrowings applied BEFORE the freeform ``q``
-           filter. Each is a tiny form that submits on ``change`` --
-           no Filter button needed. Hidden inputs preserve every OTHER
-           query param so ``page`` + ``sort`` survive a filter flip. #}
-        <form method="get" action="/ui/events"
-              class="d-flex align-items-center gap-2 m-0 flex-wrap">
+           filter. The two selects are dropped-label + icon-tooltip
+           only so they don't push pagination onto a second row on
+           medium viewports. Each is its own tiny form that submits on
+           ``change``; hidden inputs preserve the OTHER filter + q so
+           ``page`` + ``sort`` survive a filter flip. #}
+        <form method="get" action="/ui/events" class="d-flex align-items-center m-0">
             {% if preserved.q %}<input type="hidden" name="q" value="{{ preserved.q }}">{% endif %}
             {% if subject_kind_selected %}
             <input type="hidden" name="subject_kind" value="{{ subject_kind_selected }}">
             {% endif %}
-            <label for="filter-kind" class="text-muted small mb-0 flex-shrink-0">
-                <i class="bi bi-tag"></i> Kind:
+            <label for="filter-kind" class="text-muted small mb-0 me-1"
+                   title="Filter by kind">
+                <i class="bi bi-tag"></i>
             </label>
             <select id="filter-kind" name="kind" onchange="this.form.submit()"
-                    class="form-select form-select-sm" style="max-width: 18rem;">
-                <option value="">(any)</option>
+                    class="form-select form-select-sm" style="max-width: 14rem;"
+                    aria-label="Filter by kind">
+                <option value="">kind: any</option>
                 {% for k in kind_choices %}
                 <option value="{{ k }}" {% if k == kind_selected %}selected{% endif %}>{{ k }}</option>
                 {% endfor %}
             </select>
         </form>
-        <form method="get" action="/ui/events"
-              class="d-flex align-items-center gap-2 m-0 flex-wrap">
+        <form method="get" action="/ui/events" class="d-flex align-items-center m-0">
             {% if preserved.q %}<input type="hidden" name="q" value="{{ preserved.q }}">{% endif %}
             {% if kind_selected %}
             <input type="hidden" name="kind" value="{{ kind_selected }}">
             {% endif %}
-            <label for="filter-subject" class="text-muted small mb-0 flex-shrink-0">
-                <i class="bi bi-link-45deg"></i> Related to:
+            <label for="filter-subject" class="text-muted small mb-0 me-1"
+                   title="Filter by related-to">
+                <i class="bi bi-link-45deg"></i>
             </label>
             <select id="filter-subject" name="subject_kind" onchange="this.form.submit()"
-                    class="form-select form-select-sm" style="max-width: 10rem;">
-                <option value="">(any)</option>
+                    class="form-select form-select-sm" style="max-width: 10rem;"
+                    aria-label="Filter by related-to">
+                <option value="">related: any</option>
                 {% for s in subject_kind_choices %}
                 <option value="{{ s }}" {% if s == subject_kind_selected %}selected{% endif %}>{{ s }}</option>
                 {% endfor %}
@@ -66,7 +71,7 @@
         <a href="/ui/events{% if preserved.q %}?q={{ preserved.q }}{% endif %}"
            class="btn btn-sm btn-link text-nowrap p-0 text-decoration-none"
            title="Clear kind + related-to filters">
-            <i class="bi bi-x-circle me-1"></i>Clear filters
+            <i class="bi bi-x-circle"></i>
         </a>
         {% endif %}
         {{ pagination_inline(page_state, preserved, label='events') }}

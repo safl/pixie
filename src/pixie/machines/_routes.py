@@ -58,6 +58,14 @@ class BindBody(BaseModel):
         default="",
         description="Serial of the target disk for pixie-flash-*. Matched against the inventory.",
     )
+    extra_cmdline: str = Field(
+        default="",
+        description=(
+            "Kernel-cmdline tokens appended per-machine to the "
+            "pixie-live-env + nbdboot chains. Blank means fall back to "
+            "the global PIXIE_LIVE_ENV_EXTRA_CMDLINE. Single line."
+        ),
+    )
 
 
 def _get_machines(request: Request) -> MachinesStore:
@@ -122,6 +130,7 @@ def upsert_machine(
             image_content_sha256=body.image_content_sha256.strip().lower(),
             labels=labels_arg,
             target_disk_serial=body.target_disk_serial,
+            extra_cmdline=body.extra_cmdline,
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc

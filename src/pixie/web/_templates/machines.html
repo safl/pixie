@@ -1,6 +1,7 @@
 {% extends "layout.html" %}
 {% from "_partials/table_helpers.html" import search_input, sort_header, pagination_inline %}
 {% from "_partials/recent_events.html" import recent_events_card %}
+{% from "_partials/page_description.html" import page_description %}
 {% block title %}Machines - pixie{% endblock %}
 {% block subnav %}
 <nav class="navbar subnav-strip" aria-label="Section sub-navigation">
@@ -16,6 +17,7 @@
 </nav>
 {% endblock %}
 {% block content %}
+{{ page_description('pc-display', 'Every MAC pixie has seen. A row appears here on the target\'s first PXE contact; the last-seen columns refresh every 5 s while the page is open. Click a MAC to bind its boot mode, edit labels, or inspect the inventory and events for that target.') }}
 <div class="card" id="list">
     <div class="card-header bg-light fw-semibold d-flex flex-wrap align-items-center gap-3 py-2">
         <span class="text-nowrap"><i class="bi bi-pc-display me-1"></i>Machines</span>

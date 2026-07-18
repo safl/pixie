@@ -49,6 +49,14 @@ CATALOG_FETCH_DONE = "catalog.fetch.done"
 CATALOG_FETCH_FAILED = "catalog.fetch.failed"
 """Fetch pipeline errored. ``details.error`` carries the message."""
 
+CATALOG_FETCH_UNCHANGED = "catalog.fetch.unchanged"
+"""Update click on an already-fetched entry whose blob is still
+present -- nothing to download. The operator's request is
+acknowledged (an event fires + the UI shows a short-lived "already
+at latest" pill) rather than silently flickering the fetching
+badge for a millisecond. ``details.content_sha256`` names the
+still-current bytes."""
+
 CATALOG_BLOB_DELETED = "catalog.blob.deleted"
 """On-disk bytes for an entry dropped via POST /ui/catalog/delete-blob.
 Row stays with content_sha256 cleared so a subsequent Fetch re-runs
@@ -171,6 +179,7 @@ KNOWN_EVENT_KINDS: frozenset[str] = frozenset(
         CATALOG_FETCH_STARTED,
         CATALOG_FETCH_DONE,
         CATALOG_FETCH_FAILED,
+        CATALOG_FETCH_UNCHANGED,
         CATALOG_BLOB_DELETED,
         CATALOG_IMPORT_OK,
         CATALOG_IMPORT_FAILED,
