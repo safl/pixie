@@ -1,5 +1,5 @@
 # initramfs-tools boot driver -- sourced by ``/init`` when the kernel
-# cmdline carries ``boot=ramboot``. Defines ``mountroot`` (the
+# cmdline carries ``boot=nbdboot``. Defines ``mountroot`` (the
 # contract initramfs-tools' /init calls to populate ``/root`` before
 # pivoting + ``exec /sbin/init``).
 #
@@ -18,7 +18,7 @@
 #      at ``/root`` (the path initramfs-tools' /init will
 #      ``pivot_root`` into).
 #   8. Best-effort POST status to pixie.server so the machine's
-#      timeline reflects "ramboot up" before pivot_root.
+#      timeline reflects "nbdboot up" before pivot_root.
 #
 # Failure handling: on any unrecoverable step we drop to a
 # ``panic`` (initramfs-tools' single-shell recovery) with the
@@ -35,25 +35,25 @@ esac
 # dmesg + on the boot console) so the operator can tell whether
 # ``mountroot`` was even entered and, if so, which step failed. Cheap
 # to leave in place; the boot output already carries kernel spew.
-_ramboot_trace() { echo "ramboot: $*" >/dev/kmsg 2>/dev/null || echo "ramboot: $*"; }
+_nbdboot_trace() { echo "nbdboot: $*" >/dev/kmsg 2>/dev/null || echo "nbdboot: $*"; }
 
 # initramfs-tools' ``panic`` spawns ``sh -i`` on /dev/console and
 # RETURNS if that shell exits. On serial without a controlling
 # terminal the shell exits immediately, so ``panic`` becomes a no-op
 # and mountroot merrily continues through every subsequent broken
-# step, papering over the real failure. Use ``_ramboot_die`` instead
+# step, papering over the real failure. Use ``_nbdboot_die`` instead
 # to trace, best-effort POST, and then hang PID 1 so the operator
 # can actually read the message on the boot console.
-_ramboot_die() {
-    _ramboot_trace "FATAL: $*"
-    _post_status "ramboot.die"
+_nbdboot_die() {
+    _nbdboot_trace "FATAL: $*"
+    _post_status "nbdboot.die"
     # Replace this shell with a permanent sleep so /init can't
     # continue past a failed step. The kernel keeps PID 1 alive and
     # the console stays readable.
     exec /bin/busybox sleep 2147483647
 }
 
-_ramboot_trace "script sourced (BOOT=ramboot)"
+_nbdboot_trace "script sourced (BOOT=nbdboot)"
 
 # initramfs-tools' standard library (provides ``log_begin_msg``,
 # ``log_end_msg``, ``panic``, ``configure_networking``, etc.)
@@ -75,7 +75,7 @@ _post_status() {
     # busybox-static's ``wget`` does plain HTTP POST when we use
     # ``--post-data``; the body is irrelevant to pixie (server reads
     # ``status`` from a query param shape historically). For the
-    # ramboot variant we just touch the endpoint -- the URL alone
+    # nbdboot variant we just touch the endpoint -- the URL alone
     # carries the signal.
     /bin/busybox wget -q -O /dev/null \
         --post-data="status=$1" \
@@ -83,7 +83,7 @@ _post_status() {
 }
 
 mountroot() {
-    _ramboot_trace "mountroot() entered"
+    _nbdboot_trace "mountroot() entered"
     nbd_url="$(_get_cmdline pixie.nbd)"
     image="$(_get_cmdline pixie.image)"
     overlay_size="$(_get_cmdline pixie.overlay_size)"
@@ -93,10 +93,10 @@ mountroot() {
     # writing logs + scratch state; operator caps with pixie.overlay_size.
     : "${overlay_size:=10G}"
 
-    _ramboot_trace "cmdline nbd=${nbd_url:-<unset>} image=${image:-<unset>} overlay_size=${overlay_size} root_part=${root_part_override:-<auto>}"
+    _nbdboot_trace "cmdline nbd=${nbd_url:-<unset>} image=${image:-<unset>} overlay_size=${overlay_size} root_part=${root_part_override:-<auto>}"
 
     if [ -z "$nbd_url" ] || [ -z "$image" ]; then
-        _ramboot_die "missing pixie.nbd or pixie.image on kernel cmdline"
+        _nbdboot_die "missing pixie.nbd or pixie.image on kernel cmdline"
     fi
 
     # nbd_url is ``tcp://<host>:<port>``. Strip the scheme and split.
@@ -104,8 +104,8 @@ mountroot() {
     nbd_host="${nbd_host%%:*}"
     nbd_port="${nbd_url##*:}"
 
-    _ramboot_trace "modprobe nbd (nbds_max=1 max_part=16) + overlay"
-    log_begin_msg "ramboot: modprobe nbd + overlay"
+    _nbdboot_trace "modprobe nbd (nbds_max=1 max_part=16) + overlay"
+    log_begin_msg "nbdboot: modprobe nbd + overlay"
     # ``max_part=16`` is essential: without it the nbd module leaves
     # /dev/nbd0 as a single flat device and NEVER exposes the
     # partition device nodes we scan for below. Debian's default is
@@ -117,9 +117,9 @@ mountroot() {
     # our ``max_part=16`` would drop on the floor and partition
     # nodes would never appear. Force a clean reload.
     rmmod nbd 2>/dev/null || true
-    modprobe nbd nbds_max=1 max_part=16 || _ramboot_die "modprobe nbd failed"
-    modprobe overlay || _ramboot_die "modprobe overlay failed"
-    _ramboot_trace "nbd sysfs max_part=$(cat /sys/module/nbd/parameters/max_part 2>/dev/null || echo '<unreadable>')"
+    modprobe nbd nbds_max=1 max_part=16 || _nbdboot_die "modprobe nbd failed"
+    modprobe overlay || _nbdboot_die "modprobe overlay failed"
+    _nbdboot_trace "nbd sysfs max_part=$(cat /sys/module/nbd/parameters/max_part 2>/dev/null || echo '<unreadable>')"
     log_end_msg
 
     # iPXE releases its DHCP lease when it chainloads the kernel, so
@@ -128,11 +128,11 @@ mountroot() {
     # DHCP via ipconfig(8) on the auto-detected NIC. Fatal on
     # failure -- nbd-client cannot succeed without a route to the
     # server.
-    _ramboot_trace "configure_networking (DHCP via ipconfig)"
-    log_begin_msg "ramboot: configure_networking"
-    configure_networking || _ramboot_die "configure_networking failed (DHCP)"
+    _nbdboot_trace "configure_networking (DHCP via ipconfig)"
+    log_begin_msg "nbdboot: configure_networking"
+    configure_networking || _nbdboot_die "configure_networking failed (DHCP)"
     log_end_msg
-    _ramboot_trace "network up: $(/bin/busybox ip -o -4 addr show 2>/dev/null | /bin/busybox awk '{print $2, $4}' | /bin/busybox tr '\n' ';')"
+    _nbdboot_trace "network up: $(/bin/busybox ip -o -4 addr show 2>/dev/null | /bin/busybox awk '{print $2, $4}' | /bin/busybox tr '\n' ';')"
 
     # ``-persist`` keeps nbd-client's supervisor process alive after
     # the initial attach so it reconnects if the TCP session drops.
@@ -143,11 +143,11 @@ mountroot() {
     # With -persist the client reconnects transparently, and
     # nbdkit's cow filter is per-nbdkit-instance not per-connection,
     # so the writable overlay survives the drop.
-    _ramboot_trace "nbd-client -persist ${nbd_host}:${nbd_port} -name ${image}"
-    log_begin_msg "ramboot: nbd-client ${nbd_host}:${nbd_port} -name ${image}"
+    _nbdboot_trace "nbd-client -persist ${nbd_host}:${nbd_port} -name ${image}"
+    log_begin_msg "nbdboot: nbd-client ${nbd_host}:${nbd_port} -name ${image}"
     if ! nbd-client -persist "$nbd_host" "$nbd_port" -name "$image" /dev/nbd0; then
-        _post_status "ramboot.nbd_connect_failed"
-        _ramboot_die "nbd-client failed to connect to ${nbd_host}:${nbd_port}"
+        _post_status "nbdboot.nbd_connect_failed"
+        _nbdboot_die "nbd-client failed to connect to ${nbd_host}:${nbd_port}"
     fi
     log_end_msg
 
@@ -164,7 +164,7 @@ mountroot() {
         /bin/busybox sleep 0.1
         i=$((i + 1))
     done
-    _ramboot_trace "nbd0 capacity ready after ${i} tick(s): ${nbd0_size:-0} bytes"
+    _nbdboot_trace "nbd0 capacity ready after ${i} tick(s): ${nbd0_size:-0} bytes"
 
     udevadm settle --timeout=10 || true
     /bin/busybox blockdev --rereadpt /dev/nbd0 2>/dev/null || true
@@ -190,10 +190,10 @@ mountroot() {
         # scanner. Same end state (``/dev/nbd0pN`` nodes appear
         # for udev to notice) without a loop-device wrapper.
         _px_out="$(/usr/bin/partx --add --verbose /dev/nbd0 2>&1)"; _px_rc=$?
-        _ramboot_trace "partx --add rc=${_px_rc} out='${_px_out}'"
+        _nbdboot_trace "partx --add rc=${_px_rc} out='${_px_out}'"
         udevadm settle --timeout=10 || true
     fi
-    _ramboot_trace "nbd0 nodes after scan: $(/bin/busybox ls -1 /dev/nbd0* 2>/dev/null | /bin/busybox tr '\n' ' ')"
+    _nbdboot_trace "nbd0 nodes after scan: $(/bin/busybox ls -1 /dev/nbd0* 2>/dev/null | /bin/busybox tr '\n' ' ')"
 
     if [ -n "$root_part_override" ]; then
         root_part="$root_part_override"
@@ -209,14 +209,14 @@ mountroot() {
         # whole device as a raw filesystem.
         root_part=/dev/nbd0
     fi
-    _ramboot_trace "picked root_part=${root_part:-<none>}"
+    _nbdboot_trace "picked root_part=${root_part:-<none>}"
     if [ -z "$root_part" ] || [ ! -e "$root_part" ]; then
-        _post_status "ramboot.no_root_partition"
-        _ramboot_die "could not pick a root partition on /dev/nbd0"
+        _post_status "nbdboot.no_root_partition"
+        _nbdboot_die "could not pick a root partition on /dev/nbd0"
     fi
 
     mkdir -p /lower /upper /root
-    _ramboot_trace "$(/sbin/blkid -p ${root_part} 2>&1)"
+    _nbdboot_trace "$(/sbin/blkid -p ${root_part} 2>&1)"
     # Try common in-kernel filesystems explicitly, then fall back to
     # auto-detect. modprobe each candidate first because initramfs
     # kernel modules aren't preloaded and mount(2) with -t auto only
@@ -226,34 +226,34 @@ mountroot() {
     modprobe btrfs 2>/dev/null || true
     _mnt_out=""; _mnt_rc=1
     for fstype in ext4 xfs btrfs auto; do
-        _ramboot_trace "mount -t ${fstype} -o ro ${root_part} -> /lower"
+        _nbdboot_trace "mount -t ${fstype} -o ro ${root_part} -> /lower"
         _mnt_out="$(mount -t "$fstype" -o ro "$root_part" /lower 2>&1)"; _mnt_rc=$?
         [ "$_mnt_rc" -eq 0 ] && break
-        _ramboot_trace "  -> rc=${_mnt_rc} out='${_mnt_out}'"
+        _nbdboot_trace "  -> rc=${_mnt_rc} out='${_mnt_out}'"
     done
     if [ "$_mnt_rc" -ne 0 ]; then
-        _post_status "ramboot.mount_root_failed"
-        _ramboot_die "failed to mount ${root_part} as ext4/xfs/btrfs/auto"
+        _post_status "nbdboot.mount_root_failed"
+        _nbdboot_die "failed to mount ${root_part} as ext4/xfs/btrfs/auto"
     fi
-    _ramboot_trace "mounted ${root_part}; ls /lower:  $(/bin/busybox ls /lower 2>&1 | /bin/busybox tr '\n' ' ')"
+    _nbdboot_trace "mounted ${root_part}; ls /lower:  $(/bin/busybox ls /lower 2>&1 | /bin/busybox tr '\n' ' ')"
 
-    _ramboot_trace "tmpfs(${overlay_size}) -> /upper"
-    log_begin_msg "ramboot: tmpfs(${overlay_size}) at /upper"
+    _nbdboot_trace "tmpfs(${overlay_size}) -> /upper"
+    log_begin_msg "nbdboot: tmpfs(${overlay_size}) at /upper"
     if ! mount -t tmpfs -o "size=${overlay_size}" tmpfs /upper; then
-        _post_status "ramboot.mount_tmpfs_failed"
-        _ramboot_die "failed to mount tmpfs at /upper"
+        _post_status "nbdboot.mount_tmpfs_failed"
+        _nbdboot_die "failed to mount tmpfs at /upper"
     fi
     mkdir -p /upper/up /upper/work
     log_end_msg
 
-    _ramboot_trace "overlay(lower=/lower,upper=/upper/up,work=/upper/work) -> /root"
-    log_begin_msg "ramboot: overlayfs at /root"
+    _nbdboot_trace "overlay(lower=/lower,upper=/upper/up,work=/upper/work) -> /root"
+    log_begin_msg "nbdboot: overlayfs at /root"
     if ! mount -t overlay overlay \
         -o "lowerdir=/lower,upperdir=/upper/up,workdir=/upper/work" \
         /root
     then
-        _post_status "ramboot.mount_overlay_failed"
-        _ramboot_die "failed to mount overlayfs at /root"
+        _post_status "nbdboot.mount_overlay_failed"
+        _nbdboot_die "failed to mount overlayfs at /root"
     fi
     log_end_msg
 
@@ -281,12 +281,12 @@ mountroot() {
         mkdir -p /upper/up/etc
         /bin/busybox awk '$2 != "/boot" && $2 != "/boot/efi" { print }' \
             /lower/etc/fstab > /upper/up/etc/fstab
-        _ramboot_trace "fstab: rewrote /etc/fstab in overlay upper (dropped /boot, /boot/efi) -- $(wc -l < /upper/up/etc/fstab) lines"
+        _nbdboot_trace "fstab: rewrote /etc/fstab in overlay upper (dropped /boot, /boot/efi) -- $(wc -l < /upper/up/etc/fstab) lines"
     fi
 
     # Prevent Ubuntu/Debian's systemd-networkd + cloud-init from
     # touching the NIC the initramfs already configured. Under
-    # ramboot the root filesystem lives on that NIC (NBD over TCP),
+    # nbdboot the root filesystem lives on that NIC (NBD over TCP),
     # so anything that flushes the IP + re-DHCPs -- which networkd
     # + netplan + cloud-init's network stage all do by default --
     # tears down the socket the kernel was reading root pages from,
@@ -313,7 +313,7 @@ mountroot() {
     ; do
         ln -sf /dev/null "/upper/up/etc/systemd/system/${unit}"
     done
-    _ramboot_trace "network: masked systemd-networkd + cloud-init units so the initramfs-owned NIC survives userspace"
+    _nbdboot_trace "network: masked systemd-networkd + cloud-init units so the initramfs-owned NIC survives userspace"
 
     # With networkd + cloud-init masked, nothing in userspace populates
     # /etc/resolv.conf. Propagate the DHCP-supplied DNS servers +
@@ -329,20 +329,20 @@ mountroot() {
         . "$net_conf" 2>/dev/null || continue
         [ -n "${DNSSERVERS:-}" ] || continue
         {
-            echo "# Written by ramboot initramfs from ${net_conf}."
-            echo "# ramboot masks systemd-networkd + cloud-init so nothing"
+            echo "# Written by nbdboot initramfs from ${net_conf}."
+            echo "# nbdboot masks systemd-networkd + cloud-init so nothing"
             echo "# in userspace would otherwise reseed this file."
             [ -n "${DOMAINSEARCH:-}" ] && echo "search ${DOMAINSEARCH}"
             for _ns in ${DNSSERVERS}; do
                 echo "nameserver ${_ns}"
             done
         } > /upper/up/etc/resolv.conf
-        _ramboot_trace "network: wrote /etc/resolv.conf from ${net_conf} (nameservers: ${DNSSERVERS})"
+        _nbdboot_trace "network: wrote /etc/resolv.conf from ${net_conf} (nameservers: ${DNSSERVERS})"
         break
     done
 
-    _ramboot_trace "mountroot() done -- returning to /init for pivot_root"
-    _post_status "ramboot.up"
+    _nbdboot_trace "mountroot() done -- returning to /init for pivot_root"
+    _post_status "nbdboot.up"
     # initramfs-tools' /init pivot_root's into /root and exec's
     # /sbin/init from here.
 }
