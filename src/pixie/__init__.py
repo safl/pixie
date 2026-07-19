@@ -17,4 +17,13 @@ except PackageNotFoundError:
     # is always a string.
     __version__ = "0.0.0.dev0+unknown"
 
-__all__ = ["__version__"]
+# Default catalog URL. Pointed at nosi's rolling release so a fresh
+# pixie -- on the web UI's import form + on the TUI's ``[d]``
+# (default) source screen -- lands on a working set of images
+# without the operator having to know where they come from. Nosi's
+# catalog.toml pins refs to a dated tag so an import today is
+# reproducible tomorrow (the ``:latest`` release rolls forward but
+# each fetched catalog carries the tag it was cut against).
+DEFAULT_CATALOG_URL = "https://github.com/safl/nosi/releases/latest/download/catalog.toml"
+
+__all__ = ["DEFAULT_CATALOG_URL", "__version__"]

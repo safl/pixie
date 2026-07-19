@@ -82,6 +82,7 @@ from rich.prompt import Prompt
 from rich.table import Table
 
 import pixie
+from pixie import DEFAULT_CATALOG_URL as _DEFAULT_CATALOG_URL
 from pixie import disks, flash, images
 from pixie import tui_catalog as _catalog
 from pixie.tui import DEFAULT_SERVER as _DEFAULT_SERVER
@@ -324,12 +325,11 @@ def collect_lshw(*, timeout: float = 30.0) -> object | None:
     return parsed
 
 
-# v0.46 stopped publishing a pixie-side catalog.toml mirror and pointed
-# pixie at the upstream image-builder (``safl/nosi``); the wizard's
-# ``[d] default`` shortcut tracks the same source so both consumers
-# resolve to one catalog. The pixie release no longer ships a
-# catalog.toml asset, so the old URL would 404.
-_BTY_DEFAULT_CATALOG_URL = "https://github.com/safl/nosi/releases/latest/download/catalog.toml"
+# The default catalog URL is imported from ``pixie`` (package root)
+# at the top of this module so every consumer -- the TUI's ``[d]
+# default`` source screen, the web UI's Import form -- resolves to
+# one truth. Pointed at nosi's rolling release; see the docstring
+# on :data:`pixie.DEFAULT_CATALOG_URL`.
 
 
 # ---------------------------------------------------------------------------
@@ -1021,7 +1021,7 @@ class BtyTui:
         if choice in ("q", "quit"):
             return "quit"
         if choice in ("d", "default"):
-            self._state.catalog_source = _BTY_DEFAULT_CATALOG_URL
+            self._state.catalog_source = _DEFAULT_CATALOG_URL
             self._state.catalog_chosen = True
             return "continue"
         if choice in ("c", "custom"):

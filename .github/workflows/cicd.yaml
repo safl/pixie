@@ -602,3 +602,53 @@ jobs:
           # later job is retrying), succeed silently rather than
           # fail.
           skip-existing: true
+
+  attach-to-release:
+    name: Attach media artifacts to GitHub release
+    # Fires on ``v*`` tag pushes only. Gathers the netboot-pc +
+    # usbboot-pc media the build-media matrix produced and attaches
+    # each as a release asset so an operator can grab the ISO with
+    # a single curl:
+    #
+    #   curl -fL https://github.com/safl/pixie/releases/latest/download/pixie-usbboot-pc-x86_64.iso \
+    #     | sudo dd of=/dev/sdX bs=4M conv=fsync
+    #
+    # Same shape bty uses. ``softprops/action-gh-release`` creates
+    # the release if it doesn't exist (matches the ``v*`` tag ref)
+    # and uploads the attached files; re-runs update the release in
+    # place.
+    needs:
+      - build-media
+      - test-pxe
+      - test-pxe-nbdboot
+      - test-pxe-inventory
+      - test-pxe-tui
+      - test-pxe-flash
+      - test-pxe-flash-always
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          path: gathered/
+          # Match ONLY the media artifacts. Skip ``dist`` (PyPI's
+          # concern) + the on-failure-only PXE workspace dumps.
+          pattern: 'pixie-{netboot-pc,usbboot-pc}-x86_64'
+      - name: Flatten + list what will attach
+        run: |
+          set -eu
+          mkdir -p release/
+          find gathered/ -type f -maxdepth 3 -print0 \
+            | xargs -0 -I{} cp {} release/
+          echo "--- files to attach ---"
+          ls -la release/
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: release/*
+          fail_on_unmatched_files: true
+          # Keep the release-page body pixie-lab-focused; the
+          # per-tag body is edited by hand for narrative + CHANGELOG
+          # snippet after the first attach.
+          generate_release_notes: false

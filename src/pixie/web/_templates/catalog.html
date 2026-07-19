@@ -18,9 +18,14 @@
                    title="Import a catalog.toml URL">
                 <i class="bi bi-cloud-arrow-down"></i>
             </label>
+            {# Pre-filled with pixie's default catalog URL (nosi's rolling
+               release). One click Import fetches every entry from
+               there; an operator hosting their own catalog just
+               overwrites the field before submit. #}
             <input type="url" id="catalog_url" name="url"
                    class="form-control form-control-sm"
                    style="max-width: 22rem; min-width: 0;"
+                   value="{{ default_catalog_url }}"
                    placeholder="catalog.toml URL"
                    required>
             <button type="submit" class="btn btn-sm btn-primary flex-shrink-0 text-nowrap">

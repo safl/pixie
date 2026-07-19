@@ -794,6 +794,7 @@ def create_app() -> FastAPI:
                 "page_state": page_state,
                 "preserved": preserved,
                 "catalog_events": catalog_events,
+                "default_catalog_url": pixie.DEFAULT_CATALOG_URL,
                 "authed": True,
                 "page": "catalog",
             },
