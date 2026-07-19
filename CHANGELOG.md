@@ -16,6 +16,56 @@ to-end on real hardware.
 
 ### Added
 
+**Per-machine persistent qcow2 overlays under `nbdboot`.** A new
+`overlay_profile` field on the machine binding flips one target from
+the default ephemeral-tmpfs behaviour to a per-machine writable
+overlay without changing anything else about the bind. A non-blank
+profile maps to a `data/overlays/<mac>/<image_sha>/<profile>.qcow2`
+file with the image's base blob as `backing_file`, served over NBD by
+`qemu-nbd`; the target mounts it read-write and system changes (apt
+installs, kernel modules, hardware-specific config) survive reboots.
+Overlays are keyed by `(mac, image_sha, profile)`, so different
+machines have fully independent files under the same profile name and
+rebinding to a different image leaves the old image's overlays on
+disk for a later resume. A Reset button on the machine detail page
+tears down `qemu-nbd`, unlinks the qcow2, and lets the next boot
+lazy-create a fresh overlay from the base. New `overlays` table on
+state.db (idempotent additive migration), new `overlay.created`,
+`overlay.reset`, `overlay.booted` events. Concurrency is by
+construction (a MAC boots one target at a time), so there is no
+holder tracking or force-reclaim.
+
+**Slick Inventory card viz.** The machine detail Inventory card was
+rewritten to consume a normalised view of the stored `lshw -json`
+blob. CPU renders one stat-block per socket with the model as
+headline, an architecture badge, and Bootstrap `display-6` big-type
+numbers for cores over threads plus max clock. Memory shows a total
+headline plus a per-DIMM slot-fill row (filled blocks for populated
+SMBIOS type-17 bank records, outlined blocks for empty slots,
+hover-title tooltip per slot showing size / speed / type), with a
+total-only fallback for firmwares that skimp on bank records. The
+extractor lives in `pixie.web._inventory.normalise_inventory` and
+runs at render time, so a wire-format change or a new lshw quirk
+touches one function. Two new Jinja filters: `humanize_bytes` and
+`humanize_hz`.
+
+### Fixed
+
+**Truncated `.img.gz` fetches now fail at the download stage.**
+Operators saw "decompress img.gz failed: Compressed file ended before
+the end-of-stream marker was reached" on the catalog page when a
+ghcr download was interrupted mid-transfer. Root cause: the fetch
+pipeline's byte-copy loop treated `resp.read()` returning an empty
+chunk as "done" but urllib does not raise when a peer closes the
+connection early, so a short body was accepted and the gzip trailer
+check surfaced the truncation several minutes downstream of the
+actual failure. `_stream_to_tmpfile` now cross-checks bytes-written
+against `Content-Length` and raises a clear `download truncated for
+<url>: got X of Y bytes` `FetchError` at the point of cause. A
+related cleanup leak (the `finally` block only unlinked `.inflight`
+files for `tar.gz`, so failing `img.gz` fetches left multi-GB
+orphans in `data/tmp/` forever) is fixed as part of the same change.
+
 **Settings pane with per-operator display picks.** New top-nav
 pill `/ui/settings` with two knobs: display timezone (IANA zone
 name) and datetime format (strftime pattern). Both resolve override
