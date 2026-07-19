@@ -26,6 +26,63 @@ from fastapi.testclient import TestClient
 from tests.conftest import TEST_ADMIN_PASSWORD
 
 
+def test_overlays_store_round_trip(tmp_path: Path) -> None:
+    """OverlaysStore CRUD: create -> get -> list -> update runtime ->
+    delete. Doesn't touch qemu-nbd; purely the SQL layer."""
+    from pixie.exports._store import ExportsStore, Overlay, OverlaysStore
+
+    db_path = tmp_path / "state.db"
+    # ExportsStore materialises the schema (both tables); OverlaysStore
+    # just opens connections against it.
+    ExportsStore(db_path)
+    store = OverlaysStore(db_path)
+
+    assert store.list_all() == []
+    assert store.get("aa:bb:cc:dd:ee:00", "a" * 64, "simon") is None
+
+    ov = Overlay(
+        mac="aa:bb:cc:dd:ee:00",
+        image_sha="a" * 64,
+        profile="simon",
+        qcow2_path="/tmp/simon.qcow2",
+    )
+    store.upsert(ov)
+
+    fetched = store.get("aa:bb:cc:dd:ee:00", "a" * 64, "simon")
+    assert fetched is not None
+    assert fetched.profile == "simon"
+    assert fetched.status == "idle"
+
+    store.update_runtime(
+        "aa:bb:cc:dd:ee:00",
+        "a" * 64,
+        "simon",
+        nbd_port=10809,
+        status="running",
+        error="",
+    )
+    row = store.get("aa:bb:cc:dd:ee:00", "a" * 64, "simon")
+    assert row is not None
+    assert row.nbd_port == 10809
+
+    # Second profile on the same (mac, image) coexists.
+    store.upsert(
+        Overlay(
+            mac="aa:bb:cc:dd:ee:00",
+            image_sha="a" * 64,
+            profile="karl",
+            qcow2_path="/tmp/karl.qcow2",
+        )
+    )
+    profiles = [o.profile for o in store.list_for_machine_and_image("aa:bb:cc:dd:ee:00", "a" * 64)]
+    assert profiles == ["karl", "simon"]  # alphabetical by profile
+
+    # Delete lands.
+    assert store.delete("aa:bb:cc:dd:ee:00", "a" * 64, "simon") is True
+    assert store.get("aa:bb:cc:dd:ee:00", "a" * 64, "simon") is None
+    assert store.delete("aa:bb:cc:dd:ee:00", "a" * 64, "simon") is False
+
+
 def test_partition_sig_matches_boot_sector(tmp_path: Path) -> None:
     """A raw disk image with 0x55/0xAA at bytes 510-511 is treated
     as partitioned; anything else is not."""

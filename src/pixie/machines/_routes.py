@@ -66,6 +66,15 @@ class BindBody(BaseModel):
             "the global PIXIE_LIVE_ENV_EXTRA_CMDLINE. Single line."
         ),
     )
+    overlay_profile: str = Field(
+        default="",
+        description=(
+            "Persistent-overlay profile name for nbdboot. Blank means "
+            "ephemeral tmpfs (writes vanish on reboot); non-blank names a "
+            "qcow2 overlay that persists on pixie's data volume. "
+            "Alphanumeric-leading; a-z / A-Z / 0-9 / . _ - (max 64 chars)."
+        ),
+    )
 
 
 def _get_machines(request: Request) -> MachinesStore:
@@ -131,6 +140,7 @@ def upsert_machine(
             labels=labels_arg,
             target_disk_serial=body.target_disk_serial,
             extra_cmdline=body.extra_cmdline,
+            overlay_profile=body.overlay_profile,
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc

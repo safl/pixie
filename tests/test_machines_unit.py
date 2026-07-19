@@ -247,6 +247,79 @@ def test_ui_machines_bind_form_persists_boot_mode(client: TestClient) -> None:
     assert "labels" not in row
 
 
+def test_bind_overlay_profile_round_trips(client: TestClient) -> None:
+    """PUT /machines/{mac} with overlay_profile persists it; the row
+    reads it back; the ephemeral (blank profile) case is the default."""
+    c = _authed(client)
+    mac = "aa:bb:cc:dd:ee:2a"
+    r = c.put(
+        f"/machines/{mac}",
+        json={
+            "boot_mode": "nbdboot",
+            "image_content_sha256": "a" * 64,
+            "overlay_profile": "simon",
+        },
+    )
+    assert r.status_code == 200
+    row = c.get(f"/machines/{mac}").json()
+    assert row["overlay_profile"] == "simon"
+
+    # Blank overlay_profile clears the field (round-trip absent).
+    r = c.put(
+        f"/machines/{mac}",
+        json={
+            "boot_mode": "nbdboot",
+            "image_content_sha256": "a" * 64,
+            "overlay_profile": "",
+        },
+    )
+    assert r.status_code == 200
+    row2 = c.get(f"/machines/{mac}").json()
+    assert "overlay_profile" not in row2
+
+
+def test_bind_overlay_profile_rejects_bad_chars(client: TestClient) -> None:
+    """Overlay profile lands on disk as
+    ``data/overlays/<mac>/<image>/<profile>.qcow2``, so a name with
+    ``..`` or a slash could escape the tree. Reject at the store."""
+    c = _authed(client)
+    r = c.put(
+        "/machines/aa:bb:cc:dd:ee:2b",
+        json={
+            "boot_mode": "nbdboot",
+            "image_content_sha256": "a" * 64,
+            "overlay_profile": "../etc/passwd",
+        },
+    )
+    assert r.status_code == 422
+
+
+def test_ui_bind_form_maps_overlay_profile_new_to_new_name(
+    client: TestClient,
+) -> None:
+    """The bind form select carries a magic ``__new`` value that
+    tells the handler to pull the profile name from the sibling
+    ``overlay_profile_new`` text field. Exercise the merge so an
+    operator using the picker's create-new flow lands the fresh
+    profile without a JSON round-trip."""
+    c = _authed(client)
+    mac = "aa:bb:cc:dd:ee:2c"
+    r = c.post(
+        "/ui/machines/bind",
+        data={
+            "mac": mac,
+            "boot_mode": "nbdboot",
+            "image_content_sha256": "a" * 64,
+            "overlay_profile": "__new",
+            "overlay_profile_new": "karl",
+        },
+        follow_redirects=False,
+    )
+    assert r.status_code == 303
+    row = c.get(f"/machines/{mac}").json()
+    assert row["overlay_profile"] == "karl"
+
+
 def test_ui_labels_edit_form_persists_and_independent_of_bind(
     client: TestClient,
 ) -> None:

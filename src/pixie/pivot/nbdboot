@@ -88,6 +88,13 @@ mountroot() {
     image="$(_get_cmdline pixie.image)"
     overlay_size="$(_get_cmdline pixie.overlay_size)"
     root_part_override="$(_get_cmdline pixie.root_part)"
+    # Persistent mode gate. ``pixie.persist=1`` on the kernel cmdline
+    # tells this pivot the NBD export IS the machine's private
+    # writable qcow2 (backed by the shared base blob on pixie's side
+    # via qemu-nbd + backing_file). Skip the tmpfs+overlayfs setup
+    # and mount /dev/nbd0's root partition read-write straight at
+    # /root; writes land in the qcow2 and persist across reboots.
+    persist="$(_get_cmdline pixie.persist)"
 
     # Defaults: 10 GiB tmpfs is enough for typical CI workloads
     # writing logs + scratch state; operator caps with pixie.overlay_size.
@@ -225,37 +232,62 @@ mountroot() {
     modprobe xfs 2>/dev/null || true
     modprobe btrfs 2>/dev/null || true
     _mnt_out=""; _mnt_rc=1
-    for fstype in ext4 xfs btrfs auto; do
-        _nbdboot_trace "mount -t ${fstype} -o ro ${root_part} -> /lower"
-        _mnt_out="$(mount -t "$fstype" -o ro "$root_part" /lower 2>&1)"; _mnt_rc=$?
-        [ "$_mnt_rc" -eq 0 ] && break
-        _nbdboot_trace "  -> rc=${_mnt_rc} out='${_mnt_out}'"
-    done
-    if [ "$_mnt_rc" -ne 0 ]; then
-        _post_status "nbdboot.mount_root_failed"
-        _nbdboot_die "failed to mount ${root_part} as ext4/xfs/btrfs/auto"
-    fi
-    _nbdboot_trace "mounted ${root_part}; ls /lower:  $(/bin/busybox ls /lower 2>&1 | /bin/busybox tr '\n' ' ')"
+    if [ "$persist" = "1" ]; then
+        # Persistent path: NBD serves this machine's private qcow2.
+        # Mount it read-write straight at /root; the qcow2's backing_file
+        # points at the shared base blob on pixie's side, so unchanged
+        # bytes are still shared but writes stay in the qcow2. No
+        # tmpfs upper, no overlayfs.
+        _mnt_rc=1
+        for fstype in ext4 xfs btrfs auto; do
+            _nbdboot_trace "persist: mount -t ${fstype} -o rw ${root_part} -> /root"
+            _mnt_out="$(mount -t "$fstype" -o rw "$root_part" /root 2>&1)"; _mnt_rc=$?
+            [ "$_mnt_rc" -eq 0 ] && break
+            _nbdboot_trace "  -> rc=${_mnt_rc} out='${_mnt_out}'"
+        done
+        if [ "$_mnt_rc" -ne 0 ]; then
+            _post_status "nbdboot.mount_root_failed"
+            _nbdboot_die "persist: failed to mount ${root_part} rw as ext4/xfs/btrfs/auto"
+        fi
+        _nbdboot_trace "persist: mounted ${root_part} rw at /root"
+        # For the persistent path, fall through to the fstab-rewrite +
+        # service-masking prep below. Those steps target /root regardless
+        # of whether it's an overlay merge or a plain mount, and they're
+        # idempotent -- the second boot re-masks already-masked units +
+        # rewrites an already-rewritten fstab without side effects.
+    else
+        for fstype in ext4 xfs btrfs auto; do
+            _nbdboot_trace "mount -t ${fstype} -o ro ${root_part} -> /lower"
+            _mnt_out="$(mount -t "$fstype" -o ro "$root_part" /lower 2>&1)"; _mnt_rc=$?
+            [ "$_mnt_rc" -eq 0 ] && break
+            _nbdboot_trace "  -> rc=${_mnt_rc} out='${_mnt_out}'"
+        done
+        if [ "$_mnt_rc" -ne 0 ]; then
+            _post_status "nbdboot.mount_root_failed"
+            _nbdboot_die "failed to mount ${root_part} as ext4/xfs/btrfs/auto"
+        fi
+        _nbdboot_trace "mounted ${root_part}; ls /lower:  $(/bin/busybox ls /lower 2>&1 | /bin/busybox tr '\n' ' ')"
 
-    _nbdboot_trace "tmpfs(${overlay_size}) -> /upper"
-    log_begin_msg "nbdboot: tmpfs(${overlay_size}) at /upper"
-    if ! mount -t tmpfs -o "size=${overlay_size}" tmpfs /upper; then
-        _post_status "nbdboot.mount_tmpfs_failed"
-        _nbdboot_die "failed to mount tmpfs at /upper"
-    fi
-    mkdir -p /upper/up /upper/work
-    log_end_msg
+        _nbdboot_trace "tmpfs(${overlay_size}) -> /upper"
+        log_begin_msg "nbdboot: tmpfs(${overlay_size}) at /upper"
+        if ! mount -t tmpfs -o "size=${overlay_size}" tmpfs /upper; then
+            _post_status "nbdboot.mount_tmpfs_failed"
+            _nbdboot_die "failed to mount tmpfs at /upper"
+        fi
+        mkdir -p /upper/up /upper/work
+        log_end_msg
 
-    _nbdboot_trace "overlay(lower=/lower,upper=/upper/up,work=/upper/work) -> /root"
-    log_begin_msg "nbdboot: overlayfs at /root"
-    if ! mount -t overlay overlay \
-        -o "lowerdir=/lower,upperdir=/upper/up,workdir=/upper/work" \
-        /root
-    then
-        _post_status "nbdboot.mount_overlay_failed"
-        _nbdboot_die "failed to mount overlayfs at /root"
+        _nbdboot_trace "overlay(lower=/lower,upper=/upper/up,work=/upper/work) -> /root"
+        log_begin_msg "nbdboot: overlayfs at /root"
+        if ! mount -t overlay overlay \
+            -o "lowerdir=/lower,upperdir=/upper/up,workdir=/upper/work" \
+            /root
+        then
+            _post_status "nbdboot.mount_overlay_failed"
+            _nbdboot_die "failed to mount overlayfs at /root"
+        fi
+        log_end_msg
     fi
-    log_end_msg
 
     # Rewrite the guest's /etc/fstab in the overlay upper before we
     # hand control back to /init. Cloud disk images (nosi's Ubuntu +
@@ -277,11 +309,25 @@ mountroot() {
     # invocation above); writing to /upper/etc/fstab lands OUTSIDE
     # the overlay and the pivoted root still sees the lower's fstab.
     # The strip has to go into the actual upperdir.
-    if [ -e /lower/etc/fstab ]; then
-        mkdir -p /upper/up/etc
+    # ``prep_root`` is the path we write to when preparing the
+    # first-boot state (fstab, service masks, resolv.conf). For the
+    # ephemeral overlay path, this is the overlay upperdir (writes
+    # here are the ones the pivoted root actually sees). For the
+    # persistent path, /root is already the writable mount, so we
+    # write directly there. Same downstream code, one variable.
+    if [ "$persist" = "1" ]; then
+        prep_root=/root
+        prep_fstab_src=/root/etc/fstab
+    else
+        prep_root=/upper/up
+        prep_fstab_src=/lower/etc/fstab
+    fi
+
+    if [ -e "$prep_fstab_src" ]; then
+        mkdir -p "$prep_root/etc"
         /bin/busybox awk '$2 != "/boot" && $2 != "/boot/efi" { print }' \
-            /lower/etc/fstab > /upper/up/etc/fstab
-        _nbdboot_trace "fstab: rewrote /etc/fstab in overlay upper (dropped /boot, /boot/efi) -- $(wc -l < /upper/up/etc/fstab) lines"
+            "$prep_fstab_src" > "$prep_root/etc/fstab"
+        _nbdboot_trace "fstab: rewrote /etc/fstab under ${prep_root} (dropped /boot, /boot/efi) -- $(wc -l < "$prep_root/etc/fstab") lines"
     fi
 
     # Prevent Ubuntu/Debian's systemd-networkd + cloud-init from
@@ -301,7 +347,7 @@ mountroot() {
     # since we don't get a chance to reconfigure networking anyway.
     # Also masks the .socket unit so socket-activation can't
     # resurrect networkd.
-    mkdir -p /upper/up/etc/systemd/system
+    mkdir -p ${prep_root}/etc/systemd/system
     for unit in \
         systemd-networkd.service \
         systemd-networkd.socket \
@@ -311,7 +357,7 @@ mountroot() {
         cloud-config.service \
         cloud-final.service \
     ; do
-        ln -sf /dev/null "/upper/up/etc/systemd/system/${unit}"
+        ln -sf /dev/null "${prep_root}/etc/systemd/system/${unit}"
     done
     _nbdboot_trace "network: masked systemd-networkd + cloud-init units so the initramfs-owned NIC survives userspace"
 
@@ -336,7 +382,7 @@ mountroot() {
             for _ns in ${DNSSERVERS}; do
                 echo "nameserver ${_ns}"
             done
-        } > /upper/up/etc/resolv.conf
+        } > "${prep_root}/etc/resolv.conf"
         _nbdboot_trace "network: wrote /etc/resolv.conf from ${net_conf} (nameservers: ${DNSSERVERS})"
         break
     done
