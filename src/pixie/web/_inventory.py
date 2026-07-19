@@ -39,13 +39,14 @@ from __future__ import annotations
 
 import re
 from collections import Counter
+from collections.abc import Iterator
 from typing import Any
 
 _DDR_RE = re.compile(r"\bDDR\d\b", re.IGNORECASE)
 _MHZ_RE = re.compile(r"(\d+)\s*MHz", re.IGNORECASE)
 
 
-def _iter_nodes(node: Any) -> Any:
+def _iter_nodes(node: Any) -> Iterator[dict[str, Any]]:
     """Depth-first walk of an lshw node tree, including ``node``
     itself. lshw nests everything under ``children``; a leaf simply
     has no (or an empty) ``children`` list."""
