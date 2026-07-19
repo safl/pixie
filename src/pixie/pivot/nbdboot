@@ -330,28 +330,43 @@ mountroot() {
         _nbdboot_trace "fstab: rewrote /etc/fstab under ${prep_root} (dropped /boot, /boot/efi) -- $(wc -l < "$prep_root/etc/fstab") lines"
     fi
 
-    # Prevent Ubuntu/Debian's systemd-networkd + cloud-init from
-    # touching the NIC the initramfs already configured. Under
-    # nbdboot the root filesystem lives on that NIC (NBD over TCP),
-    # so anything that flushes the IP + re-DHCPs -- which networkd
-    # + netplan + cloud-init's network stage all do by default --
-    # tears down the socket the kernel was reading root pages from,
-    # then wedges every process on the ensuing D-state page fault
-    # because the reconnect needs an IP that needs networkd that
-    # needs pages from a dead NBD. Circular deadlock, no hung-task
-    # warning (nothing is runnable long enough to trip 120s), silent
-    # console freeze after journald flush.
+    # Prevent Ubuntu/Debian's systemd-networkd + cloud-init +
+    # NetworkManager from touching the NIC the initramfs already
+    # configured. Under nbdboot the root filesystem lives on that
+    # NIC (NBD over TCP), so anything that flushes the IP + re-DHCPs
+    # -- which networkd + netplan + cloud-init's network stage +
+    # NetworkManager all do by default -- tears down the socket the
+    # kernel was reading root pages from, then wedges every process
+    # on the ensuing D-state page fault because the reconnect needs
+    # an IP that needs networkd that needs pages from a dead NBD.
+    # Circular deadlock, no hung-task warning (nothing is runnable
+    # long enough to trip 120s), silent console freeze after journald
+    # flush.
+    #
+    # Ubuntu 26.04 Server switched from systemd-networkd to
+    # NetworkManager by default; a nbdboot into a fresh nosi
+    # ubuntu-2604-headless was burning 60 seconds on
+    # NetworkManager-wait-online.service before its own "online"
+    # check timed out (systemd-analyze critical-chain showed
+    # ``NetworkManager-wait-online.service @3.946s +59.988s``). Mask
+    # the whole NM stack: the initrd-owned NIC survives userspace
+    # untouched.
     #
     # Mask by symlink-to-/dev/null in the overlay upper's systemd
     # unit dir. Fresh cloud install case: no runtime override needed
     # since we don't get a chance to reconfigure networking anyway.
-    # Also masks the .socket unit so socket-activation can't
-    # resurrect networkd.
+    # Also masks the .socket units so socket-activation can't
+    # resurrect them.
     mkdir -p ${prep_root}/etc/systemd/system
     for unit in \
         systemd-networkd.service \
         systemd-networkd.socket \
         systemd-networkd-wait-online.service \
+        NetworkManager.service \
+        NetworkManager-wait-online.service \
+        NetworkManager-dispatcher.service \
+        nm-cloud-setup.service \
+        nm-cloud-setup.timer \
         cloud-init.service \
         cloud-init-local.service \
         cloud-config.service \
@@ -359,13 +374,13 @@ mountroot() {
     ; do
         ln -sf /dev/null "${prep_root}/etc/systemd/system/${unit}"
     done
-    _nbdboot_trace "network: masked systemd-networkd + cloud-init units so the initramfs-owned NIC survives userspace"
+    _nbdboot_trace "network: masked systemd-networkd + NetworkManager + cloud-init units so the initramfs-owned NIC survives userspace"
 
-    # With networkd + cloud-init masked, nothing in userspace populates
-    # /etc/resolv.conf. Propagate the DHCP-supplied DNS servers +
-    # search domain from initramfs-tools' /run/net-*.conf into the
-    # overlay upper so ``apt-get update`` / ``curl`` / ``ping <host>``
-    # work in the pivoted root. First-match wins: the loop breaks on
+    # With networkd + NetworkManager + cloud-init all masked, nothing
+    # in userspace populates /etc/resolv.conf. Propagate the
+    # DHCP-supplied DNS servers + search domain from initramfs-tools'
+    # /run/net-*.conf into the overlay upper so ``apt-get update`` /
+    # ``curl`` / ``ping <host>`` work in the pivoted root. First-match wins: the loop breaks on
     # the first ``/run/net-*.conf`` that carries a non-empty
     # ``DNSSERVERS`` line, which matches the single interface the
     # initramfs actually configured.
@@ -376,7 +391,7 @@ mountroot() {
         [ -n "${DNSSERVERS:-}" ] || continue
         {
             echo "# Written by nbdboot initramfs from ${net_conf}."
-            echo "# nbdboot masks systemd-networkd + cloud-init so nothing"
+            echo "# nbdboot masks systemd-networkd + NetworkManager + cloud-init so nothing"
             echo "# in userspace would otherwise reseed this file."
             [ -n "${DOMAINSEARCH:-}" ] && echo "search ${DOMAINSEARCH}"
             for _ns in ${DNSSERVERS}; do
