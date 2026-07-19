@@ -423,12 +423,17 @@
         </p>
         {% if machine.inventory %}
         {# Best-effort render of the machine hardware summary. The
-           live env's ``pixie`` CLI writes whichever sections it can
-           enumerate; each block below is guarded so a partial payload
-           still renders the sections that DID come through. Raw lshw
-           JSON sits collapsed at the bottom as the always-available
-           fallback for a section the summary render doesn't cover. #}
-        {% set system = machine.inventory.get("system") or {} %}
+           raw payload posted by the live env's ``pixie`` CLI is
+           ``{"lshw": <lshw -json>, "disks": [<lsblk rows>]}``; the
+           ``inv`` context var (built by
+           ``pixie.web._inventory.normalise_inventory`` at render
+           time) walks the lshw tree into the system/cpu/memory/nics
+           shape rendered below. Each block is guarded so a partial
+           payload still renders the sections that DID come through.
+           Raw lshw JSON sits collapsed at the bottom as the
+           always-available fallback for anything the summary
+           render doesn't cover. #}
+        {% set system = inv.system %}
         {% if system %}
         <h3 class="h6 mt-3">System</h3>
         <dl class="row small mb-3">
@@ -446,46 +451,91 @@
             {% endif %}
             {% if system.get("firmware") %}
             <dt class="col-sm-3 text-muted">Firmware</dt>
-            <dd class="col-sm-9 small">{{ system.get("firmware") }}</dd>
+            <dd class="col-sm-9 small">
+                {{ system.get("firmware") }}
+                {% if system.get("firmware_vendor") %}<span class="text-muted">({{ system.get("firmware_vendor") }})</span>{% endif %}
+            </dd>
             {% endif %}
         </dl>
         {% endif %}
 
-        {% set cpu = machine.inventory.get("cpu") or {} %}
-        {% if cpu %}
+        {% set cpu = inv.cpu %}
+        {% if cpu.sockets %}
         <h3 class="h6 mt-3">CPU</h3>
-        <dl class="row small mb-3">
-            {% if cpu.get("model") %}
-            <dt class="col-sm-3 text-muted">Model</dt>
-            <dd class="col-sm-9">{{ cpu.get("model") }}</dd>
-            {% endif %}
-            {% if cpu.get("cores") %}
-            <dt class="col-sm-3 text-muted">Cores</dt>
-            <dd class="col-sm-9">{{ cpu.get("cores") }}{% if cpu.get("threads") %} ({{ cpu.get("threads") }} threads){% endif %}</dd>
-            {% endif %}
-            {% if cpu.get("arch") %}
-            <dt class="col-sm-3 text-muted">Arch</dt>
-            <dd class="col-sm-9"><code>{{ cpu.get("arch") }}</code></dd>
-            {% endif %}
-        </dl>
+        {% for socket in cpu.sockets %}
+        <div class="border rounded p-3 mb-2 bg-light-subtle">
+            <div class="d-flex align-items-center flex-wrap gap-2 mb-2">
+                <span class="fw-semibold">
+                    {{ socket.model or "Unknown CPU" }}{% if socket.mhz_current %} @ {{ socket.mhz_current | humanize_hz }}{% endif %}
+                </span>
+                {% if socket.arch %}<span class="badge text-bg-secondary">{{ socket.arch }}</span>{% endif %}
+                {% if cpu.sockets|length > 1 %}<span class="badge text-bg-light border">Socket {{ socket.slot or loop.index0 }}</span>{% endif %}
+            </div>
+            <div class="row text-center">
+                <div class="col-6 col-md-3">
+                    <div class="display-6 lh-1">{{ socket.cores or "-" }}</div>
+                    <div class="small text-muted">physical cores</div>
+                </div>
+                <div class="col-6 col-md-3">
+                    <div class="display-6 lh-1 text-primary">{{ socket.threads or "-" }}</div>
+                    <div class="small text-muted">logical threads</div>
+                </div>
+                {% if socket.mhz_max %}
+                <div class="col-6 col-md-3 mt-3 mt-md-0">
+                    <div class="fs-4 lh-1">{{ socket.mhz_max | humanize_hz }}</div>
+                    <div class="small text-muted">max clock</div>
+                </div>
+                {% endif %}
+                {% if socket.vendor %}
+                <div class="col-6 col-md-3 mt-3 mt-md-0">
+                    <div class="fs-6 lh-1 text-muted">{{ socket.vendor }}</div>
+                    <div class="small text-muted">vendor</div>
+                </div>
+                {% endif %}
+            </div>
+        </div>
+        {% endfor %}
+        {% if cpu.sockets|length > 1 and cpu.total_cores %}
+        <p class="small text-muted">{{ cpu.sockets|length }} sockets, {{ cpu.total_cores }} cores / {{ cpu.total_threads }} threads total.</p>
+        {% endif %}
         {% endif %}
 
-        {% set memory = machine.inventory.get("memory") or {} %}
-        {% if memory %}
+        {% set memory = inv.memory %}
+        {% if memory.total_bytes %}
         <h3 class="h6 mt-3">Memory</h3>
-        <dl class="row small mb-3">
-            {% if memory.get("total") %}
-            <dt class="col-sm-3 text-muted">Total</dt>
-            <dd class="col-sm-9 font-monospace">{{ memory.get("total") }}</dd>
+        <div class="border rounded p-3 mb-3 bg-light-subtle">
+            <div class="d-flex align-items-baseline gap-2 mb-2">
+                <span class="display-6 lh-1">{{ memory.total_bytes | humanize_bytes }}</span>
+                <span class="text-muted small">total installed</span>
+            </div>
+            {% if memory.dimms %}
+            <div class="d-flex gap-1 flex-wrap mb-2" role="list" aria-label="DIMM slots">
+                {% for d in memory.dimms %}
+                {% if d.empty %}
+                <span class="border border-secondary-subtle rounded" style="width: 1.75rem; height: 1.75rem;"
+                      title="{{ d.slot or 'slot' }}: empty"></span>
+                {% else %}
+                <span class="rounded text-bg-primary d-inline-flex align-items-center justify-content-center small"
+                      style="width: 1.75rem; height: 1.75rem;"
+                      title="{{ d.slot or 'slot' }}: {{ d.size_bytes | humanize_bytes }}{% if d.type %} {{ d.type }}{% endif %}{% if d.speed_hz %} @ {{ (d.speed_hz / 1000000) | round | int }} MHz{% endif %}"></span>
+                {% endif %}
+                {% endfor %}
+            </div>
+            <p class="small text-muted mb-0">
+                {{ memory.slots_populated }} / {{ memory.slots_total }} slots populated
+                {% if memory.dominant_type %}&middot; {{ memory.dominant_type }}{% endif %}
+                {% if memory.dominant_speed_hz %} @ {{ (memory.dominant_speed_hz / 1000000) | round | int }} MHz{% endif %}
+            </p>
+            {% else %}
+            <p class="small text-muted mb-0">
+                Per-DIMM slot detail not reported by this machine's firmware; only the
+                total is available.
+            </p>
             {% endif %}
-            {% if memory.get("modules") %}
-            <dt class="col-sm-3 text-muted">Modules</dt>
-            <dd class="col-sm-9">{{ memory.get("modules") }}</dd>
-            {% endif %}
-        </dl>
+        </div>
         {% endif %}
 
-        {% set nics = machine.inventory.get("nics") or [] %}
+        {% set nics = inv.nics %}
         {% if nics %}
         <h3 class="h6 mt-3">Network ({{ nics|length }})</h3>
         <div class="table-responsive mb-3">
@@ -517,7 +567,7 @@
         </div>
         {% endif %}
 
-        {% set disks = machine.inventory.get("disks") or [] %}
+        {% set disks = inv.disks %}
         {% if disks %}
         <h3 class="h6 mt-3">Disks ({{ disks|length }})</h3>
         <div class="table-responsive">
