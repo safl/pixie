@@ -39,8 +39,33 @@ class _CountingHandler(http.server.BaseHTTPRequestHandler):
         return
 
 
-def _spawn_server() -> tuple[socketserver.TCPServer, str, threading.Thread]:
-    server = socketserver.TCPServer(("127.0.0.1", 0), _CountingHandler)
+class _TruncatingHandler(http.server.BaseHTTPRequestHandler):
+    """Advertises a Content-Length larger than the bytes it actually
+    sends, then closes the connection: this is what a mid-transfer
+    network hiccup or registry hiccup looks like on the wire. urllib
+    does not raise for this on its own (see ``_stream_to_tmpfile``'s
+    explicit Content-Length check), so this handler is what exercises
+    that guard."""
+
+    protocol_version = "HTTP/1.0"
+    payload = b"only-part-of-the-body"
+    declared_length = len(payload) + 1000
+
+    def do_GET(self) -> None:
+        self.send_response(200)
+        self.send_header("Content-Length", str(self.declared_length))
+        self.send_header("Content-Type", "application/octet-stream")
+        self.end_headers()
+        self.wfile.write(self.payload)
+
+    def log_message(self, format: str, *args: object) -> None:
+        return
+
+
+def _spawn_server(
+    handler: type[http.server.BaseHTTPRequestHandler] = _CountingHandler,
+) -> tuple[socketserver.TCPServer, str, threading.Thread]:
+    server = socketserver.TCPServer(("127.0.0.1", 0), handler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     port = server.server_address[1]
@@ -71,6 +96,36 @@ def test_fetch_progress_reports_download_phase(tmp_path: Path) -> None:
     final = downloading[-1]
     assert final.get("bytes_downloaded") == len(_CountingHandler.payload)
     assert final.get("total_bytes") == len(_CountingHandler.payload)
+
+
+def test_fetch_raises_on_truncated_download(tmp_path: Path) -> None:
+    """A connection that closes before delivering the bytes its own
+    Content-Length promised must fail fast, at the download stage,
+    with an operator-actionable message -- not silently produce a
+    short file that only fails later during decompression with a
+    confusing gzip error."""
+    from pixie.catalog._fetcher import FetchError, fetch
+    from pixie.catalog._schema import CatalogEntry
+    from pixie.catalog._store import CatalogStore
+
+    server, url, _thread = _spawn_server(_TruncatingHandler)
+    try:
+        store = CatalogStore(tmp_path)
+        entry = CatalogEntry(name="short", src=url, format="img")
+        store.upsert(entry)
+        try:
+            fetch(entry, store)
+            raised = None
+        except FetchError as exc:
+            raised = exc
+    finally:
+        server.shutdown()
+        server.server_close()
+
+    assert raised is not None, "expected FetchError for a truncated download"
+    assert "truncated" in str(raised)
+    # No leftover .inflight scratch file for the truncated download.
+    assert not list((tmp_path / "tmp").glob("*.inflight"))
 
 
 def test_ui_fetch_states_json_reflects_report(client: TestClient) -> None:
