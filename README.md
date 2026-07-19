@@ -53,11 +53,13 @@ top nav has Machines, Catalog, Events, and Settings.
 
 Everything writable lives under `PIXIE_DATA_DIR` (default
 `/var/lib/pixie`). `state.db` holds catalog rows, machine rows,
-event log, settings, and NBD-export records. `blobs/<sha>/blob`
-holds fetched disk images. `artifacts/<sha>/{vmlinuz,initrd,
-manifest.json}` holds unpacked netboot bundles. `live-env/` holds
-the pixie live env kernel + initrd + squashfs the netboot-pc bake
-produced.
+event log, settings, NBD-export records, and persistent-overlay
+records. `blobs/<sha>/blob` holds fetched disk images.
+`artifacts/<sha>/{vmlinuz,initrd,manifest.json}` holds unpacked
+netboot bundles. `overlays/<mac>/<image_sha>/<profile>.qcow2` holds
+per-machine writable overlays for the `nbdboot` boot mode.
+`live-env/` holds the pixie live env kernel + initrd + squashfs the
+netboot-pc bake produced.
 
 Both admin password and display timezone / strftime pattern have
 env-var overrides plus DB overrides via `/ui/settings`; env wins
