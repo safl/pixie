@@ -145,6 +145,73 @@ def test_ui_machine_detail_renders_stored_inventory(client: TestClient) -> None:
     assert "test-model" in body
 
 
+def test_ui_machine_detail_renders_cpu_and_memory_from_lshw(client: TestClient) -> None:
+    """The CPU + Memory cards are extracted from the raw ``lshw``
+    tree at render time (see ``pixie.web._inventory``); this pins
+    the wire-shape mismatch fix: the live env never posts a
+    pre-normalised ``cpu``/``memory`` sub-dict, only ``lshw``."""
+    c = _authed(client)
+    lshw = {
+        "id": "fwtop",
+        "class": "system",
+        "product": "Test Server 2000",
+        "vendor": "Test Vendor",
+        "serial": "SN-999",
+        "children": [
+            {
+                "id": "core",
+                "class": "bus",
+                "children": [
+                    {
+                        "id": "cpu",
+                        "class": "processor",
+                        "product": "AMD EPYC 7402P 24-Core Processor",
+                        "vendor": "Advanced Micro Devices [AMD]",
+                        "slot": "CPU0",
+                        "width": 64,
+                        "size": 2.8e9,
+                        "capacity": 3.35e9,
+                        "capabilities": {"x86-64": "64bits extensions (x86-64)"},
+                        "configuration": {"cores": "24", "threads": "48"},
+                    },
+                    {
+                        "id": "memory",
+                        "class": "memory",
+                        "size": 34359738368,
+                        "children": [
+                            {
+                                "id": "bank:0",
+                                "class": "memory",
+                                "description": "DIMM DDR4 Synchronous 3200 MHz (0.3 ns)",
+                                "product": "M393A2K43DB3-CWE",
+                                "vendor": "Samsung",
+                                "slot": "DIMM_A1",
+                                "size": 17179869184,
+                            },
+                            {
+                                "id": "bank:1",
+                                "class": "memory",
+                                "description": "DIMM DDR4 Synchronous [empty]",
+                                "product": "NO DIMM",
+                                "vendor": "NO DIMM",
+                                "slot": "DIMM_A2",
+                            },
+                        ],
+                    },
+                ],
+            }
+        ],
+    }
+    r = c.post("/pxe/aa:bb:cc:dd:ee:03/inventory", json={"disks": [], "lshw": lshw})
+    assert r.status_code == 204
+    body = c.get("/ui/machines/aa:bb:cc:dd:ee:03").text
+    assert "AMD EPYC 7402P 24-Core Processor" in body
+    assert ">24<" in body  # cores stat block
+    assert ">48<" in body  # threads stat block
+    assert "16.0 GiB" in body  # occupied DIMM size in the slot tooltip
+    assert "1 / 2 slots populated" in body
+
+
 def test_ui_machine_detail_bind_form_prefills_current_binding(client: TestClient) -> None:
     """The detail page carries an edit form pre-populated with the
     machine's current boot_mode + image_content_sha256."""
@@ -407,17 +474,49 @@ def test_ui_events_confirms_on_destructive_forms(client: TestClient) -> None:
 
 def test_ui_machine_detail_renders_inventory_sections(client: TestClient) -> None:
     """The machine detail's inventory pane renders each section
-    (system / cpu / memory / nics / disks) present on the posted
-    payload; sections not in the payload are simply absent."""
+    (system / cpu / memory / nics / disks) extracted from a real
+    ``lshw -json`` tree; sections lshw doesn't carry are simply
+    absent. This is the real wire shape (``{"lshw": ..., "disks":
+    [...]}``), not a pre-normalised ``cpu``/``memory`` sub-dict --
+    the live env never posts one of those."""
     c = _authed(client)
-    payload = {
-        "system": {"vendor": "GMKtec", "model": "NUCBOX G5", "serial": "SN123"},
-        "cpu": {"model": "Intel N100", "cores": 4, "threads": 4, "arch": "x86_64"},
-        "memory": {"total": "16GiB", "modules": 1},
-        "nics": [
-            {"name": "enp1s0", "mac": "aa:bb:cc:dd:ee:08", "vendor": "Realtek", "driver": "r8125"}
+    lshw = {
+        "id": "fwtop",
+        "class": "system",
+        "product": "NUCBOX G5",
+        "vendor": "GMKtec",
+        "serial": "SN123",
+        "children": [
+            {
+                "id": "core",
+                "class": "bus",
+                "children": [
+                    {
+                        "id": "cpu",
+                        "class": "processor",
+                        "product": "Intel N100",
+                        "vendor": "Intel Corp.",
+                        "slot": "CPU0",
+                        "width": 64,
+                        "capabilities": {"x86-64": "64bits extensions (x86-64)"},
+                        "configuration": {"cores": "4", "threads": "4"},
+                    },
+                    {"id": "memory", "class": "memory", "size": 17179869184},
+                    {
+                        "id": "network",
+                        "class": "network",
+                        "logicalname": "enp1s0",
+                        "vendor": "Realtek",
+                        "serial": "aa:bb:cc:dd:ee:08",
+                        "configuration": {"driver": "r8125"},
+                    },
+                ],
+            }
         ],
+    }
+    payload = {
         "disks": [{"path": "/dev/nvme0n1", "size": "1T", "vendor": "Samsung"}],
+        "lshw": lshw,
     }
     r = c.post("/pxe/aa:bb:cc:dd:ee:08/inventory", json=payload)
     assert r.status_code == 204
@@ -425,7 +524,7 @@ def test_ui_machine_detail_renders_inventory_sections(client: TestClient) -> Non
     assert "GMKtec" in body
     assert "NUCBOX G5" in body
     assert "Intel N100" in body
-    assert "16GiB" in body
+    assert "16.0 GiB" in body
     assert "enp1s0" in body
     assert "r8125" in body
     assert "Samsung" in body

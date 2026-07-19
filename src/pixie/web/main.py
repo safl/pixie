@@ -663,6 +663,11 @@ def create_app() -> FastAPI:
         return format_ts(raw or "", app.state.settings_store)
 
     templates.env.filters["fmt_ts"] = _fmt_ts_filter
+
+    from pixie.web._inventory import humanize_bytes, humanize_hz
+
+    templates.env.filters["humanize_bytes"] = humanize_bytes
+    templates.env.filters["humanize_hz"] = humanize_hz
     if _STATIC_DIR.is_dir():
         app.mount("/static", StaticFiles(directory=str(_STATIC_DIR)), name="static")
     # Serve the netboot-pc bake artifacts (vmlinuz + initrd +
@@ -1067,6 +1072,7 @@ def create_app() -> FastAPI:
         pixie CLI). Falls through to /ui/machines on a bad MAC or a
         row that doesn't exist yet."""
         from pixie.machines._store import BOOT_MODE_META, BadMac
+        from pixie.web._inventory import normalise_inventory
 
         try:
             machine = request.app.state.machines_store.get(mac)
@@ -1074,6 +1080,7 @@ def create_app() -> FastAPI:
             return RedirectResponse(url="/ui/machines", status_code=status.HTTP_303_SEE_OTHER)
         if machine is None:
             return RedirectResponse(url="/ui/machines", status_code=status.HTTP_303_SEE_OTHER)
+        inv = normalise_inventory(machine.inventory)
         events = request.app.state.events_log.list(
             subject_kind="machine",
             subject_id=machine.mac,
@@ -1103,6 +1110,7 @@ def create_app() -> FastAPI:
             {
                 "version": pixie.__version__,
                 "machine": machine,
+                "inv": inv,
                 "events": events,
                 "bindable_entries": bindable_entries,
                 "boot_mode_meta": BOOT_MODE_META,
