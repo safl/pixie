@@ -109,6 +109,58 @@ class NbdServer:
         with self._lock:
             return self._spawn_locked(name, blob_path)
 
+    def spawn_qcow2(self, name: str, qcow2_path: Path) -> int:
+        """Spawn qemu-nbd for ``name`` serving ``qcow2_path``.
+        Idempotent per name. Uses the same ``_procs``/`_ports`
+        bookkeeping as the nbdkit spawn so ``terminate`` /
+        ``running_exports`` work uniformly across both backends.
+
+        qemu-nbd is used instead of nbdkit for persistent overlays
+        because it speaks qcow2 natively (with backing_file
+        indirection to the shared base blob) and writes back to the
+        qcow2 in place. nbdkit's cow filter is ephemeral by design.
+
+        Returns the allocated TCP port. Raises :class:`RuntimeError`
+        on binary/port/file failures."""
+        with self._lock:
+            return self._spawn_qcow2_locked(name, qcow2_path)
+
+    @staticmethod
+    def create_qcow2(qcow2_path: Path, base_path: Path) -> None:
+        """``qemu-img create -f qcow2 -F raw -b <base> <path>``.
+
+        Fresh per-overlay COW file with ``backing_file`` pointing at
+        the shared catalog blob. The base is untouched; the qcow2
+        grows only with the writes THIS overlay makes.
+
+        Idempotent-ish: raises if ``qcow2_path`` already exists so a
+        caller can distinguish "created" from "was already there" if
+        needed. Callers guard on the existence check before calling.
+        """
+        if not base_path.is_file():
+            raise RuntimeError(f"base blob {base_path!s} does not exist")
+        qcow2_path.parent.mkdir(parents=True, exist_ok=True)
+        argv = [
+            "qemu-img",
+            "create",
+            "-f",
+            "qcow2",
+            "-F",
+            "raw",
+            "-b",
+            str(base_path),
+            str(qcow2_path),
+        ]
+        try:
+            proc = subprocess.run(argv, capture_output=True, check=False)
+        except FileNotFoundError as exc:
+            raise RuntimeError("qemu-img binary not found on PATH") from exc
+        if proc.returncode != 0:
+            raise RuntimeError(
+                f"qemu-img create failed (rc={proc.returncode}): "
+                f"{proc.stderr.decode(errors='replace').strip()}"
+            )
+
     def terminate(self, name: str) -> bool:
         """Kill the nbdkit for ``name``. Returns True iff a process
         was actually killed. No-op if the export isn't running."""
@@ -210,6 +262,57 @@ class NbdServer:
         self._procs[name] = proc
         self._ports[name] = port
         self._paths[name] = blob_path
+        return port
+
+    def _spawn_qcow2_locked(self, name: str, qcow2_path: Path) -> int:
+        """Requires ``self._lock``. Idempotent per name. Same shape
+        as :meth:`_spawn_locked` but argv is qemu-nbd."""
+        existing = self._procs.get(name)
+        if existing is not None and existing.poll() is None:
+            return self._ports[name]
+        if existing is not None:
+            self._procs.pop(name, None)
+            self._ports.pop(name, None)
+            self._paths.pop(name, None)
+
+        if not qcow2_path.is_file():
+            raise RuntimeError(f"qcow2 {qcow2_path!s} does not exist")
+
+        port = self._allocate_port_locked()
+
+        # ``--shared=1`` because qcow2 is single-writer; a second
+        # concurrent client would corrupt the file. Per-machine keying
+        # (see plan) makes this a non-issue in practice but the flag
+        # documents the intent + belt-and-braces if a stray operator
+        # points two initrds at the same overlay.
+        argv: list[str] = [
+            "qemu-nbd",
+            "--persistent",
+            "--shared=1",
+            "--format=qcow2",
+            f"--bind={self.bind}",
+            f"--port={port}",
+            f"--export-name={name}",
+            str(qcow2_path),
+        ]
+
+        _log.info("qemu-nbd spawn %r on port %d: %s", name, port, qcow2_path)
+        try:
+            proc = subprocess.Popen(argv, stdout=sys.stderr, stderr=sys.stderr)
+        except FileNotFoundError as exc:
+            raise RuntimeError("qemu-nbd binary not found on PATH") from exc
+
+        time.sleep(_SPAWN_STARTUP_GRACE)
+        if proc.poll() is not None:
+            rc = proc.returncode
+            raise RuntimeError(
+                f"qemu-nbd for overlay {name!r} exited immediately "
+                f"(rc={rc}, port={port}, qcow2={qcow2_path!s})"
+            )
+
+        self._procs[name] = proc
+        self._ports[name] = port
+        self._paths[name] = qcow2_path
         return port
 
     def _terminate_locked(self, name: str) -> bool:

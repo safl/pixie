@@ -146,6 +146,7 @@ CREATE TABLE IF NOT EXISTS machines (
     labels                 TEXT NOT NULL DEFAULT '',
     target_disk_serial     TEXT NOT NULL DEFAULT '',
     extra_cmdline          TEXT NOT NULL DEFAULT '',
+    overlay_profile        TEXT NOT NULL DEFAULT '',
     inventory_json         TEXT NOT NULL DEFAULT '',
     inventory_at           TEXT NOT NULL DEFAULT '',
     discovered_at          TEXT NOT NULL,
@@ -169,6 +170,14 @@ _FLASH_MODES: frozenset[str] = frozenset({"pixie-flash-once", "pixie-flash-alway
 _LABEL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 ._\-]{0,63}$")
 _LABEL_LIMIT = 16
 
+# Overlay profile names land on disk as
+# ``data/overlays/<mac_slug>/<image_sha>/<profile>.qcow2``. Restrict to
+# a filesystem-safe subset so a hand-typed name can't escape the
+# storage tree via ``..`` or a directory separator. Same alnum-leading
+# shape as labels for consistency; no space to keep the on-disk
+# filename shell-friendly.
+_OVERLAY_PROFILE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._\-]{0,63}$")
+
 
 def _migrate_schema(conn: sqlite3.Connection) -> None:
     """Additive column adds for existing state.db files. Idempotent."""
@@ -183,6 +192,8 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE machines ADD COLUMN target_disk_serial TEXT NOT NULL DEFAULT ''")
     if "extra_cmdline" not in cols:
         conn.execute("ALTER TABLE machines ADD COLUMN extra_cmdline TEXT NOT NULL DEFAULT ''")
+    if "overlay_profile" not in cols:
+        conn.execute("ALTER TABLE machines ADD COLUMN overlay_profile TEXT NOT NULL DEFAULT ''")
     # Retired 2026-07 pre-1.0: sanboot_drive was carried on the bind
     # form as an iPXE ``sanboot`` BIOS drive slug, but pixie never
     # actually rendered it into any iPXE template -- the ipxe-exit
@@ -244,6 +255,17 @@ class Machine:
     concatenate). Intended for the odd hardware quirk that needs a
     workaround on ONE target without dragging the deploy-wide default
     with it."""
+    overlay_profile: str = ""
+    """Per-machine persistent-overlay profile name for ``nbdboot``.
+    Blank means "ephemeral tmpfs overlay" (the historical behaviour;
+    writes vanish on reboot). Non-blank names a qcow2 file kept under
+    ``data/overlays/<mac_slug>/<image_sha>/<profile>.qcow2``; writes
+    persist across reboots because the qcow2 is stored on pixie's
+    data volume. Multiple profiles can coexist per (machine, image)
+    -- the operator flips between them by editing this field. Only
+    consulted when ``boot_mode == 'nbdboot'``; other modes ignore
+    it. See :mod:`pixie.exports._store` for the overlay row + the
+    qcow2 lifecycle."""
     inventory: dict[str, Any] = field(default_factory=dict)
     inventory_at: str = ""
     discovered_at: str = field(default_factory=now_iso)
@@ -267,6 +289,8 @@ class Machine:
             out["target_disk_serial"] = self.target_disk_serial
         if self.extra_cmdline:
             out["extra_cmdline"] = self.extra_cmdline
+        if self.overlay_profile:
+            out["overlay_profile"] = self.overlay_profile
         if self.last_seen_ip:
             out["last_seen_ip"] = self.last_seen_ip
         if self.inventory:
@@ -315,6 +339,7 @@ class MachinesStore:
         labels: Sequence[str] | None = None,
         target_disk_serial: str = "",
         extra_cmdline: str = "",
+        overlay_profile: str = "",
     ) -> Machine:
         """Operator-driven write: set boot mode + optional image ref.
         Creates the row if it doesn't exist; preserves discovery
@@ -331,6 +356,11 @@ class MachinesStore:
         ``PIXIE_LIVE_ENV_EXTRA_CMDLINE`` fallback. Newlines are
         rejected so a stray paste can't smuggle a second cmdline into
         the iPXE render.
+        ``overlay_profile`` names a persistent qcow2 overlay for
+        ``nbdboot`` (blank = ephemeral tmpfs). The renderer + exports
+        supervisor materialise the qcow2 lazily on first plan render.
+        Must match a filesystem-safe subset so the on-disk filename
+        stays legible.
         """
         canon = normalise_mac(mac)
         if boot_mode not in BOOT_MODES:
@@ -343,6 +373,12 @@ class MachinesStore:
         if "\n" in extra or "\r" in extra:
             raise ValueError(
                 "extra_cmdline must be a single line (newlines truncate the iPXE render)"
+            )
+        overlay = (overlay_profile or "").strip()
+        if overlay and not _OVERLAY_PROFILE_RE.match(overlay):
+            raise ValueError(
+                "overlay_profile must be alphanumeric-leading; a-z / A-Z / 0-9 / . _ - "
+                "(max 64 chars); avoids filesystem escapes into the qcow2 storage path"
             )
 
         now = now_iso()
@@ -382,8 +418,9 @@ class MachinesStore:
                     INSERT INTO machines (
                         mac, boot_mode, image_content_sha256,
                         labels, target_disk_serial, extra_cmdline,
+                        overlay_profile,
                         discovered_at, last_seen_at, last_seen_ip, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, '', ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, '', ?)
                     """,
                     (
                         canon,
@@ -392,6 +429,7 @@ class MachinesStore:
                         labels_json,
                         target_serial,
                         extra,
+                        overlay,
                         now,
                         now,
                         now,
@@ -403,7 +441,8 @@ class MachinesStore:
                     UPDATE machines
                     SET boot_mode = ?, image_content_sha256 = ?,
                         labels = ?, target_disk_serial = ?,
-                        extra_cmdline = ?, updated_at = ?
+                        extra_cmdline = ?, overlay_profile = ?,
+                        updated_at = ?
                     WHERE mac = ?
                     """,
                     (
@@ -412,6 +451,7 @@ class MachinesStore:
                         labels_json,
                         target_serial,
                         extra,
+                        overlay,
                         now,
                         canon,
                     ),
@@ -607,6 +647,9 @@ def _row(r: sqlite3.Row) -> Machine:
     extra_cmdline = ""
     with contextlib.suppress(IndexError, KeyError):
         extra_cmdline = r["extra_cmdline"] or ""
+    overlay_profile = ""
+    with contextlib.suppress(IndexError, KeyError):
+        overlay_profile = r["overlay_profile"] or ""
     return Machine(
         mac=r["mac"],
         boot_mode=r["boot_mode"],
@@ -614,6 +657,7 @@ def _row(r: sqlite3.Row) -> Machine:
         labels=labels,
         target_disk_serial=target_serial,
         extra_cmdline=extra_cmdline,
+        overlay_profile=overlay_profile,
         inventory=inv,
         inventory_at=inv_at,
         discovered_at=r["discovered_at"],

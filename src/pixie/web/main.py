@@ -59,7 +59,7 @@ from pixie.events._kinds import (
 from pixie.events._log import Event
 from pixie.events._routes import router as events_router
 from pixie.exports._routes import router as exports_router
-from pixie.exports._store import ExportsStore
+from pixie.exports._store import ExportsStore, OverlaysStore
 from pixie.exports._supervisor import DEFAULT_PORT_BASE, NbdServer
 from pixie.machines._routes import router as machines_router
 from pixie.machines._store import MachinesStore
@@ -264,6 +264,77 @@ def _respawn_exports_at_startup(app: FastAPI) -> None:
                 summary=f"nbdkit respawned on port {port} (startup)",
                 details={"nbd_port": port, "reason": "startup-respawn"},
             )
+
+
+def _respawn_overlays_at_startup(app: FastAPI) -> None:
+    """Walk the ``overlays`` table and spawn qemu-nbd for each row
+    whose qcow2 file still exists on disk. Same intent as
+    :func:`_respawn_exports_at_startup` but for the persistent
+    per-machine overlay path. Missing qcow2 files land the row in
+    ``status=error`` -- the next plan render lazy-creates a fresh
+    one, which is the operator-visible reset semantics.
+    """
+    import logging as _logging
+    from pathlib import Path as _Path
+
+    from pixie.pxe._renderer import _overlay_export_name
+
+    log = _logging.getLogger(__name__)
+    overlays_store = app.state.overlays_store
+    nbd = app.state.nbd_server
+    for overlay in overlays_store.list_all():
+        qcow2_path = _Path(overlay.qcow2_path)
+        if not qcow2_path.exists():
+            overlays_store.update_runtime(
+                overlay.mac,
+                overlay.image_sha,
+                overlay.profile,
+                nbd_port=0,
+                status="error",
+                error=f"qcow2 missing at {qcow2_path}",
+            )
+            log.warning(
+                "overlay %s/%s/%s: qcow2 missing at %s",
+                overlay.mac,
+                overlay.image_sha,
+                overlay.profile,
+                qcow2_path,
+            )
+            continue
+        try:
+            port = nbd.spawn_qcow2(_overlay_export_name(overlay), qcow2_path)
+        except RuntimeError as exc:
+            overlays_store.update_runtime(
+                overlay.mac,
+                overlay.image_sha,
+                overlay.profile,
+                nbd_port=0,
+                status="error",
+                error=f"respawn failed: {exc}",
+            )
+            log.warning(
+                "overlay %s/%s/%s: qemu-nbd respawn failed: %s",
+                overlay.mac,
+                overlay.image_sha,
+                overlay.profile,
+                exc,
+            )
+            continue
+        overlays_store.update_runtime(
+            overlay.mac,
+            overlay.image_sha,
+            overlay.profile,
+            nbd_port=port,
+            status="running",
+            error="",
+        )
+        log.info(
+            "overlay %s/%s/%s: respawned on port %d",
+            overlay.mac,
+            overlay.image_sha,
+            overlay.profile,
+            port,
+        )
 
 
 def _require_ui_auth(request: Request) -> None:
@@ -487,6 +558,12 @@ def create_app() -> FastAPI:
         # them again. Idempotent per name; harmless on cold boot
         # (empty export list -> no-op).
         _respawn_exports_at_startup(app)
+        # Same intent for persistent per-machine overlays: any qcow2
+        # whose file still exists gets a qemu-nbd resurrected so the
+        # next ``GET /pxe/<mac>`` for a machine bound to
+        # ``overlay_profile != ''`` finds a running export at a known
+        # port. Idempotent.
+        _respawn_overlays_at_startup(app)
         try:
             yield
         finally:
@@ -514,6 +591,7 @@ def create_app() -> FastAPI:
     state_dir = _resolve_state_dir()
     app.state.catalog_store = CatalogStore(state_dir)
     app.state.exports_store = ExportsStore(app.state.catalog_store.db_path)
+    app.state.overlays_store = OverlaysStore(app.state.catalog_store.db_path)
     app.state.machines_store = MachinesStore(app.state.catalog_store.db_path)
     app.state.events_log = EventsLog(app.state.catalog_store.db_path)
     app.state.settings_store = SettingsStore(app.state.catalog_store.db_path)
@@ -523,11 +601,20 @@ def create_app() -> FastAPI:
         nbdkit_bin=_resolve_nbdkit_bin(),
     )
     app.state.live_env_dir = _resolve_live_env_dir()
+    # Root for per-machine qcow2 overlay files. Sub-directory under
+    # the state dir so a single ``PIXIE_DATA_DIR`` override still
+    # relocates everything (catalog blobs + overlays + state.db)
+    # together.
+    app.state.overlays_dir = state_dir / "overlays"
+    app.state.overlays_dir.mkdir(parents=True, exist_ok=True)
     app.state.pxe_renderer = PlanRenderer(
         catalog=app.state.catalog_store,
         exports=app.state.exports_store,
+        overlays=app.state.overlays_store,
         nbd=app.state.nbd_server,
+        overlays_dir=app.state.overlays_dir,
         live_env_dir=app.state.live_env_dir,
+        events=app.state.events_log,
     )
     app.state.tftp_server = (
         TftpServer(
@@ -1002,6 +1089,14 @@ def create_app() -> FastAPI:
             for e in request.app.state.catalog_store.list_entries()
             if getattr(e, "bindable", False)
         ]
+        # Overlay profiles that already exist for THIS (machine, image);
+        # empty until the machine's been bound to a real image + at
+        # least one persistent profile has been created.
+        overlay_profiles: list[Any] = []
+        if machine.image_content_sha256:
+            overlay_profiles = request.app.state.overlays_store.list_for_machine_and_image(
+                machine.mac, machine.image_content_sha256
+            )
         return templates.TemplateResponse(
             request,
             "machine_detail.html",
@@ -1011,6 +1106,7 @@ def create_app() -> FastAPI:
                 "events": events,
                 "bindable_entries": bindable_entries,
                 "boot_mode_meta": BOOT_MODE_META,
+                "overlay_profiles": overlay_profiles,
                 "global_live_env_extra_cmdline": (
                     request.app.state.settings_store.resolve_live_env_extra_cmdline()
                 ),
@@ -1027,6 +1123,8 @@ def create_app() -> FastAPI:
         image_content_sha256: str = Form(""),
         target_disk_serial: str = Form(""),
         extra_cmdline: str = Form(""),
+        overlay_profile: str = Form(""),
+        overlay_profile_new: str = Form(""),
         _auth: None = Depends(_require_ui_auth),
     ) -> RedirectResponse:
         """Persist a boot-mode binding. Labels are edited on their
@@ -1036,11 +1134,19 @@ def create_app() -> FastAPI:
         UI-side: silently redirect back on invalid input; a full
         field-error flash chain lands in a follow-up. Labels on
         the row survive the bind untouched via ``upsert_binding``
-        pulling them off the current row."""
+        pulling them off the current row.
+
+        ``overlay_profile`` carries the picker's chosen value; a
+        magic ``__new`` sentinel says "take ``overlay_profile_new``
+        as a new profile name". Blank / __new-without-a-name folds
+        back to ephemeral."""
         import contextlib as _contextlib
 
         from pixie.machines._store import BadMac
 
+        overlay = overlay_profile.strip()
+        if overlay == "__new":
+            overlay = overlay_profile_new.strip()
         with _contextlib.suppress(BadMac, ValueError):
             store = request.app.state.machines_store
             current = store.get(mac)
@@ -1052,8 +1158,55 @@ def create_app() -> FastAPI:
                 labels=existing_labels,
                 target_disk_serial=target_disk_serial,
                 extra_cmdline=extra_cmdline,
+                overlay_profile=overlay,
             )
         return RedirectResponse(url="/ui/machines", status_code=status.HTTP_303_SEE_OTHER)
+
+    @app.post("/ui/machines/{mac}/overlay/reset")
+    def ui_machines_overlay_reset(
+        request: Request,
+        mac: str,
+        image_sha: str = Form(...),
+        profile: str = Form(...),
+        _auth: None = Depends(_require_ui_auth),
+    ) -> RedirectResponse:
+        """Terminate the qemu-nbd for this overlay, unlink the qcow2,
+        and drop the overlays row. Next plan render lazily recreates
+        a fresh qcow2 from the base blob. Idempotent: missing row or
+        missing file are both no-ops (row still gets deleted).
+
+        Confirm-modal is on the client. Server-side just carries the
+        deletion out. Any operator who lands here without confirming
+        picked the button already."""
+        from pathlib import Path as _Path
+
+        overlays = request.app.state.overlays_store
+        row = overlays.get(mac, image_sha, profile)
+        if row is not None:
+            # Kill the qemu-nbd first so the qcow2 isn't held open when
+            # we unlink it; qemu-nbd releases its open fd on SIGTERM.
+            from pixie.pxe._renderer import _overlay_export_name
+
+            request.app.state.nbd_server.terminate(_overlay_export_name(row))
+            with contextlib_suppress(FileNotFoundError, OSError):
+                _Path(row.qcow2_path).unlink()
+            overlays.delete(mac, image_sha, profile)
+            events = getattr(request.app.state, "events_log", None)
+            if events is not None:
+                from pixie.events._kinds import OVERLAY_RESET
+
+                events.emit(
+                    OVERLAY_RESET,
+                    subject_kind="machine",
+                    subject_id=mac,
+                    summary=f"{mac}: overlay {profile!r} reset (image {image_sha[:12]})",
+                    details={
+                        "mac": mac,
+                        "image_sha": image_sha,
+                        "profile": profile,
+                    },
+                )
+        return RedirectResponse(url=f"/ui/machines/{mac}", status_code=status.HTTP_303_SEE_OTHER)
 
     @app.post("/ui/machines/{mac}/labels/edit")
     def ui_machines_labels_edit(

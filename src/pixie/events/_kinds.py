@@ -95,6 +95,26 @@ EXPORT_NBDKIT_EXITED = "export.nbdkit.exited"
 (``_refresh_row`` noticed no live proc for a ``running`` row).
 ``details.previous_port`` + ``details.error`` explain."""
 
+# ---------- persistent overlays (per-machine qcow2) -----------------
+#
+# ``subject_kind`` is always ``"machine"``; ``subject_id`` is the
+# canonical MAC. ``details`` names the (image_sha, profile) triple.
+
+OVERLAY_CREATED = "overlay.created"
+"""A per-machine qcow2 overlay was materialised for the first time
+for a ``(mac, image_sha, profile)`` triple. ``details`` carries
+``image_sha``, ``profile``, and ``qcow2_path``."""
+
+OVERLAY_RESET = "overlay.reset"
+"""Operator hit Reset on the machine detail page: the qemu-nbd was
+terminated, the qcow2 was unlinked, the overlays row was deleted.
+Next plan render lazily creates a fresh overlay from the base."""
+
+OVERLAY_BOOTED = "overlay.booted"
+"""Plan render for an already-existing overlay row (heartbeat).
+Emitted on every persistent nbdboot render so an operator can grep
+the events log for "which overlays am I actually using?"."""
+
 # ---------- machines + PXE ------------------------------------------
 #
 # ``subject_kind`` is always ``"machine"``; ``subject_id`` is the
@@ -187,6 +207,9 @@ KNOWN_EVENT_KINDS: frozenset[str] = frozenset(
         EXPORT_DELETED,
         EXPORT_NBDKIT_SPAWNED,
         EXPORT_NBDKIT_EXITED,
+        OVERLAY_CREATED,
+        OVERLAY_RESET,
+        OVERLAY_BOOTED,
         MACHINE_DISCOVERED,
         MACHINE_BOUND,
         MACHINE_BINDING_CHANGED,

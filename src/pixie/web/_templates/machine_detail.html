@@ -259,6 +259,76 @@
                 </div>
             </div>
 
+            {# ---- Overlay profile (nbdboot only) --------------------
+
+               A profile name maps to a per-machine qcow2 kept on
+               pixie's data volume; picking one flips this machine
+               from ephemeral (writes vanish on reboot) to persistent
+               (writes survive on the qcow2). Blank means ephemeral.
+               ``__new`` reveals a text input for a fresh profile name;
+               the bind handler on the server merges the two form
+               fields back into a single ``overlay_profile`` value. #}
+            <div data-policy-relevant="nbdboot">
+                <label for="overlay_profile" class="form-label fw-semibold">
+                    Overlay profile
+                    <span class="policy-usage small text-muted fw-normal ms-1"></span>
+                </label>
+                <div class="d-flex gap-2 align-items-start flex-wrap">
+                    <select id="overlay_profile" name="overlay_profile"
+                            class="form-select flex-grow-1" style="min-width: 14rem;">
+                        <option value=""
+                                {% if not machine.overlay_profile %}selected{% endif %}>
+                            Ephemeral (no persist)
+                        </option>
+                        {% for ov in overlay_profiles %}
+                        <option value="{{ ov.profile }}"
+                                {% if machine.overlay_profile == ov.profile %}selected{% endif %}>
+                            {{ ov.profile }}
+                        </option>
+                        {% endfor %}
+                        {# Fallback: if the machine is bound to a profile
+                           whose overlay row got GC'd, keep the value
+                           visible + selected so the operator can clear
+                           or rebind it. #}
+                        {% set known_profiles = overlay_profiles | map(attribute='profile') | list %}
+                        {% if machine.overlay_profile and machine.overlay_profile not in known_profiles %}
+                        <option value="{{ machine.overlay_profile }}" selected>
+                            {{ machine.overlay_profile }} (no qcow2 yet)
+                        </option>
+                        {% endif %}
+                        <option value="__new">+ New profile...</option>
+                    </select>
+                    <input type="text" id="overlay_profile_new" name="overlay_profile_new"
+                           class="form-control font-monospace d-none"
+                           style="max-width: 16rem;"
+                           placeholder="new profile name"
+                           pattern="^[A-Za-z0-9][A-Za-z0-9._\-]{0,63}$"
+                           title="Alphanumeric-leading; a-z / A-Z / 0-9 / . _ - (max 64 chars)">
+                    {% if machine.overlay_profile and machine.image_content_sha256 %}
+                    <form method="post" style="display:inline;"
+                          action="/ui/machines/{{ machine.mac }}/overlay/reset"
+                          onsubmit="return confirm('Reset overlay {{ machine.overlay_profile }} for {{ machine.mac }}? The qcow2 file will be deleted; the next boot lazy-creates a fresh overlay from the base image. Any state in the current overlay is lost.');">
+                        <input type="hidden" name="image_sha" value="{{ machine.image_content_sha256 }}">
+                        <input type="hidden" name="profile" value="{{ machine.overlay_profile }}">
+                        <button type="submit" class="btn btn-outline-danger flex-shrink-0"
+                                title="Delete the qcow2 for this profile; next boot starts fresh.">
+                            <i class="bi bi-arrow-counterclockwise me-1"></i>Reset
+                        </button>
+                    </form>
+                    {% endif %}
+                </div>
+                <div class="form-text">
+                    Blank = ephemeral tmpfs (writes vanish on reboot;
+                    original nbdboot behaviour). Named = qcow2 kept at
+                    <code>data/overlays/&lt;mac&gt;/&lt;image_sha&gt;/&lt;profile&gt;.qcow2</code>
+                    on pixie's data volume with
+                    <code>backing_file=&lt;base blob&gt;</code>. Multiple
+                    profiles per (machine, image) can coexist; different
+                    machines are independent. See
+                    <a href="https://github.com/safl/pixie/blob/main/docs/src/boot-modes.md" target="_blank" rel="noreferrer">boot-modes docs</a>.
+                </div>
+            </div>
+
             {# ---- Preview panel --------------------------------------
 
                Plain-English description of what will happen on the
@@ -570,6 +640,8 @@
         && targetSelect.querySelectorAll('option:not([value=""]):not([disabled])').length > 0
     );
     const extraCmdlineInput = form.querySelector("#extra_cmdline");
+    const overlayProfileSelect = form.querySelector("#overlay_profile");
+    const overlayProfileNewInput = form.querySelector("#overlay_profile_new");
     const saveBtn = form.querySelector("#save-binding");
     const flashHint = form.querySelector("#flash-guard-hint");
     const dirtyHint = document.getElementById("bind-dirty-hint");
@@ -600,6 +672,7 @@
         image_content_sha256: imgSelect ? imgSelect.value : "",
         target_disk_serial: (targetSelect && targetSelect.tagName === "SELECT") ? targetSelect.value : "",
         extra_cmdline: extraCmdlineInput ? extraCmdlineInput.value : "",
+        overlay_profile: overlayProfileSelect ? overlayProfileSelect.value : "",
     };
 
     function pickedMode() {
@@ -690,6 +763,16 @@
         if (targetSelect && targetSelect.tagName === "SELECT"
             && targetSelect.value !== initial.target_disk_serial) return true;
         if (extraCmdlineInput && extraCmdlineInput.value !== initial.extra_cmdline) return true;
+        if (overlayProfileSelect) {
+            // Dirty if the raw select value changed OR if the operator
+            // picked ``__new`` and typed a name (which becomes the
+            // effective value post-submit).
+            const effective =
+                overlayProfileSelect.value === "__new" && overlayProfileNewInput
+                    ? overlayProfileNewInput.value.trim()
+                    : overlayProfileSelect.value;
+            if (effective !== initial.overlay_profile) return true;
+        }
         return false;
     }
 
@@ -740,6 +823,23 @@
     if (imgSelect) imgSelect.addEventListener("change", refreshAll);
     if (targetSelect) targetSelect.addEventListener("change", refreshAll);
     if (extraCmdlineInput) extraCmdlineInput.addEventListener("input", refreshAll);
+    if (overlayProfileSelect) {
+        overlayProfileSelect.addEventListener("change", () => {
+            // Reveal the new-profile text input only when __new is picked;
+            // clear its value on any other selection so it doesn't
+            // silently ride along.
+            const isNew = overlayProfileSelect.value === "__new";
+            if (overlayProfileNewInput) {
+                overlayProfileNewInput.classList.toggle("d-none", !isNew);
+                if (!isNew) overlayProfileNewInput.value = "";
+                if (isNew) overlayProfileNewInput.focus();
+            }
+            refreshAll();
+        });
+    }
+    if (overlayProfileNewInput) {
+        overlayProfileNewInput.addEventListener("input", refreshAll);
+    }
 
     // Re-enable every mode-gated control at submit time so the
     // browser POSTs the current values even for fields the current
