@@ -49,10 +49,49 @@ known-clean image each cycle.
 ### `nbdboot`
 
 The target boots the image's OWN kernel (extracted from the sibling
-netboot bundle) and mounts the image over NBD. Root is an
+netboot bundle) and mounts the image over NBD. By default, root is an
 overlay-on-tmpfs: writes go to RAM, nothing propagates back to the
 source blob. Multiple targets can nbdboot the same image
 simultaneously because they each get their own overlay.
+
+**Persistent overlays** flip a single target from ephemeral to dev
+mode without changing anything else about the bind. On the machine
+detail page, the `Overlay profile` field is blank by default
+(ephemeral, unchanged behaviour) or names a per-machine profile
+(e.g. `simon`, `karl`, `ci-with-nvme-tools`). A non-blank profile
+maps to a per-machine qcow2 file with the image's base blob as
+`backing_file`, served by `qemu-nbd` at a dedicated port. The target
+mounts the NBD device read-write; system-level changes (apt-installed
+packages, hardware-specific config, kernel modules) land on the qcow2
+and survive reboots.
+
+Overlays are keyed by `(mac, image_content_sha256, profile)`:
+different machines have fully independent files even under the same
+profile name, and rebinding a machine to a different image leaves the
+old image's overlays on disk (a rebind back resumes them). Storage is
+`data/overlays/<mac>/<image_sha>/<profile>.qcow2`. The **Reset**
+button on the machine detail page tears down `qemu-nbd`, unlinks the
+qcow2, and lets the next boot lazy-create a fresh overlay from the
+base.
+
+Concurrency is by construction: a MAC boots one target at a time, so
+two machines can never contend for the same qcow2. There is no
+holder-tracking or force-reclaim.
+
+**Kexec into a locally-installed kernel.** The netboot bundle owns
+the kernel and initrd pixie serves. Installing `linux-image-*` on the
+target's persistent overlay writes files to `/boot` but the next
+power-cycle refetches pixie's kernel and those files sit unused.
+`kexec` bridges that gap: the netboot kernel comes up, then the
+operator runs
+`kexec -l /boot/vmlinuz-<v> --initrd=/boot/initrd.img-<v>
+--reuse-cmdline && systemctl kexec` to switch to the local kernel
+without going through firmware. Every netboot-shipping nosi variant
+now bakes `kexec-tools` in; see nosi's [Custom kernel under netboot
+(kexec)](https://safl.github.io/nosi/kexec.html) for the full
+workflow. Recovery from a bad kernel is a power-cycle back to
+pixie's kernel; nothing kexec's automatically, so a broken install
+never becomes a boot loop.
 
 ## Prerequisites at a glance
 
