@@ -176,6 +176,18 @@ def _stream_to_tmpfile(
         tmp_path.unlink(missing_ok=True)
         raise FetchError(f"empty body from {url}")
 
+    # ``resp.read(CHUNK)`` returns an empty chunk both when the body
+    # is fully consumed AND when the peer closes the connection early
+    # (urllib/http.client does not raise for a short body unless the
+    # caller reads past what's buffered). Without this check a
+    # network hiccup mid-transfer silently produces a short file that
+    # LOOKS like a completed download; for compressed formats the
+    # truncation then surfaces several minutes later as a confusing
+    # decompression error instead of here, at the point of cause.
+    if total_bytes is not None and written != total_bytes:
+        tmp_path.unlink(missing_ok=True)
+        raise FetchError(f"download truncated for {url}: got {written} of {total_bytes} bytes")
+
     return tmp_path, sha.hexdigest(), written
 
 
@@ -293,10 +305,14 @@ def fetch(
             tmp_path = blob_path  # so the finally-cleanup no-ops
             artifacts = []
     finally:
-        # If tmp_path was a leftover ``.inflight`` and NOT the final
-        # blob_path, remove it. For the tar.gz path the tmpfile is
-        # explicitly discarded (bundle contents live in artifacts/).
-        if entry.format == "tar.gz" and tmp_path.exists():
+        # If tmp_path is still a scratch file (``.inflight`` from the
+        # download stage, or ``.raw`` from a decompression that raised
+        # before the rename-into-blobs) and NOT the final promoted
+        # blob_path, remove it. A successful run reassigns tmp_path to
+        # blob_path first, so this only fires on the error paths (or,
+        # for tar.gz, always: the tar.gz bytes themselves are never
+        # promoted, only the unpacked artifacts/ contents).
+        if tmp_path.exists() and tmp_path.suffix in (".inflight", ".raw"):
             tmp_path.unlink(missing_ok=True)
 
     store.mark_fetched(entry.name, content_sha256=sha256, size_bytes=size)
