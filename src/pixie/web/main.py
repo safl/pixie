@@ -277,10 +277,12 @@ def _respawn_overlays_at_startup(app: FastAPI) -> None:
     import logging as _logging
     from pathlib import Path as _Path
 
+    from pixie._partition import PartitionNotFound, partition_start_bytes
     from pixie.pxe._renderer import _overlay_export_name
 
     log = _logging.getLogger(__name__)
     overlays_store = app.state.overlays_store
+    catalog_store = app.state.catalog_store
     nbd = app.state.nbd_server
     for overlay in overlays_store.list_all():
         qcow2_path = _Path(overlay.qcow2_path)
@@ -301,8 +303,27 @@ def _respawn_overlays_at_startup(app: FastAPI) -> None:
                 qcow2_path,
             )
             continue
+        offset_bytes = 0
+        blob_path = catalog_store.blob_path(overlay.image_sha)
+        if blob_path.exists():
+            try:
+                offset_bytes = partition_start_bytes(blob_path, partition_number=1)
+            except PartitionNotFound as exc:
+                log.warning(
+                    "overlay %s/%s/%s: no partition 1 on backing blob %s"
+                    " (serving whole image): %s",
+                    overlay.mac,
+                    overlay.image_sha,
+                    overlay.profile,
+                    blob_path,
+                    exc,
+                )
         try:
-            port = nbd.spawn_qcow2(_overlay_export_name(overlay), qcow2_path)
+            port = nbd.spawn_qcow2(
+                _overlay_export_name(overlay),
+                qcow2_path,
+                offset_bytes=offset_bytes,
+            )
         except RuntimeError as exc:
             overlays_store.update_runtime(
                 overlay.mac,
