@@ -243,6 +243,7 @@ def main(args, cijoe) -> int:
         client = _start_client_vm(workspace, cfg, client_log, firmware)
 
         markers = _build_markers(cfg)
+        forbidden = [(e["key"], e["needle"]) for e in cfg.get("forbidden_markers", [])]
         # ``mode=flash`` runs the full real-image pipeline (oras
         # pull + img.gz decompress + dd of ~10 GiB) inside the live
         # env; ``mode=nbdboot`` also pulls the real nosi image but
@@ -252,7 +253,20 @@ def main(args, cijoe) -> int:
         # blob store, similar order of magnitude. Everything else
         # finishes well within the 5 min short-mode budget.
         chain_deadline = CHAIN_TIMEOUT_FLASH if mode in ("flash", "nbdboot") else CHAIN_TIMEOUT
-        seen = _wait_for_chain_markers(client_log, markers, chain_deadline)
+        try:
+            seen = _wait_for_chain_markers(client_log, markers, chain_deadline, forbidden)
+        except ForbiddenMarkerSeen as exc:
+            log.error(
+                f"PXE chain hit forbidden marker {exc.key!r} ({exc.needle!r}); "
+                "a known-bad userland signal appeared on the client serial log "
+                "or in pixie's container logs. Dumping context."
+            )
+            qemu_log = client_log.with_suffix(".qemu.log")
+            _dump_tail(qemu_log, 60)
+            _dump_tail(workspace / "dnsmasq.log", 60)
+            _dump_tail(client_log, 200)
+            _dump_container_logs()
+            return errno.EPROTO
         missing = [k for k, ok in seen.items() if not ok]
         if missing:
             log.error(f"PXE chain incomplete; missing markers: {', '.join(missing)}")
@@ -620,28 +634,50 @@ def _build_markers(cfg):
     return out
 
 
-def _wait_for_chain_markers(log_path: Path, markers, timeout: int):
+def _wait_for_chain_markers(log_path: Path, markers, timeout: int, forbidden=None):
+    """Poll the client serial log + pixie's container logs for the
+    positive markers, checking the same buffers for any ``forbidden``
+    substrings each round. A forbidden hit shortcuts the wait with
+    ``ForbiddenMarkerSeen`` so the caller fails the test loud instead
+    of timing out looking for a positive marker that would never
+    arrive (the DNS / sshd / emergency-shell regressions come with
+    highly recognisable serial output and belong in this list rather
+    than in the reactive "check what's missing" branch)."""
     seen = {key: False for key, _ in markers}
+    forbidden = forbidden or []
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline and not all(seen.values()):
-        # Check the serial log for iPXE-side markers.
+        body = ""
         if log_path.exists():
             body = log_path.read_text(encoding="utf-8", errors="replace")
             for key, needle in markers:
                 if not seen[key] and needle in body:
                     log.info(f"  + {key}: matched {needle!r}")
                     seen[key] = True
-        # Also mirror-check container logs so a server-side hit counts
-        # even when the client's console doesn't spell the fetch out.
         cont = _container_log_snapshot()
         for key, needle in markers:
             if not seen[key] and needle in cont:
                 log.info(f"  + {key}: matched {needle!r} in container logs")
                 seen[key] = True
+        for key, needle in forbidden:
+            if needle in body or needle in cont:
+                raise ForbiddenMarkerSeen(key, needle)
         if all(seen.values()):
             break
         time.sleep(2)
     return seen
+
+
+class ForbiddenMarkerSeen(RuntimeError):
+    """A ``[[test.pxe.forbidden_markers]]`` entry was observed on the
+    client serial log or in pixie's container logs. Raised by the
+    marker-polling loop so the caller can log the exact key + needle
+    that fired and fail with a distinct error code."""
+
+    def __init__(self, key: str, needle: str) -> None:
+        super().__init__(f"forbidden marker {key!r} matched {needle!r}")
+        self.key = key
+        self.needle = needle
 
 
 def _container_log_snapshot() -> str:
