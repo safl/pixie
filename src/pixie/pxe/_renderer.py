@@ -25,6 +25,7 @@ from typing import Any
 
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
+from pixie._partition import PartitionNotFound, partition_start_bytes
 from pixie.catalog._schema import CatalogEntry
 from pixie.catalog._store import CatalogStore
 from pixie.exports._store import Export, ExportsStore, Overlay, OverlaysStore
@@ -239,9 +240,31 @@ class PlanRenderer:
                     machine,
                     f"overlay {profile!r} could not be prepared: {exc}",
                 )
+            # Serve the qcow2 with ``qemu-nbd --offset=<partition-1
+            # start>`` so ``/dev/nbd0`` on the target IS the ext4
+            # partition at offset 0, matching the shape nbdkit's
+            # ``--filter=partition partition=1`` produces for the
+            # ephemeral path. The target's initrd mount hook then
+            # does not need partition-scan logic: /dev/nbd0 alone
+            # is the ext4 root regardless of ephemeral vs persist.
+            # Fall back to offset 0 (whole-image serve) for images
+            # sfdisk cannot parse; the mount hook will die more
+            # loudly there than the partition-scan-race did before.
+            try:
+                offset_bytes = partition_start_bytes(blob, partition_number=1)
+            except PartitionNotFound as exc:
+                _log.warning(
+                    "no partition 1 on %s for overlay %s (serving whole image): %s",
+                    blob,
+                    profile,
+                    exc,
+                )
+                offset_bytes = 0
             try:
                 port = self._nbd.spawn_qcow2(
-                    _overlay_export_name(overlay), Path(overlay.qcow2_path)
+                    _overlay_export_name(overlay),
+                    Path(overlay.qcow2_path),
+                    offset_bytes=offset_bytes,
                 )
             except RuntimeError as exc:
                 return self._unavailable(
