@@ -1072,6 +1072,7 @@ def create_app() -> FastAPI:
         pixie CLI). Falls through to /ui/machines on a bad MAC or a
         row that doesn't exist yet."""
         from pixie.machines._store import BOOT_MODE_META, BadMac
+        from pixie.web._bind_preview import bind_preview_text
         from pixie.web._inventory import normalise_inventory
 
         try:
@@ -1104,6 +1105,23 @@ def create_app() -> FastAPI:
             overlay_profiles = request.app.state.overlays_store.list_for_machine_and_image(
                 machine.mac, machine.image_content_sha256
             )
+        # Plain-English narration of what the next PXE will do given
+        # the current bind. Rendered into the preview panel so an
+        # operator sees a real description on page load, not a bare
+        # placeholder that only fills in after a form-side JS edit.
+        # The client-side JS refreshes this same string on any bind
+        # form change; the server-side render is the correct initial
+        # state (matches the JS's MODE_PREVIEWS shape).
+        picked_image = next(
+            (e for e in bindable_entries if e.content_sha256 == machine.image_content_sha256),
+            None,
+        )
+        initial_bind_preview = bind_preview_text(
+            boot_mode=machine.boot_mode,
+            image_name=picked_image.name if picked_image else "",
+            disk_label=machine.target_disk_serial,
+            overlay_profile=machine.overlay_profile,
+        )
         return templates.TemplateResponse(
             request,
             "machine_detail.html",
@@ -1115,6 +1133,7 @@ def create_app() -> FastAPI:
                 "bindable_entries": bindable_entries,
                 "boot_mode_meta": BOOT_MODE_META,
                 "overlay_profiles": overlay_profiles,
+                "initial_bind_preview": initial_bind_preview,
                 "global_live_env_extra_cmdline": (
                     request.app.state.settings_store.resolve_live_env_extra_cmdline()
                 ),
