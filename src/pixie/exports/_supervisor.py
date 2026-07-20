@@ -287,15 +287,20 @@ class NbdServer:
 
         port = self._allocate_port_locked()
 
-        # ``--shared=1`` because qcow2 is single-writer; a second
-        # concurrent client would corrupt the file. Per-machine keying
-        # (see plan) makes this a non-issue in practice but the flag
-        # documents the intent + belt-and-braces if a stray operator
-        # points two initrds at the same overlay.
+        # ``--shared=0`` (unlimited). qcow2 is single-writer at the
+        # image-locking layer, and per-machine keying means only one
+        # target ever attaches to this export -- but a target power-
+        # cycle leaves stale TCP connections on the server side that
+        # ``--shared=1`` counts as active slots, and the fresh boot's
+        # nbd-client then hits ``Connection refused`` when the client-
+        # count cap trips. Unlimited-shared lets the fresh boot attach
+        # while the stale connections drain via TCP keepalive on their
+        # own schedule; qcow2's own image lock is what guarantees
+        # write safety.
         argv: list[str] = [
             "qemu-nbd",
             "--persistent",
-            "--shared=1",
+            "--shared=0",
             "--format=qcow2",
             f"--bind={self.bind}",
             f"--port={port}",
