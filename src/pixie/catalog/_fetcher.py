@@ -16,6 +16,7 @@ returns 202 immediately while the download proceeds; see
 
 from __future__ import annotations
 
+import contextlib
 import gzip
 import hashlib
 import io
@@ -27,8 +28,7 @@ import shutil
 import subprocess
 import tarfile
 import tempfile
-import urllib.error
-import urllib.request
+import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -97,99 +97,195 @@ def _stream_to_tmpfile(
     dest_dir: Path,
     progress: ProgressReporter = None,
 ) -> tuple[Path, str, int]:
-    """Download bytes from ``url`` into ``dest_dir/<uuid>.inflight``,
-    streaming sha256 alongside. Returns (path, sha256, size).
+    """Download bytes from ``url`` into ``dest_dir/<uuid>.inflight``
+    via curl. Returns (path, sha256, size).
 
-    Raises :class:`FetchError` on HTTP/network failure or on empty
-    body. Callers pass a ``dest_dir`` that lives on the same
-    filesystem as the final blob path so the ``os.replace`` at commit
-    time is atomic.
+    Curl is the transport instead of urllib because ghcr / cloudflare
+    middleboxes routinely close the socket after a per-transfer cap
+    (three fetches this session all cut at ~1 GiB out of ~3 GiB
+    payloads). ``--continue-at -`` + ``--retry-all-errors`` +
+    ``--retry-max-time`` picks up where the previous byte landed
+    without pixie hand-rolling the Range dance, and ``--speed-limit
+    + --speed-time`` detects a stalled TCP that a bare socket
+    timeout would miss. sha256 gets recomputed from the finished
+    file (single read, fast on any SSD) rather than streamed at
+    download time so the download+resume plumbing stays inside curl.
+
+    Raises :class:`FetchError` on non-zero curl exit or empty body.
+    Callers pass a ``dest_dir`` that lives on the same filesystem
+    as the final blob path so the ``os.replace`` at commit time is
+    atomic.
 
     ``progress`` is called at start (``phase='downloading'`` +
-    ``total_bytes``) then throttled to at most one call per 500 ms
-    while bytes stream in, and once again on completion. The payload
-    always carries ``phase`` + ``bytes_downloaded`` + ``total_bytes``
-    (``None`` when the server omits Content-Length).
+    ``total_bytes`` when a HEAD probe succeeded) then polled off the
+    growing tmpfile size while curl runs, and once again on
+    completion. The payload always carries ``phase`` +
+    ``bytes_downloaded`` + ``total_bytes`` (``None`` when the server
+    omits Content-Length).
     """
     dest_dir.mkdir(parents=True, exist_ok=True)
     fd, tmp_name = tempfile.mkstemp(prefix="fetch-", suffix=".inflight", dir=str(dest_dir))
     tmp_path = Path(tmp_name)
     os.close(fd)
 
-    req = urllib.request.Request(url, method="GET")
-    for k, v in headers.items():
-        req.add_header(k, v)
-    req.add_header("User-Agent", "pixie-fetch/0.2")
+    total_bytes = _probe_content_length(url, headers)
+    if progress is not None:
+        progress(
+            {
+                "phase": "downloading",
+                "bytes_downloaded": 0,
+                "total_bytes": total_bytes,
+            }
+        )
 
-    sha = hashlib.sha256()
-    written = 0
-    last_emit = 0.0
+    # Retry knobs are env-tunable so tests can force fast failure
+    # (retry=0) instead of sitting through 10 * 5s = 50 s of curl's
+    # retry backoff for a deterministically-broken mock server.
+    retry_count = os.environ.get("PIXIE_FETCH_RETRY", "10")
+    retry_delay = os.environ.get("PIXIE_FETCH_RETRY_DELAY", "5")
+    retry_max_time = os.environ.get("PIXIE_FETCH_RETRY_MAX_TIME", "900")
+
+    argv: list[str] = [
+        "curl",
+        "--silent",
+        "--show-error",
+        "--fail",  # non-zero exit on HTTP >= 400
+        "--location",  # follow redirects
+        "--continue-at",
+        "-",  # resume from current tmpfile size
+        "--retry",
+        retry_count,
+        "--retry-all-errors",
+        "--retry-delay",
+        retry_delay,
+        "--retry-max-time",
+        retry_max_time,
+        "--speed-limit",
+        "1024",  # bytes/s: treat < 1 KiB/s for --speed-time seconds as stall
+        "--speed-time",
+        "60",
+        "--connect-timeout",
+        "30",
+        "--user-agent",
+        "pixie-fetch/0.3-curl",
+        "--output",
+        str(tmp_path),
+    ]
+    for k, v in headers.items():
+        argv.extend(["--header", f"{k}: {v}"])
+    argv.append(url)
+
     try:
-        with urllib.request.urlopen(req, timeout=60) as resp, open(tmp_path, "wb") as out:
-            total_bytes: int | None
-            try:
-                total_bytes = int(resp.headers.get("Content-Length") or 0) or None
-            except ValueError:
-                total_bytes = None
-            if progress is not None:
-                progress(
-                    {
-                        "phase": "downloading",
-                        "bytes_downloaded": 0,
-                        "total_bytes": total_bytes,
-                    }
-                )
-            while True:
-                chunk = resp.read(CHUNK)
-                if not chunk:
-                    break
-                out.write(chunk)
-                sha.update(chunk)
-                written += len(chunk)
-                # Throttled progress emit: at most every 500 ms so a
-                # gigabit-line download doesn't hammer the state dict.
-                # ``time.monotonic`` is safe for interval comparisons
-                # (unaffected by clock jumps).
-                if progress is not None:
-                    now = _monotonic()
-                    if now - last_emit >= 0.5:
-                        progress(
-                            {
-                                "phase": "downloading",
-                                "bytes_downloaded": written,
-                                "total_bytes": total_bytes,
-                            }
-                        )
-                        last_emit = now
-        if progress is not None:
-            progress(
-                {
-                    "phase": "downloading",
-                    "bytes_downloaded": written,
-                    "total_bytes": total_bytes,
-                }
-            )
-    except (urllib.error.URLError, OSError) as exc:
+        proc = subprocess.Popen(argv, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+    except FileNotFoundError as exc:
         tmp_path.unlink(missing_ok=True)
-        raise FetchError(f"download failed for {url}: {exc}") from exc
+        raise FetchError(f"curl binary not found on PATH: {exc}") from exc
+
+    last_emit = _monotonic()
+    try:
+        while proc.poll() is None:
+            time.sleep(0.5)
+            if progress is not None:
+                now = _monotonic()
+                if now - last_emit >= 0.5:
+                    try:
+                        size = tmp_path.stat().st_size
+                    except OSError:
+                        size = 0
+                    progress(
+                        {
+                            "phase": "downloading",
+                            "bytes_downloaded": size,
+                            "total_bytes": total_bytes,
+                        }
+                    )
+                    last_emit = now
+    finally:
+        proc.wait()
+
+    stderr_bytes = proc.stderr.read() if proc.stderr is not None else b""
+    stderr_text = stderr_bytes.decode(errors="replace").strip()
+
+    if proc.returncode != 0:
+        tmp_path.unlink(missing_ok=True)
+        # Curl exit 18 = CURLE_PARTIAL_FILE: server closed the
+        # connection before delivering all the bytes its
+        # Content-Length promised. Rebrand as "truncated" so the
+        # operator sees the same actionable wording the pre-curl
+        # fetcher used, not just a bare exit code.
+        if proc.returncode == 18:
+            prefix = "download truncated for "
+        else:
+            prefix = f"curl exit {proc.returncode} for "
+        raise FetchError(prefix + url + (f": {stderr_text}" if stderr_text else ""))
+
+    try:
+        written = tmp_path.stat().st_size
+    except OSError as exc:
+        raise FetchError(f"download tmpfile disappeared for {url}: {exc}") from exc
 
     if written == 0:
         tmp_path.unlink(missing_ok=True)
         raise FetchError(f"empty body from {url}")
 
-    # ``resp.read(CHUNK)`` returns an empty chunk both when the body
-    # is fully consumed AND when the peer closes the connection early
-    # (urllib/http.client does not raise for a short body unless the
-    # caller reads past what's buffered). Without this check a
-    # network hiccup mid-transfer silently produces a short file that
-    # LOOKS like a completed download; for compressed formats the
-    # truncation then surfaces several minutes later as a confusing
-    # decompression error instead of here, at the point of cause.
     if total_bytes is not None and written != total_bytes:
         tmp_path.unlink(missing_ok=True)
-        raise FetchError(f"download truncated for {url}: got {written} of {total_bytes} bytes")
+        raise FetchError(
+            f"download size mismatch for {url}: curl produced {written} bytes, "
+            f"Content-Length was {total_bytes}"
+        )
+
+    sha = hashlib.sha256()
+    with open(tmp_path, "rb") as f:
+        while True:
+            chunk = f.read(CHUNK)
+            if not chunk:
+                break
+            sha.update(chunk)
+
+    if progress is not None:
+        progress(
+            {
+                "phase": "downloading",
+                "bytes_downloaded": written,
+                "total_bytes": total_bytes,
+            }
+        )
 
     return tmp_path, sha.hexdigest(), written
+
+
+def _probe_content_length(url: str, headers: dict[str, str]) -> int | None:
+    """HEAD ``url`` (following redirects) and return the final
+    Content-Length as an int, or ``None`` when the server omits it
+    or the probe fails. Best-effort: never raises, only informs the
+    progress reporter's total-bytes field.
+    """
+    argv = ["curl", "--silent", "--show-error", "--fail", "--location", "--head"]
+    for k, v in headers.items():
+        argv.extend(["--header", f"{k}: {v}"])
+    argv.append(url)
+    try:
+        result = subprocess.run(
+            argv,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=30,
+        )
+    except (subprocess.SubprocessError, OSError):
+        return None
+    if result.returncode != 0:
+        return None
+    # HEAD-following-redirects prints multiple response blocks; the
+    # final Content-Length header wins.
+    last: int | None = None
+    for line in result.stdout.splitlines():
+        head, _, value = line.partition(":")
+        if head.strip().lower() == "content-length":
+            with contextlib.suppress(ValueError):
+                last = int(value.strip())
+    return last
 
 
 def _monotonic() -> float:

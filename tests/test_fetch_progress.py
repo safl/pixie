@@ -35,6 +35,12 @@ class _CountingHandler(http.server.BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(self.payload)
 
+    def do_HEAD(self) -> None:
+        self.send_response(200)
+        self.send_header("Content-Length", str(len(self.payload)))
+        self.send_header("Content-Type", "application/octet-stream")
+        self.end_headers()
+
     def log_message(self, format: str, *args: object) -> None:
         return
 
@@ -42,10 +48,10 @@ class _CountingHandler(http.server.BaseHTTPRequestHandler):
 class _TruncatingHandler(http.server.BaseHTTPRequestHandler):
     """Advertises a Content-Length larger than the bytes it actually
     sends, then closes the connection: this is what a mid-transfer
-    network hiccup or registry hiccup looks like on the wire. urllib
-    does not raise for this on its own (see ``_stream_to_tmpfile``'s
-    explicit Content-Length check), so this handler is what exercises
-    that guard."""
+    network hiccup or registry hiccup looks like on the wire. The
+    curl-based fetcher's ``--continue-at -`` retry loop eventually
+    gives up + exits non-zero, and the fetcher's size-vs-HEAD guard
+    would also catch a short-but-CL-clean stream."""
 
     protocol_version = "HTTP/1.0"
     payload = b"only-part-of-the-body"
@@ -57,6 +63,12 @@ class _TruncatingHandler(http.server.BaseHTTPRequestHandler):
         self.send_header("Content-Type", "application/octet-stream")
         self.end_headers()
         self.wfile.write(self.payload)
+
+    def do_HEAD(self) -> None:
+        self.send_response(200)
+        self.send_header("Content-Length", str(self.declared_length))
+        self.send_header("Content-Type", "application/octet-stream")
+        self.end_headers()
 
     def log_message(self, format: str, *args: object) -> None:
         return
