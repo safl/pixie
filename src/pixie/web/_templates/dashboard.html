@@ -11,7 +11,7 @@
 {% block content %}
 {{ page_description('speedometer2', 'Live counts across pixie: machines the operator manages, catalog images pixie can serve, NBD exports pixie is running right now. All tiles refresh every 5 s from the same endpoints the pages below use.') }}
 <div class="row g-3 mb-4">
-    <div class="col-md-4">
+    <div class="col-md-3">
         <div class="card shadow-sm h-100">
             <div class="card-body">
                 <div class="d-flex align-items-center mb-2">
@@ -33,7 +33,7 @@
             </div>
         </div>
     </div>
-    <div class="col-md-4">
+    <div class="col-md-3">
         <div class="card shadow-sm h-100">
             <div class="card-body">
                 <div class="d-flex align-items-center mb-2">
@@ -59,7 +59,7 @@
             </div>
         </div>
     </div>
-    <div class="col-md-4">
+    <div class="col-md-3">
         <div class="card shadow-sm h-100">
             <div class="card-body">
                 <div class="d-flex align-items-center mb-2">
@@ -76,6 +76,55 @@
             </div>
             <div class="card-footer bg-light border-top-0 py-2">
                 <a href="/ui/catalog" class="text-decoration-none small">
+                    Open <i class="bi bi-arrow-right"></i>
+                </a>
+            </div>
+        </div>
+    </div>
+    {# Events card: total row count + errors-since-ack (red pill on
+       non-zero) + newest ts. Ack POSTs /ui/events/ack which advances
+       the settings.events_ack_ts cursor so error_count zeros until
+       the next error-shaped event fires. #}
+    <div class="col-md-3">
+        <div class="card shadow-sm h-100">
+            <div class="card-body">
+                <div class="d-flex align-items-center mb-2">
+                    <i class="bi bi-clock-history fs-4 text-primary me-2"></i>
+                    <h2 class="h6 mb-0">Events</h2>
+                </div>
+                <div class="display-6 fw-semibold" data-stat="events_total">{{ stats.events_total }}</div>
+                <dl class="row small text-muted mb-0 mt-2">
+                    <dt class="col-6">
+                        <span class="text-danger">Errors</span>
+                        {% if stats.events_error_count > 0 %}
+                        <form method="post" action="/ui/events/ack" style="display:inline;">
+                            <button type="submit"
+                                    class="btn btn-link btn-sm p-0 ms-1 small"
+                                    title="Advance the ack cursor to now">
+                                Ack
+                            </button>
+                        </form>
+                        {% endif %}
+                    </dt>
+                    <dd class="col-6 text-end" data-stat="events_error_count">
+                        {% if stats.events_error_count > 0 %}
+                        <span class="badge text-bg-danger">{{ stats.events_error_count }}</span>
+                        {% else %}
+                        <span class="text-success">0</span>
+                        {% endif %}
+                    </dd>
+                    <dt class="col-6">Last</dt>
+                    <dd class="col-6 text-end small" data-stat="events_last_ts">
+                        {% if stats.events_last_ts %}
+                        {{ stats.events_last_ts | fmt_ts }}
+                        {% else %}
+                        -
+                        {% endif %}
+                    </dd>
+                </dl>
+            </div>
+            <div class="card-footer bg-light border-top-0 py-2">
+                <a href="/ui/events" class="text-decoration-none small">
                     Open <i class="bi bi-arrow-right"></i>
                 </a>
             </div>
@@ -218,6 +267,28 @@
             });
             document.querySelectorAll('[data-stat="catalog_bundles"]').forEach((el) => {
                 const t = `${s.catalog_bundles_fetched} / ${s.catalog_bundles_total}`;
+                if (el.textContent.trim() !== t) el.textContent = t;
+            });
+            setN("events_total", s.events_total);
+            // Errors: swap the whole cell so the badge appears / clears
+            // in step with the count. Text-only mode ("0" green) when
+            // zero; red pill when non-zero. Kept as an innerHTML swap so
+            // the "Ack" form-button also (dis)appears at the right side
+            // without a page reload; matches the Jinja template above.
+            document.querySelectorAll('[data-stat="events_error_count"]').forEach((el) => {
+                const n = s.events_error_count | 0;
+                const html = n > 0
+                    ? `<span class="badge text-bg-danger">${n}</span>`
+                    : `<span class="text-success">0</span>`;
+                if (el.innerHTML !== html) el.innerHTML = html;
+            });
+            document.querySelectorAll('[data-stat="events_last_ts"]').forEach((el) => {
+                // Live JSON does not run fmt_ts (that's a Jinja filter);
+                // pass the raw ts through and let the browser render it
+                // as-is. Refreshing to the fmt_ts value happens on the
+                // next full page load. Kept simple; a follow-up could
+                // route this through a JS date formatter.
+                const t = s.events_last_ts || "-";
                 if (el.textContent.trim() !== t) el.textContent = t;
             });
         } catch (e) { /* swallow */ }

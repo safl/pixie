@@ -21,7 +21,7 @@ from pathlib import Path
 from typing import Any
 
 from pixie._util import now_iso
-from pixie.events._kinds import KNOWN_EVENT_KINDS
+from pixie.events._kinds import ERROR_KINDS, KNOWN_EVENT_KINDS
 
 _DB_WRITE_LOCK = threading.Lock()
 
@@ -152,6 +152,49 @@ class EventsLog:
             )
             row.id = int(cur.lastrowid) if cur.lastrowid is not None else None
         return row
+
+    def stats(self, ack_ts: str = "") -> dict[str, Any]:
+        """Aggregate counters for the dashboard events card.
+
+        ``total`` -- rows in the events table (all-time).
+        ``error_count`` -- error-shaped events after ``ack_ts``
+        (ISO string, empty = since forever). Error shape is: kind
+        ends in ``.failed``, kind is one of the explicit error
+        kinds registered in :data:`ERROR_KINDS`, or kind is
+        ``pxe.status.received`` with a summary containing ``died``
+        / ``failed`` / ``emergency`` (target initrd's HTTP status
+        POSTs land here rather than as their own kinds).
+        ``last_ts`` -- newest event's ``ts`` (ISO string, empty
+        when the table is empty)."""
+        with self._conn() as conn:
+            row = conn.execute("SELECT COUNT(*) AS n, MAX(ts) AS last_ts FROM events").fetchone()
+            total = int(row["n"] or 0)
+            last_ts = row["last_ts"] or ""
+
+            # Error filter: an OR of three shapes. Kept as one SQL
+            # so the row count is a single scan.
+            error_pattern_clauses = [
+                "kind LIKE '%.failed'",
+                "kind IN ({})".format(",".join("?" * len(ERROR_KINDS))),
+                "(kind = 'pxe.status.received' AND ("
+                "summary LIKE '%died%' OR summary LIKE '%failed%' "
+                "OR summary LIKE '%emergency%'))",
+            ]
+            params: list[Any] = list(ERROR_KINDS)
+            if ack_ts:
+                where = "(" + " OR ".join(error_pattern_clauses) + ") AND ts > ?"
+                params.append(ack_ts)
+            else:
+                where = " OR ".join(error_pattern_clauses)
+            error_row = conn.execute(
+                f"SELECT COUNT(*) AS n FROM events WHERE {where}", params
+            ).fetchone()
+            error_count = int(error_row["n"] or 0)
+        return {
+            "total": total,
+            "error_count": error_count,
+            "last_ts": last_ts,
+        }
 
     def list(
         self,
