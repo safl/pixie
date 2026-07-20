@@ -91,14 +91,18 @@ needle = "Debian"
 
 # ---- Positive userland proof ---------------------------------------
 #
-# sshd bring-up: sshd on Debian / Ubuntu prints "Started ssh.service"
-# on serial once systemd finishes activating it. Catches the "boots
-# fine but no sshd" failure mode where the target reaches
-# multi-user.target but ssh.service does not (observed on GIGABYTE
-# MC12-LE0 nbdboot with a persist overlay).
+# multi-user.target reached: systemd prints "Reached target
+# multi-user.target" on serial once every ordered predecessor has
+# finished activating. Broader than a sshd-specific banner because
+# the exact service name / description varies across distros
+# (Debian: "Started ssh.service - OpenBSD Secure Shell server";
+# Fedora: "Started sshd.service"). Catches the "boots to systemd but
+# a hanging unit blocks userspace" shape where the earlier markers
+# (systemd-started, debian-userspace) fire but the target never
+# reaches operator-usable userland.
 [[test.pxe.chain_markers]]
-key = "sshd-started"
-needle = "Started ssh.service"
+key = "multi-user-target"
+needle = "Reached target multi-user.target"
 
 # ---- Forbidden markers ---------------------------------------------
 #
