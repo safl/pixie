@@ -44,8 +44,9 @@ LABEL org.opencontainers.image.title="pixie" \
 #                    /usr/lib/ipxe/, which we copy into pixie's
 #                    TFTP root so the daemon can serve them.
 #   qemu-utils:      qemu-img info + qemu-nbd for qcow2 handling.
-#   util-linux:      sfdisk for pixie._partition partition-offset lookup
-#                    on persistent-overlay renders.
+#   fdisk:           sfdisk for pixie._partition partition-offset lookup
+#                    on persistent-overlay renders. On Ubuntu 26.04
+#                    sfdisk moved out of util-linux into this package.
 #   ca-certificates: HTTPS fetch of ORAS + release assets.
 #
 # Verified against ubuntu:26.04's package list in CI on every build;
@@ -66,7 +67,7 @@ RUN apt-get update \
         tftpd-hpa \
         ipxe \
         qemu-utils \
-        util-linux \
+        fdisk \
  && rm -rf /var/lib/apt/lists/*
 
 # App under /app with editable-style install from the source we copy in.
