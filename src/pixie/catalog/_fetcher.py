@@ -365,8 +365,7 @@ def _extract_rootfs_if_partitioned(
         info = extract_partition(blob_path, rootfs, partition_number=1)
     except PartitionNotFound as exc:
         _log.info(
-            "fetch %r: skipping rootfs extract (%s); ephemeral / persist "
-            "will serve the whole blob",
+            "fetch %r: skipping rootfs extract (%s); ephemeral / persist will serve the whole blob",
             entry.name,
             exc,
         )
