@@ -340,7 +340,7 @@
                 <div class="small text-muted mb-1">
                     <i class="bi bi-eye me-1"></i>On the next PXE from this target
                 </div>
-                <div class="preview-body">-</div>
+                <div class="preview-body">{{ initial_bind_preview }}</div>
             </div>
 
             {# ---- Flash-mode guard hint ------------------------------
@@ -699,16 +699,21 @@
     const previewBody = form.querySelector("#bind-preview .preview-body");
 
     // Human-readable descriptions for the preview panel. Mirrors the
-    // BOOT_MODE_META table in pixie.machines._store but pared to a
-    // sentence-per-mode that describes the OUTCOME on the next PXE,
-    // not the mode definition (the cards themselves cover that).
+    // _MODE_PREVIEWS table in pixie.web._bind_preview; kept in sync
+    // manually until the JS routes preview text through a JSON
+    // endpoint that reads that module. Sentences describe the OUTCOME
+    // on the next PXE, not the mode definition (the cards themselves
+    // cover that). nbdboot has TWO variants because the persistent-
+    // overlay path (overlay_profile set) survives writes; ephemeral
+    // does not.
     const MODE_PREVIEWS = {
         "ipxe-exit":          "Pixie exits the iPXE chain. The BIOS boot order picks the next bootable device on this target.",
         "pixie-inventory":    "Pixie boots its live env; the pixie CLI posts disk + NIC inventory back, then the target reboots to firmware.",
         "pixie-tui":          "Pixie boots its live env into an interactive TUI. An operator drives the wizard on the target's console.",
         "pixie-flash-once":   "Pixie boots its live env, which writes {IMAGE} to disk (serial: {DISK}), then the target reboots to firmware.",
         "pixie-flash-always": "Pixie boots its live env, which re-writes {IMAGE} to disk (serial: {DISK}) on every PXE. Any local changes are lost.",
-        "nbdboot":            "Pixie streams {IMAGE} over NBD; root is an overlay-on-tmpfs of the image. Nothing writes back to the source.",
+        "nbdboot_ephemeral":  "Pixie streams {IMAGE} over NBD; root is an overlay-on-tmpfs of the image. Nothing writes back to the source.",
+        "nbdboot_persist":    "Pixie streams {IMAGE} over NBD onto this target's <code>{PROFILE}</code> qcow2 overlay. System changes on the target survive reboots; other machines are untouched.",
     };
     const FLASH_MODES = new Set(["pixie-flash-once", "pixie-flash-always"]);
     const NBDBOOT = "nbdboot";
@@ -777,7 +782,17 @@
         const isNbdboot = pickedMode() === NBDBOOT;
         imgSelect.querySelectorAll("option[data-nbdboot-ready]").forEach((opt) => {
             const ready = opt.getAttribute("data-nbdboot-ready") === "true";
-            opt.disabled = isNbdboot && !ready;
+            // Under nbdboot, non-ready options are HIDDEN outright
+            // rather than just disabled: a FreeBSD image or an
+            // unfetched Linux image will never boot as an ext4 root
+            // over NBD, so leaving them grayed-out in the picker is
+            // pure UI noise the operator has to skip past. hidden +
+            // disabled is belt-and-suspenders: hidden removes from
+            // the dropdown on modern browsers, disabled blocks stray
+            // keyboard selection on the ones that still render it.
+            const shouldHide = isNbdboot && !ready;
+            opt.hidden = shouldHide;
+            opt.disabled = shouldHide;
         });
         if (imgSelect.selectedOptions.length && imgSelect.selectedOptions[0].disabled) {
             imgSelect.value = "";
@@ -836,6 +851,15 @@
     }
 
     // 6. Preview panel narration ------------------------------------
+    function pickedOverlayProfile() {
+        if (!overlayProfileSelect) return "";
+        const raw = overlayProfileSelect.value;
+        if (raw === "__new") {
+            return overlayProfileNewInput ? overlayProfileNewInput.value.trim() : "";
+        }
+        return raw;
+    }
+
     function renderPreview() {
         if (!previewBody) return;
         const mode = pickedMode();
@@ -843,7 +867,13 @@
             previewBody.textContent = "Pick a boot mode above to see what happens.";
             return;
         }
-        let text = MODE_PREVIEWS[mode] || mode;
+        // nbdboot has two flavours in the preview table: ephemeral vs
+        // persist. Select the right one before templating.
+        let key = mode;
+        if (mode === NBDBOOT) {
+            key = pickedOverlayProfile() ? "nbdboot_persist" : "nbdboot_ephemeral";
+        }
+        let text = MODE_PREVIEWS[key] || mode;
         const imgName = pickedImageName();
         const diskLabel = pickedDiskLabel();
         if (IMAGE_MODES.has(mode)) {
@@ -855,6 +885,10 @@
         }
         if (FLASH_MODES.has(mode)) {
             text = text.replace("{DISK}", diskLabel ? `<code>${diskLabel}</code>` : "-not picked-");
+        }
+        const prof = pickedOverlayProfile();
+        if (prof) {
+            text = text.replace("{PROFILE}", prof);
         }
         previewBody.innerHTML = text;
     }
