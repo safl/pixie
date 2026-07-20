@@ -27,6 +27,7 @@ import shutil
 import subprocess
 import tarfile
 import tempfile
+import time
 import urllib.error
 import urllib.request
 from collections.abc import Callable
@@ -91,6 +92,9 @@ def _resolve_fetch_url(src: str) -> tuple[str, dict[str, str]]:
 # ------------------------------------------------------------------------
 
 
+_MAX_DOWNLOAD_ATTEMPTS = 6
+
+
 def _stream_to_tmpfile(
     url: str,
     headers: dict[str, str],
@@ -100,10 +104,21 @@ def _stream_to_tmpfile(
     """Download bytes from ``url`` into ``dest_dir/<uuid>.inflight``,
     streaming sha256 alongside. Returns (path, sha256, size).
 
-    Raises :class:`FetchError` on HTTP/network failure or on empty
-    body. Callers pass a ``dest_dir`` that lives on the same
-    filesystem as the final blob path so the ``os.replace`` at commit
-    time is atomic.
+    Resumes on truncation. GHCR (and other registries in front of
+    a middlebox) closes the TCP after a per-transfer cap: three
+    fetches this session all cut cleanly at ~1 GiB out of 2.9-3.0
+    GiB payloads. When the first-attempt loop reads an empty chunk
+    with ``written < Content-Length``, this reopens with an HTTP
+    ``Range: bytes=<written>-`` header and appends to the same
+    tmpfile so the sha and byte count stay coherent across attempts.
+    Gives up after :data:`_MAX_DOWNLOAD_ATTEMPTS` rounds with the
+    last-observed byte count in the error.
+
+    Raises :class:`FetchError` on HTTP/network failure, on empty
+    body, or on truncation the retry loop could not close.
+    Callers pass a ``dest_dir`` that lives on the same filesystem
+    as the final blob path so the ``os.replace`` at commit time is
+    atomic.
 
     ``progress`` is called at start (``phase='downloading'`` +
     ``total_bytes``) then throttled to at most one call per 500 ms
@@ -116,60 +131,115 @@ def _stream_to_tmpfile(
     tmp_path = Path(tmp_name)
     os.close(fd)
 
-    req = urllib.request.Request(url, method="GET")
-    for k, v in headers.items():
-        req.add_header(k, v)
-    req.add_header("User-Agent", "pixie-fetch/0.2")
+    base_headers = dict(headers)
+    base_headers.setdefault("User-Agent", "pixie-fetch/0.2")
 
     sha = hashlib.sha256()
     written = 0
+    total_bytes: int | None = None
     last_emit = 0.0
+
+    def _emit(phase: str) -> None:
+        if progress is None:
+            return
+        progress(
+            {
+                "phase": phase,
+                "bytes_downloaded": written,
+                "total_bytes": total_bytes,
+            }
+        )
+
     try:
-        with urllib.request.urlopen(req, timeout=60) as resp, open(tmp_path, "wb") as out:
-            total_bytes: int | None
+        for attempt in range(_MAX_DOWNLOAD_ATTEMPTS):
+            req = urllib.request.Request(url, method="GET")
+            for k, v in base_headers.items():
+                req.add_header(k, v)
+            if written > 0:
+                req.add_header("Range", f"bytes={written}-")
+
             try:
-                total_bytes = int(resp.headers.get("Content-Length") or 0) or None
-            except ValueError:
-                total_bytes = None
-            if progress is not None:
-                progress(
-                    {
-                        "phase": "downloading",
-                        "bytes_downloaded": 0,
-                        "total_bytes": total_bytes,
-                    }
+                resp = urllib.request.urlopen(req, timeout=60)
+            except (urllib.error.URLError, OSError) as exc:
+                if attempt >= _MAX_DOWNLOAD_ATTEMPTS - 1:
+                    tmp_path.unlink(missing_ok=True)
+                    raise FetchError(f"download failed for {url}: {exc}") from exc
+                _log.warning(
+                    "fetch %s: attempt %d hit %s; retrying from byte %d",
+                    url,
+                    attempt + 1,
+                    exc,
+                    written,
                 )
-            while True:
-                chunk = resp.read(CHUNK)
-                if not chunk:
-                    break
-                out.write(chunk)
-                sha.update(chunk)
-                written += len(chunk)
-                # Throttled progress emit: at most every 500 ms so a
-                # gigabit-line download doesn't hammer the state dict.
-                # ``time.monotonic`` is safe for interval comparisons
-                # (unaffected by clock jumps).
-                if progress is not None:
-                    now = _monotonic()
-                    if now - last_emit >= 0.5:
-                        progress(
-                            {
-                                "phase": "downloading",
-                                "bytes_downloaded": written,
-                                "total_bytes": total_bytes,
-                            }
-                        )
-                        last_emit = now
-        if progress is not None:
-            progress(
-                {
-                    "phase": "downloading",
-                    "bytes_downloaded": written,
-                    "total_bytes": total_bytes,
-                }
+                time.sleep(min(30, 2**attempt))
+                continue
+
+            with resp, open(tmp_path, "ab") as out:
+                if written == 0:
+                    try:
+                        total_bytes = int(resp.headers.get("Content-Length") or 0) or None
+                    except ValueError:
+                        total_bytes = None
+                    _emit("downloading")
+                else:
+                    # 206 Partial Content carries Content-Range with the
+                    # remaining segment; the total (post-slash) is the
+                    # authoritative size. Fall back to Content-Length +
+                    # already-written if the server omits Content-Range.
+                    cr = resp.headers.get("Content-Range") or ""
+                    if "/" in cr:
+                        try:
+                            total_bytes = int(cr.rsplit("/", 1)[1])
+                        except ValueError:
+                            pass
+
+                try:
+                    while True:
+                        chunk = resp.read(CHUNK)
+                        if not chunk:
+                            break
+                        out.write(chunk)
+                        sha.update(chunk)
+                        written += len(chunk)
+                        if progress is not None:
+                            now = _monotonic()
+                            if now - last_emit >= 0.5:
+                                _emit("downloading")
+                                last_emit = now
+                except (urllib.error.URLError, OSError) as exc:
+                    _log.warning(
+                        "fetch %s: read error at byte %d on attempt %d: %s",
+                        url,
+                        written,
+                        attempt + 1,
+                        exc,
+                    )
+            _emit("downloading")
+
+            # Loop-exit conditions: server closed the socket. Either
+            # we have the whole file, or we need to resume. When
+            # Content-Length is absent we cannot tell -- accept as
+            # done in that case.
+            if total_bytes is None or written >= total_bytes:
+                break
+
+            _log.info(
+                "fetch %s: attempt %d ended with %d / %d bytes; resuming",
+                url,
+                attempt + 1,
+                written,
+                total_bytes,
             )
-    except (urllib.error.URLError, OSError) as exc:
+            time.sleep(min(30, 2**attempt))
+        else:
+            tmp_path.unlink(missing_ok=True)
+            raise FetchError(
+                f"download truncated for {url}: got {written} of {total_bytes} bytes "
+                f"after {_MAX_DOWNLOAD_ATTEMPTS} attempts"
+            )
+    except FetchError:
+        raise
+    except OSError as exc:
         tmp_path.unlink(missing_ok=True)
         raise FetchError(f"download failed for {url}: {exc}") from exc
 
@@ -177,14 +247,6 @@ def _stream_to_tmpfile(
         tmp_path.unlink(missing_ok=True)
         raise FetchError(f"empty body from {url}")
 
-    # ``resp.read(CHUNK)`` returns an empty chunk both when the body
-    # is fully consumed AND when the peer closes the connection early
-    # (urllib/http.client does not raise for a short body unless the
-    # caller reads past what's buffered). Without this check a
-    # network hiccup mid-transfer silently produces a short file that
-    # LOOKS like a completed download; for compressed formats the
-    # truncation then surfaces several minutes later as a confusing
-    # decompression error instead of here, at the point of cause.
     if total_bytes is not None and written != total_bytes:
         tmp_path.unlink(missing_ok=True)
         raise FetchError(f"download truncated for {url}: got {written} of {total_bytes} bytes")
