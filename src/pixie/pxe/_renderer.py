@@ -25,11 +25,10 @@ from typing import Any
 
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
-from pixie._partition import PartitionNotFound, partition_start_bytes
 from pixie.catalog._schema import CatalogEntry
 from pixie.catalog._store import CatalogStore
 from pixie.exports._store import Export, ExportsStore, Overlay, OverlaysStore
-from pixie.exports._supervisor import NbdServer
+from pixie.exports._supervisor import NbdServer, preferred_serve_path
 from pixie.machines._store import LIVE_ENV_MODES, Machine
 
 _log = logging.getLogger(__name__)
@@ -233,6 +232,11 @@ class PlanRenderer:
         # file + overlay row on the first render.
         if machine.overlay_profile:
             profile = machine.overlay_profile
+            # Per _ensure_overlay: the qcow2's ``backing_file`` is
+            # whichever file the fetch pipeline prefers (rootfs.raw
+            # if present, else the whole-disk blob). The target sees
+            # /dev/nbd0 as ext4 at offset 0 in the common case, so
+            # qemu-nbd no longer needs ``--offset`` bookkeeping.
             try:
                 overlay = self._ensure_overlay(machine.mac, image_sha, profile, blob)
             except RuntimeError as exc:
@@ -240,31 +244,10 @@ class PlanRenderer:
                     machine,
                     f"overlay {profile!r} could not be prepared: {exc}",
                 )
-            # Serve the qcow2 with ``qemu-nbd --offset=<partition-1
-            # start>`` so ``/dev/nbd0`` on the target IS the ext4
-            # partition at offset 0, matching the shape nbdkit's
-            # ``--filter=partition partition=1`` produces for the
-            # ephemeral path. The target's initrd mount hook then
-            # does not need partition-scan logic: /dev/nbd0 alone
-            # is the ext4 root regardless of ephemeral vs persist.
-            # Fall back to offset 0 (whole-image serve) for images
-            # sfdisk cannot parse; the mount hook will die more
-            # loudly there than the partition-scan-race did before.
-            try:
-                offset_bytes = partition_start_bytes(blob, partition_number=1)
-            except PartitionNotFound as exc:
-                _log.warning(
-                    "no partition 1 on %s for overlay %s (serving whole image): %s",
-                    blob,
-                    profile,
-                    exc,
-                )
-                offset_bytes = 0
             try:
                 port = self._nbd.spawn_qcow2(
                     _overlay_export_name(overlay),
                     Path(overlay.qcow2_path),
-                    offset_bytes=offset_bytes,
                 )
             except RuntimeError as exc:
                 return self._unavailable(
@@ -327,7 +310,12 @@ class PlanRenderer:
             return row
         is_new_row = row is None
         if not qcow2_path.is_file():
-            NbdServer.create_qcow2(qcow2_path, base_blob)
+            # Point the qcow2's ``backing_file`` at whichever file the
+            # fetch pipeline extracted for us: ``rootfs.raw`` when it
+            # exists, else the whole-disk blob. In the common case the
+            # qcow2 wraps just the ext4 partition, so the target sees
+            # /dev/nbd0 as a mountable ext4 filesystem at offset 0.
+            NbdServer.create_qcow2(qcow2_path, preferred_serve_path(base_blob))
         overlay = Overlay(
             mac=mac,
             image_sha=image_sha,

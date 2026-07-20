@@ -35,6 +35,7 @@ from pathlib import Path
 from typing import Any
 
 from pixie import oras
+from pixie._partition import PartitionNotFound, extract_partition
 from pixie._util import CHUNK, now_iso
 from pixie.catalog._schema import CatalogEntry
 from pixie.catalog._store import CatalogStore
@@ -258,6 +259,7 @@ def fetch(
         url, headers, store.state_dir / "tmp", progress=progress
     )
 
+    blob_path = tmp_path  # placeholder; overwritten in the img branches
     try:
         if entry.format == "tar.gz":
             if progress is not None:
@@ -315,6 +317,19 @@ def fetch(
         if tmp_path.exists() and tmp_path.suffix in (".inflight", ".raw"):
             tmp_path.unlink(missing_ok=True)
 
+    # Extract partition 1 (Linux root) to a sibling ``rootfs.raw``
+    # for whole-disk img formats. Both the ephemeral nbdboot path
+    # (nbdkit --filter=cow file file=rootfs.raw) and the persist path
+    # (qemu-img create -b rootfs.raw) point at this file, so the
+    # target-side initrd sees /dev/nbd0 as ext4 at offset 0 in both
+    # modes and never has to think about partition tables. Whole-disk
+    # blob stays alongside for the flash modes. Silent no-op on
+    # tar.gz (netboot bundles) and on unpartitioned raw filesystem
+    # images -- the ephemeral serve path falls back to the blob when
+    # rootfs.raw is absent.
+    if entry.format in _WHOLE_DISK_IMG_FORMATS:
+        _extract_rootfs_if_partitioned(entry, blob_path, progress)
+
     store.mark_fetched(entry.name, content_sha256=sha256, size_bytes=size)
     return FetchResult(
         name=entry.name,
@@ -326,6 +341,43 @@ def fetch(
 
 
 _COMPRESSED_IMG_FORMATS = frozenset({"img.gz", "img.zst", "img.xz"})
+_WHOLE_DISK_IMG_FORMATS = frozenset({"img", "img.gz", "img.zst", "img.xz"})
+
+
+def _extract_rootfs_if_partitioned(
+    entry: CatalogEntry,
+    blob_path: Path,
+    progress: Callable[[dict[str, Any]], None] | None,
+) -> None:
+    """Try to extract partition 1 into ``blobs/<sha>/rootfs.raw``.
+
+    Silent on PartitionNotFound: the fetch still succeeds and the
+    ephemeral / persist serve paths fall back to using the blob
+    directly (the pre-extract-at-fetch behaviour). Loud on other IO
+    errors so the operator sees a truncated-extract in the log
+    rather than a silent regression at boot time."""
+    rootfs = blob_path.parent / "rootfs.raw"
+    if rootfs.is_file():
+        return  # idempotent; a prior fetch already produced it
+    if progress is not None:
+        progress({"phase": "extracting-rootfs"})
+    try:
+        info = extract_partition(blob_path, rootfs, partition_number=1)
+    except PartitionNotFound as exc:
+        _log.info(
+            "fetch %r: skipping rootfs extract (%s); ephemeral / persist "
+            "will serve the whole blob",
+            entry.name,
+            exc,
+        )
+        return
+    _log.info(
+        "fetch %r: extracted partition 1 (%d bytes at offset %d) -> %s",
+        entry.name,
+        info.size_bytes,
+        info.start_bytes,
+        rootfs,
+    )
 
 
 def _decompress_to_tmpfile(src: Path, fmt: str, tmp_dir: Path) -> tuple[Path, str, int]:
