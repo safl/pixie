@@ -310,8 +310,7 @@ def _respawn_overlays_at_startup(app: FastAPI) -> None:
                 offset_bytes = partition_start_bytes(blob_path, partition_number=1)
             except PartitionNotFound as exc:
                 log.warning(
-                    "overlay %s/%s/%s: no partition 1 on backing blob %s"
-                    " (serving whole image): %s",
+                    "overlay %s/%s/%s: no partition 1 on backing blob %s (serving whole image): %s",
                     overlay.mac,
                     overlay.image_sha,
                     overlay.profile,
