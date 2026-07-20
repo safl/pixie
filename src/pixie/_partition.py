@@ -109,17 +109,6 @@ def partition_info(blob: Path, partition_number: int = 1) -> PartitionInfo:
     )
 
 
-def partition_start_bytes(blob: Path, partition_number: int = 1) -> int:
-    """Backward-compat wrapper around :func:`partition_info`.
-
-    The persist-overlay path used this for the ``qemu-nbd --offset``
-    approach that predated the extract-at-fetch design. Kept for the
-    startup respawn path and any external callers; new code should
-    prefer :func:`partition_info` or :func:`extract_partition`.
-    """
-    return partition_info(blob, partition_number).start_bytes
-
-
 def extract_partition(
     blob: Path,
     output: Path,
