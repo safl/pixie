@@ -271,9 +271,7 @@ class NbdServer:
         self._paths[name] = blob_path
         return port
 
-    def _spawn_qcow2_locked(
-        self, name: str, qcow2_path: Path, offset_bytes: int = 0
-    ) -> int:
+    def _spawn_qcow2_locked(self, name: str, qcow2_path: Path, offset_bytes: int = 0) -> int:
         """Requires ``self._lock``. Idempotent per name. Same shape
         as :meth:`_spawn_locked` but argv is qemu-nbd."""
         existing = self._procs.get(name)
