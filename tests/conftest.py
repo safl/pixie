@@ -7,6 +7,7 @@ password env.
 
 from __future__ import annotations
 
+import os
 from collections.abc import Iterator
 
 import pytest
@@ -15,6 +16,16 @@ from fastapi.testclient import TestClient
 # Constant admin password for tests. Set BEFORE importing the app so
 # the env-var read at ``check_password`` time picks it up.
 TEST_ADMIN_PASSWORD = "test-pw"
+
+# Force the fetch pipeline's curl transport to fail fast for tests.
+# Real deployments override with the module defaults (10 retries at
+# 5 s spacing); an in-process pytest run wants a deterministically-
+# broken mock server to raise inside a second, not after 50 s of
+# curl's retry backoff. Set at import time (module-level) so pytest
+# collection + subprocess spawns both see it.
+os.environ.setdefault("PIXIE_FETCH_RETRY", "0")
+os.environ.setdefault("PIXIE_FETCH_RETRY_DELAY", "0")
+os.environ.setdefault("PIXIE_FETCH_RETRY_MAX_TIME", "5")
 
 
 @pytest.fixture
