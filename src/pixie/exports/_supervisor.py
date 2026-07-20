@@ -55,6 +55,23 @@ def file_looks_partitioned(path: Path) -> bool:
     return len(head) == 512 and head[510:512] == b"\x55\xaa"
 
 
+def preferred_serve_path(blob_path: Path) -> Path:
+    """Return the file the export path should serve.
+
+    Pixie's fetch pipeline drops a sibling ``rootfs.raw`` next to
+    every whole-disk blob whose partition 1 could be extracted (see
+    :func:`pixie.catalog._fetcher._extract_rootfs_if_partitioned`).
+    When that file is present it IS the ext4 partition already, so
+    serving it hands the target a /dev/nbd0 that mounts as ext4 at
+    offset 0 -- no partition filter on nbdkit, no ``--offset`` on
+    qemu-nbd. Fall back to the whole-disk blob for pre-extract-at-
+    fetch catalog entries (where nbdkit's ``--filter=partition``
+    still gets applied via :func:`file_looks_partitioned`).
+    """
+    rootfs = blob_path.parent / "rootfs.raw"
+    return rootfs if rootfs.is_file() else blob_path
+
+
 def _port_available(bind: str, port: int) -> bool:
     """True iff ``bind:port`` accepts a fresh bind. The ~1ms race
     between this check and nbdkit's own bind is fine: nbdkit exits
@@ -221,8 +238,15 @@ class NbdServer:
             self._ports.pop(name, None)
             self._paths.pop(name, None)
 
-        if not blob_path.is_file():
-            raise RuntimeError(f"blob {blob_path!s} does not exist")
+        # Prefer the sibling ``rootfs.raw`` when present -- it IS the
+        # ext4 partition already, so the target sees /dev/nbd0 as ext4
+        # at offset 0 and nbdkit does not need the partition filter.
+        # Falls back to the whole-disk blob for pre-extract-at-fetch
+        # catalog entries; ``file_looks_partitioned`` decides whether
+        # to apply the filter in that case.
+        served_path = preferred_serve_path(blob_path)
+        if not served_path.is_file():
+            raise RuntimeError(f"blob {served_path!s} does not exist")
 
         port = self._allocate_port_locked()
 
@@ -241,17 +265,17 @@ class NbdServer:
         # --filter=partition must sit BELOW --filter=cow (nearer the
         # plugin) so client writes land in the cow overlay, not in a
         # partition-filter-managed slice of the backing.
-        partitioned = file_looks_partitioned(blob_path)
+        partitioned = file_looks_partitioned(served_path)
         if partitioned:
             argv.append("--filter=partition")
         # nbdkit's arg parser treats the first non-flag as the plugin
         # name and everything after as KEY=VALUE plugin params.
         # Filter params come after the plugin.
-        argv.extend(["file", f"file={blob_path!s}"])
+        argv.extend(["file", f"file={served_path!s}"])
         if partitioned:
             argv.append("partition=1")
 
-        _log.info("nbdkit spawn %r on port %d: %s", name, port, blob_path)
+        _log.info("nbdkit spawn %r on port %d: %s", name, port, served_path)
         try:
             proc = subprocess.Popen(argv, stdout=sys.stderr, stderr=sys.stderr)
         except FileNotFoundError as exc:
@@ -263,12 +287,12 @@ class NbdServer:
             rc = proc.returncode
             raise RuntimeError(
                 f"nbdkit for export {name!r} exited immediately (rc={rc}, port={port}, "
-                f"file={blob_path!s}); check the binary + file exist and the port is free"
+                f"file={served_path!s}); check the binary + file exist and the port is free"
             )
 
         self._procs[name] = proc
         self._ports[name] = port
-        self._paths[name] = blob_path
+        self._paths[name] = served_path
         return port
 
     def _spawn_qcow2_locked(self, name: str, qcow2_path: Path, offset_bytes: int = 0) -> int:
