@@ -88,3 +88,56 @@ needle = "systemd["
 [[test.pxe.chain_markers]]
 key = "debian-userspace"
 needle = "Debian"
+
+# ---- Positive userland proof ---------------------------------------
+#
+# sshd bring-up: sshd on Debian / Ubuntu prints "Started ssh.service"
+# on serial once systemd finishes activating it. Catches the "boots
+# fine but no sshd" failure mode where the target reaches
+# multi-user.target but ssh.service does not (observed on GIGABYTE
+# MC12-LE0 nbdboot with a persist overlay).
+[[test.pxe.chain_markers]]
+key = "sshd-started"
+needle = "Started ssh.service"
+
+# ---- Forbidden markers ---------------------------------------------
+#
+# Anything below here MUST NOT appear on the client serial log or
+# in pixie's container logs. The check runs alongside the positive-
+# marker poll and fails the whole test the moment any needle hits.
+# Kept scoped to failure signals that would leave a booted-looking
+# target with a broken userland (booted markers OK, but the console
+# spells out the bad news).
+
+# systemd-resolved / networkd starvation with no fallback resolv.conf.
+# The mount hook's mask of systemd-networkd + NetworkManager killed
+# both DHCP daemons on the pivoted rootfs; if the initrd's
+# /etc/resolv.conf write did not stick, apt / curl on the target log
+# this literal string on serial. Nosi 2026.W30's mount hook unlinks
+# the /etc/resolv.conf symlink before writing so glibc's resolver
+# reads the file directly -- if a regression puts the symlink back,
+# this marker fires.
+[[test.pxe.forbidden_markers]]
+key = "dns-broken"
+needle = "Temporary failure resolving"
+
+# sshd itself failed to start (its unit went into failed state during
+# multi-user.target activation). Distinct from "sshd-started not
+# seen" so the operator gets a clear "start failure" vs "start never
+# attempted" diagnosis in the CI log.
+[[test.pxe.forbidden_markers]]
+key = "sshd-failed"
+needle = "Failed to start ssh.service"
+
+# Dracut emergency shell: the mount hook died with _pixie_die and
+# systemd-emergency published the emergency-shell prompt. Every
+# persist-branch regression this session ended here.
+[[test.pxe.forbidden_markers]]
+key = "dracut-emergency"
+needle = "dracut-emergency"
+
+# Post-pivot emergency mode (something failed in userspace's own
+# init and systemd fell back to emergency.target).
+[[test.pxe.forbidden_markers]]
+key = "emergency-mode"
+needle = "Emergency mode"
