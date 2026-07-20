@@ -91,18 +91,20 @@ needle = "Debian"
 
 # ---- Positive userland proof ---------------------------------------
 #
-# multi-user.target reached: systemd prints "Reached target
-# multi-user.target" on serial once every ordered predecessor has
-# finished activating. Broader than a sshd-specific banner because
-# the exact service name / description varies across distros
-# (Debian: "Started ssh.service - OpenBSD Secure Shell server";
-# Fedora: "Started sshd.service"). Catches the "boots to systemd but
-# a hanging unit blocks userspace" shape where the earlier markers
-# (systemd-started, debian-userspace) fire but the target never
-# reaches operator-usable userland.
+# Getty printed the login prompt on the serial console: this is what
+# "operator-usable userland" actually looks like from outside the VM.
+# Getty runs as part of getty.target, which is pulled in by
+# multi-user.target, so a login prompt on serial is unambiguous
+# proof that multi-user.target was reached. Chosen over the
+# "Reached target multi-user.target" systemd banner because Debian
+# 13 boots in ``quiet`` mode by default and does not print that
+# banner on the console -- getty's login prompt is always printed.
+# Catches the "boots to systemd but a hanging unit blocks userspace"
+# shape where the earlier markers (systemd-started, debian-userspace)
+# fire but the target never reaches operator-usable userland.
 [[test.pxe.chain_markers]]
-key = "multi-user-target"
-needle = "Reached target multi-user.target"
+key = "login-prompt"
+needle = "login:"
 
 # ---- Forbidden markers ---------------------------------------------
 #
