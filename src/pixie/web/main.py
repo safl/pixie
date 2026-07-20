@@ -1418,6 +1418,14 @@ def create_app() -> FastAPI:
                 except OSError:
                     live_env_files[name] = None
             live_env_ready = all(v is not None for v in live_env_files.values())
+        # Events summary: total row count + unacknowledged error
+        # count + newest ts. ``events_ack_ts`` is a soft cursor an
+        # operator advances by hitting Acknowledge on the dashboard;
+        # events with ts > that value count towards ``error_count``,
+        # everything older is treated as read.
+        settings_store = request.app.state.settings_store
+        events_ack_ts = settings_store.get("events_ack_ts") or ""
+        events_stats = events_log.stats(ack_ts=events_ack_ts)
         return {
             "machines_total": len(machines),
             "machines_bound": sum(1 for m in machines if m.image_content_sha256),
@@ -1431,6 +1439,10 @@ def create_app() -> FastAPI:
             "exports_total": len(exports),
             "exports_running": sum(1 for e in exports if e.status == "running"),
             "exports_error": sum(1 for e in exports if e.status == "error"),
+            "events_total": events_stats["total"],
+            "events_error_count": events_stats["error_count"],
+            "events_last_ts": events_stats["last_ts"],
+            "events_ack_ts": events_ack_ts,
             "live_env_ready": live_env_ready,
             "live_env_dir": str(live_env_dir) if live_env_dir is not None else "",
             "live_env_files": live_env_files,
@@ -1473,6 +1485,30 @@ def create_app() -> FastAPI:
                 }
             )
         return JSONResponse({"events": out})
+
+    @app.post("/ui/events/ack")
+    def ui_events_ack(
+        request: Request,
+        _auth: None = Depends(_require_ui_auth),
+    ) -> RedirectResponse:
+        """Advance the events-ack cursor to now so the dashboard's
+        error count zeros out. Kept as a bulk-ack (no per-event
+        checkbox) because the intent is "operator has seen the
+        current state, silence the counter until something new
+        fails" -- a per-row ack would need a per-row column and a
+        write for each acknowledgement. Row-level filtering /
+        searching still happens on ``/ui/events`` via the existing
+        kind + subject_kind pickers.
+
+        Follow-the-redirect pattern: HTML POST from the dashboard's
+        Acknowledge button lands back on /ui/ (302). JSON callers
+        that want the new ack ts back can GET
+        /ui/dashboard-live.json immediately after.
+        """
+        from pixie._util import now_iso as _ack_now
+
+        request.app.state.settings_store.set_value("events_ack_ts", _ack_now())
+        return RedirectResponse(url="/ui/", status_code=status.HTTP_303_SEE_OTHER)
 
     # ---------- live fetch progress ---------------------------------
     #

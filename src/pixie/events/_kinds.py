@@ -224,3 +224,17 @@ KNOWN_EVENT_KINDS: frozenset[str] = frozenset(
         AUTH_LOGIN_FAILED,
     }
 )
+
+
+# The subset of kinds the dashboard's event-errors count treats as
+# errors. The ``EventsLog.stats`` query ORs this against a suffix
+# match (``LIKE '%.failed'``) and a summary-substring probe on
+# ``pxe.status.received`` (target-side ``died`` / ``failed`` /
+# ``emergency`` tokens), so a kind that already ends in ``.failed``
+# does not need to be listed here.
+ERROR_KINDS: frozenset[str] = frozenset(
+    {
+        EXPORT_NBDKIT_EXITED,
+        PXE_PLAN_UNAVAILABLE,
+    }
+)
