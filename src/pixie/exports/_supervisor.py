@@ -126,7 +126,7 @@ class NbdServer:
         with self._lock:
             return self._spawn_locked(name, blob_path)
 
-    def spawn_qcow2(self, name: str, qcow2_path: Path, offset_bytes: int = 0) -> int:
+    def spawn_qcow2(self, name: str, qcow2_path: Path) -> int:
         """Spawn qemu-nbd for ``name`` serving ``qcow2_path``.
         Idempotent per name. Uses the same ``_procs``/`_ports``
         bookkeeping as the nbdkit spawn so ``terminate`` /
@@ -134,20 +134,17 @@ class NbdServer:
 
         qemu-nbd is used instead of nbdkit for persistent overlays
         because it speaks qcow2 natively (with backing_file
-        indirection to the shared base blob) and writes back to the
-        qcow2 in place. nbdkit's cow filter is ephemeral by design.
+        indirection to the shared partition blob) and writes back to
+        the qcow2 in place. nbdkit's cow filter is ephemeral by
+        design.
 
-        ``offset_bytes`` shifts the exposed view of the qcow2 by
-        that many bytes; a caller pointing this at partition 1's
-        start byte makes ``/dev/nbd0`` on the target look exactly
-        like nbdkit's ``--filter=partition partition=1`` shape,
-        so the target's mount hook sees an ext4 partition at
-        offset 0 and does not need partition-scan logic.
-
-        Returns the allocated TCP port. Raises :class:`RuntimeError`
-        on binary/port/file failures."""
+        The caller creates the qcow2 with ``backing_file =
+        preferred_serve_path(blob)`` so the qcow2 wraps the ext4
+        partition directly, and no ``--offset`` gymnastics are
+        needed here. Returns the allocated TCP port. Raises
+        :class:`RuntimeError` on binary/port/file failures."""
         with self._lock:
-            return self._spawn_qcow2_locked(name, qcow2_path, offset_bytes)
+            return self._spawn_qcow2_locked(name, qcow2_path)
 
     @staticmethod
     def create_qcow2(qcow2_path: Path, base_path: Path) -> None:
@@ -295,7 +292,7 @@ class NbdServer:
         self._paths[name] = served_path
         return port
 
-    def _spawn_qcow2_locked(self, name: str, qcow2_path: Path, offset_bytes: int = 0) -> int:
+    def _spawn_qcow2_locked(self, name: str, qcow2_path: Path) -> int:
         """Requires ``self._lock``. Idempotent per name. Same shape
         as :meth:`_spawn_locked` but argv is qemu-nbd."""
         existing = self._procs.get(name)
@@ -329,10 +326,8 @@ class NbdServer:
             f"--bind={self.bind}",
             f"--port={port}",
             f"--export-name={name}",
+            str(qcow2_path),
         ]
-        if offset_bytes:
-            argv.append(f"--offset={offset_bytes}")
-        argv.append(str(qcow2_path))
 
         _log.info("qemu-nbd spawn %r on port %d: %s", name, port, qcow2_path)
         try:
