@@ -38,7 +38,7 @@ PXE-interactive use: ``--catalog http://pixie:8080/catalog.toml``
 plus ``--mac <MAC>`` so the TUI POSTs ``/pxe/<mac>/status`` after a
 flash (derived from the catalog URL's scheme+host).
 
-Public surface preserved from the prior Textual implementation:
+Public surface exposed by the module:
 
   * ``BtyTui`` class with ``run()``.
   * ``_TuiImage`` dataclass (catalog row shape).
@@ -47,7 +47,8 @@ Public surface preserved from the prior Textual implementation:
   * ``_format_mib``, ``_parse_size_to_bytes`` formatters.
   * ``_WizardStage`` enum.
 
-This module no longer imports textual; pure-rich + stdlib.
+Pure-rich + stdlib; the module deliberately does not import
+textual so a live env can skip that dependency.
 """
 
 from __future__ import annotations
@@ -582,8 +583,8 @@ class BtyTui:
         self._auto = False
         self._auto_image: str | None = None
         # Declared content sha256 from the plan (``disk_image_sha``), so
-        # the auto-flash verifies even when the image URL is a withcache
-        # or direct origin that doesn't embed the digest in its path.
+        # the auto-flash verifies even when the image URL is a plain
+        # HTTP origin whose path doesn't embed the digest.
         self._auto_image_sha: str | None = None
         self._auto_target_disk_serial: str | None = None
         # Image format from the plan. The image URL's name segment can be

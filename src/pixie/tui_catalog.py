@@ -15,16 +15,13 @@ pinned ``sha256`` digests:
     format = "img.zst"
 
 pixie holds no image bytes. The live env fetches each ``src``
-directly (or via withcache when the cache is warm); this module is the
-schema parser + URL canonicaliser + the ``stream_src`` proxy helper
-pixie's /images route uses for oras-style sources.
-``image_ref_for_src`` produces the stable provenance id machine
-bindings target -- pure math over the canonical URL.
+directly; this module is the schema parser + URL canonicaliser + the
+``stream_src`` proxy helper pixie's /images route uses for oras-style
+sources. ``image_ref_for_src`` produces the stable provenance id
+machine bindings target -- pure math over the canonical URL.
 
 Module is stdlib-only -- ``tomllib`` is in Python 3.11+ stdlib,
-``hashlib`` / ``urllib`` are too. ``pixie`` and ``pixie`` both
-consume this module without dragging in any extra dependency beyond
-their own.
+``hashlib`` / ``urllib`` are too.
 """
 
 from __future__ import annotations
@@ -68,14 +65,13 @@ class CatalogEntry:
     name a format detection wouldn't infer (e.g. extension-less
     files served from a CDN).
 
-    ``sha256`` is optional in the schema. Both ``pixie --catalog``
-    (portable catalog: display + flash from src) and the withcache
-    sidecar flash from ``src`` without ever requiring a sha.
-    Digest verification happens at flash time for ``oras://``
-    (the manifest layer digest is the URL); for ``http(s)://`` TLS
-    is the in-flight guarantee. When ``sha256`` is set, the flash
-    verifies the streamed bytes against it on the wire (see
-    ``pixie.flash``); it is also shown in the UI.
+    ``sha256`` is optional in the schema. ``pixie --catalog``
+    (portable catalog: display + flash from src) flashes from
+    ``src`` without requiring a sha. Digest verification happens at
+    flash time for ``oras://`` (the manifest layer digest is the
+    URL); for ``http(s)://`` TLS is the in-flight guarantee. When
+    ``sha256`` is set, the flash verifies the streamed bytes against
+    it on the wire (see ``pixie.flash``); it is also shown in the UI.
 
     The schema decoupling is intentional: rolling tags (``oras://
     ...:latest``, ``github.com/.../releases/latest/download/...``)
@@ -297,7 +293,7 @@ def fetch_bytes(source: str, *, timeout: float = 30.0) -> bytes:
     """Fetch a catalog TOML's raw bytes from a path / http(s) / oras source.
 
     Caps remote responses at :data:`REMOTE_CATALOG_MAX_BYTES`. Resolves
-    ``oras://`` references through :mod:`withcache.oras` (anonymous-pull flow
+    ``oras://`` references through :mod:`pixie.oras` (anonymous-pull flow
     against the OCI registry). Returns the raw TOML bytes; the caller
     feeds these to :func:`load_bytes`.
     """
@@ -308,7 +304,7 @@ def fetch_bytes(source: str, *, timeout: float = 30.0) -> bytes:
         return path.read_bytes()
     if kind == "oras":
         # Defer the import so callers that never use oras don't pay
-        # the import cost. (``withcache.oras`` is pure-stdlib, so this is
+        # the import cost. (``pixie.oras`` is pure-stdlib, so this is
         # mostly cosmetic, but keeps the load graph tidy.)
         from pixie import oras as _oras
 
@@ -421,7 +417,7 @@ def _canonicalise_oras(src: str) -> str:
     - lower-case host + repository (DNS / OCI distribution spec)
     - preserve tag literally (OCI tags are case-sensitive)
     - preserve digest literally
-    - validates structure via ``withcache.oras.parse_ref`` so a malformed
+    - validates structure via ``pixie.oras.parse_ref`` so a malformed
       ref errors here rather than mid-flash
 
     Lower-cases the ``<host>/<repo>`` prefix BEFORE handing to
@@ -548,9 +544,7 @@ def stream_src(
         # StreamingResponse downstream finishes cleanly while the
         # client (curl / dd) detects the mismatch as exit 18; the
         # pixie journal contains no record of WHICH blob truncated
-        # OR by how much. Mirrors withcache's ``TruncatedDownload``
-        # guard on its own fill path (safl/withcache#7), but for the
-        # pixie -> oras-registry hop which bypasses withcache.
+        # OR by how much.
         emitted = 0
         try:
             while True:
