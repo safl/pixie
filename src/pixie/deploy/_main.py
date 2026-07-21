@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import argparse
 import http.client
-import os
 import secrets
 import shutil
 import socket
@@ -316,6 +315,3 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":  # pragma: no cover -- exercised via console-script
     sys.exit(main())
-
-
-_ = os.environ  # silence unused-import warnings in case future paths grow env reads
