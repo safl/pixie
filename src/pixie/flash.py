@@ -841,10 +841,8 @@ def _find_esp_partition_number(disk: Path) -> int | None:
                 continue
             partn = child.get("partn")
             if partn is not None:
-                try:
+                with contextlib.suppress(TypeError, ValueError):
                     return int(partn)
-                except (TypeError, ValueError):
-                    pass
             # Older lsblk has no PARTN: fall back to the trailing digits
             # of the device path (/dev/sda1 -> 1, /dev/nvme0n1p1 -> 1).
             m = re.search(r"(\d+)$", child.get("path") or "")

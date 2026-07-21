@@ -12,6 +12,7 @@ when ``pixie`` is invoked.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import sys
 
 import pixie
@@ -131,11 +132,8 @@ def main(argv: list[str] | None = None, *, prog: str = "pixie") -> None:
     def _progress(msg: str) -> None:
         line = f"{prog}: {msg}"
         print(line, file=sys.stderr, flush=True)
-        try:
-            with open("/run/pixie.status", "a", encoding="utf-8") as f:
-                f.write(line + "\n")
-        except OSError:
-            pass
+        with contextlib.suppress(OSError), open("/run/pixie.status", "a", encoding="utf-8") as f:
+            f.write(line + "\n")
 
     _progress(f"v{pixie.__version__} starting...")
     _progress("loading UI dependencies (Rich)...")
