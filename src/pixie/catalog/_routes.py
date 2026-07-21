@@ -1,15 +1,14 @@
 """HTTP routes for the catalog + blob + artifacts surface.
 
-Mounted from :mod:`pixie.web.main` at repo-root paths so operator
-muscle memory (``/catalog``, ``/b/``, ``/artifacts/``) survives the
-merge from bty + withcache + nbdmux into one process.
+Mounted from :mod:`pixie.web.main` at repo-root paths (``/catalog``,
+``/b/``, ``/artifacts/``).
 
 Read routes (``GET /catalog``, ``GET /b/<sha>/<name>``,
 ``GET /artifacts/<sha>/{file}``) are OPEN by design: the PXE-boot
 targets that hit ``/artifacts/`` and ``/b/`` cannot hold a session
-cookie, and the LAN-only trust model matches nbdmux's original
-posture. Write routes (``POST`` / ``DELETE``) require a valid pixie
-session.
+cookie, and pixie's trust model is LAN-only (the operator is
+expected to firewall the appliance off the public internet). Write
+routes (``POST`` / ``DELETE``) require a valid pixie session.
 """
 
 from __future__ import annotations

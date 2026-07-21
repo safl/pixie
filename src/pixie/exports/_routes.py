@@ -29,8 +29,9 @@ from pixie.web._auth import require_auth
 
 _log = logging.getLogger(__name__)
 
-# Same allowlist as nbdmux 0.9.2; the export name lands in nbdkit's
-# ``-e <name>`` argv and (indirectly) in operator-facing URLs.
+# Export-name allowlist: the name lands in nbdkit's ``-e <name>``
+# argv and (indirectly) in operator-facing URLs, so keep it to
+# filesystem-safe + shell-safe characters.
 _EXPORT_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 
 

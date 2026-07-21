@@ -136,11 +136,11 @@ def default_image_root() -> Path:
 # Formats pixie can flash or serve as an NBD-backed root disk. Everything
 # in ``_EXTENSIONS`` is a raw-disk container the flash pipeline knows
 # how to stream through ``dd``. Not a superset: entries the catalog
-# ships as sidecars for another consumer (e.g. ``tar.gz`` netboot
-# bundles, which nbdmux unpacks at warm time to obtain vmlinuz +
-# initrd) are deliberately absent so the operator picker + machine-
-# binding gate exclude them. Kept in one place so a new bindable
-# format is enabled by adding it to ``_EXTENSIONS`` alone.
+# ships as sidecars for a different consumer (e.g. ``tar.gz`` netboot
+# bundles that pixie's catalog fetcher unpacks into ``artifacts/<sha>/``
+# for the iPXE renderer) are deliberately absent so the operator
+# picker + machine-binding gate exclude them. Kept in one place so a
+# new bindable format is enabled by adding it to ``_EXTENSIONS`` alone.
 BINDABLE_FORMATS: frozenset[str] = frozenset(fmt for _, fmt in _EXTENSIONS)
 
 
@@ -304,10 +304,9 @@ def _read_sidecar_sha(image_path: Path) -> str | None:
 class ImageSource:
     """One way to obtain an image's bytes.
 
-    Post-v0.66.0 sources are always catalog entries fetched via
-    withcache; ``kind`` is always ``"manifest"`` and ``location``
-    carries the upstream HTTP(S) or ``oras://`` URL. The dual-kind
-    "local" variant went with the retired local dir-scan.
+    Sources are catalog entries: ``kind`` is always ``"manifest"``
+    and ``location`` carries the upstream HTTP(S) or ``oras://`` URL
+    the catalog row's ``src`` field pointed at.
     """
 
     kind: str  # "manifest"

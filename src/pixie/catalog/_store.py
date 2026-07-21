@@ -9,9 +9,9 @@ tar.gz-unpacked netboot artifacts at
 Both paths are content-addressed: the same bytes served under
 different catalog names share on-disk storage, and an entry's blob
 URL (``/b/<sha>/<name>``) never changes across renames as long as the
-content is stable. This is a deliberate departure from withcache's
-URL-addressed store; pixie is an operator-curated library, not a
-URL->bytes cache.
+content is stable. Pixie is an operator-curated library, not a
+URL->bytes cache: a name in the catalog is a stable label for a
+particular content_sha256, not a memoisation of an origin URL.
 """
 
 from __future__ import annotations
@@ -27,12 +27,13 @@ from pixie.catalog._schema import CatalogEntry
 
 _DB_WRITE_LOCK = threading.Lock()
 
-# SQLite schema. Migrations for pixie land as ``CREATE TABLE IF NOT
-# EXISTS`` at ``open_store`` time, per bty's pattern. Pre-1.0: if a
-# schema change is required and the migration would be complex, we
-# rotate ``state.db`` -> ``state.db.<oldver>.<ts>.bak`` and start
-# clean rather than write migration SQL. (Documented ergonomics
-# tradeoff -- Cf. bty v0.25.0.)
+# SQLite schema. Migrations land as ``CREATE TABLE IF NOT EXISTS`` at
+# ``open_store`` time. Pre-1.0: if a schema change is required and
+# the migration would be complex, we rotate ``state.db`` ->
+# ``state.db.<oldver>.<ts>.bak`` and start clean rather than write
+# migration SQL. Documented ergonomics tradeoff: catalog rows are
+# metadata pointers to blobs on disk, so a lost state.db costs a
+# reimport, not the bytes themselves.
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS catalog_entries (
     name           TEXT PRIMARY KEY,

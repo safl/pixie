@@ -206,7 +206,7 @@ class ImageInfo:
     stream through curl directly to the target disk for ``.img`` /
     ``.img.{gz,zst,xz,bz2}`` (no temp file); for ``.qcow2`` they get
     downloaded to a temp file first because qcow2 is random-access.
-    ``oras://`` URLs go through :mod:`withcache.oras` first to resolve the
+    ``oras://`` URLs go through :mod:`pixie.oras` first to resolve the
     layer digest and inject a bearer-token Authorization header into
     the curl call.
     """
@@ -291,7 +291,7 @@ def probe_image_url(
     """Inspect an image at an HTTP/HTTPS or ``oras://`` URL.
 
     For http(s): HEAD request, format from URL path, size from
-    ``Content-Length``. For ``oras://`` refs: resolve via :mod:`withcache.oras`
+    ``Content-Length``. For ``oras://`` refs: resolve via :mod:`pixie.oras`
     to a manifest layer, format inferred from the layer's title
     annotation (or ``img.gz`` default), size from the manifest's layer
     size. Virtual size (what gets written to disk) can only be
@@ -1316,7 +1316,7 @@ def _curl_args_for_source(url: str) -> tuple[list[str], int | None, str | None]:
     """Build curl arguments for a fetch source.
 
     Plain http(s) URLs pass through unchanged. ``oras://`` references
-    go through :mod:`withcache.oras` to resolve the manifest layer, and the
+    go through :mod:`pixie.oras` to resolve the manifest layer, and the
     resulting bearer token is injected as a ``-H Authorization``
     header on the curl call. Returns ``(argv, expected_size_or_None,
     expected_digest_or_None)`` -- the size is the manifest's declared

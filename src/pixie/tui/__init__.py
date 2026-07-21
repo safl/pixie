@@ -58,9 +58,9 @@ def main(argv: list[str] | None = None, *, prog: str = "pixie") -> None:
             "server-driven mode every knob (image, target disk, catalog\n"
             "overlay) comes from the pixie's machine record, not the\n"
             "cmdline. --catalog is only useful for hand-driven runs.\n\n"
-            "To bootstrap a pixie + withcache + nbdmux container deploy,\n"
-            "use the sibling ``pixie-lab init`` script (runnable via\n"
-            "``uvx pixie-lab init`` without installing)."
+            "To bootstrap a pixie container deploy, use the sibling\n"
+            "``pixie-lab init`` script (runnable via ``uvx pixie-lab\n"
+            "init`` without installing)."
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -108,7 +108,7 @@ def main(argv: list[str] | None = None, *, prog: str = "pixie") -> None:
     # operator stares at without feedback otherwise:
     #
     #   1. ``from pixie.tui._app import BtyTui`` (1-3s): pulls Rich
-    #      + pixie.catalog + pixie.flash + withcache.oras into the
+    #      + pixie.catalog + pixie.flash + pixie.oras into the
     #      interpreter. On slower hardware (low-end mini-PCs, EPYC
     #      bringup boxes) this is several seconds of "blinking
     #      cursor".

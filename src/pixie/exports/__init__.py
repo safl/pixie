@@ -9,9 +9,4 @@ One nbdkit subprocess per export, one TCP port each, one filter chain
 (``--filter=cow``, plus ``--filter=partition`` when the blob has an
 MBR/GPT). Ports are allocated from a base + scan; the assigned port
 lands on the export row so ``GET /exports`` surfaces it.
-
-Ported from nbdmux 0.9.2's ``server.py`` NbdServer + friends on
-2026-07-13. Simplified for pixie's content-addressed model: no more
-``images_dir`` step (the catalog store owns the blob path); exports
-reference catalog entries by content_sha256 instead of by src_url.
 """
