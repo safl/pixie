@@ -1,0 +1,248 @@
+{% extends "layout.html" %}
+{% from "_partials/recent_events.html" import recent_events_card %}
+{% from "_partials/page_description.html" import page_description %}
+{% block title %}Overlays - pixie{% endblock %}
+
+{# State -> badge. Kept as a macro so the server render + the live-
+   refresh JS below agree on colour + label for every state. #}
+{% macro state_badge(state) %}
+{% if state == 'active' %}<span class="badge text-bg-success"><i class="bi bi-check-circle me-1"></i>Active</span>
+{% elif state == 'idle' %}<span class="badge text-bg-secondary"><i class="bi bi-pause-circle me-1"></i>Idle</span>
+{% elif state == 'orphaned' %}<span class="badge text-bg-warning"><i class="bi bi-question-circle me-1"></i>Orphaned</span>
+{% else %}<span class="badge text-bg-danger"><i class="bi bi-exclamation-triangle me-1"></i>File missing</span>{% endif %}
+{% endmacro %}
+
+{% block subnav %}
+<nav class="navbar subnav-strip" aria-label="Section sub-navigation">
+    <div class="container">
+        <span class="subnav-jumps d-flex align-items-center flex-wrap">
+            <a href="#overlays">Overlays</a>
+            <a href="#events">Events</a>
+        </span>
+    </div>
+</nav>
+{% endblock %}
+
+{% block content %}
+{{ page_description('layers', 'Persistent per-machine qcow2 overlays for nbdboot. Each is one machine\'s writable disk layered over a catalog base image; the disk-used + last-modified columns refresh every 5 s while the page is open. Reset wipes one back to the base image; Prune reclaims overlays whose file is gone or whose machine pixie no longer tracks.') }}
+
+{# ---- Summary strip -------------------------------------------------
+   Fleet-wide roll-up. The numbers poll live alongside the table so an
+   operator watching an overlay grow sees the total tick without a
+   reload. Prune sits with the reclaimable tile it acts on. #}
+<div class="row g-3 mb-4">
+    <div class="col-6 col-lg-3">
+        <div class="card h-100"><div class="card-body py-3">
+            <div class="text-muted small text-uppercase">Overlays</div>
+            <div class="fs-4 fw-semibold" data-total="count">{{ totals.count }}</div>
+        </div></div>
+    </div>
+    <div class="col-6 col-lg-3">
+        <div class="card h-100"><div class="card-body py-3">
+            <div class="text-muted small text-uppercase">Disk used</div>
+            <div class="fs-4 fw-semibold" data-total="used">{{ totals.used_bytes | humanize_bytes }}</div>
+        </div></div>
+    </div>
+    <div class="col-6 col-lg-3">
+        <div class="card h-100"><div class="card-body py-3">
+            <div class="text-muted small text-uppercase">Serving now</div>
+            <div class="fs-4 fw-semibold" data-total="running">{{ totals.running }}</div>
+            <div class="text-muted small"><span data-total="active">{{ totals.active }}</span> back a current binding</div>
+        </div></div>
+    </div>
+    <div class="col-6 col-lg-3">
+        <div class="card h-100"><div class="card-body py-3 d-flex flex-column">
+            <div class="text-muted small text-uppercase">Reclaimable</div>
+            <div class="fs-4 fw-semibold">
+                <span data-total="reclaimable">{{ totals.reclaimable }}</span>
+                <span class="fs-6 text-muted">(<span data-total="reclaimable-used">{{ totals.reclaimable_bytes | humanize_bytes }}</span>)</span>
+            </div>
+            <form method="post" action="/ui/overlays/prune" class="mt-auto"
+                  onsubmit="return confirm('Prune all reclaimable overlays? This deletes the qcow2 for every overlay whose file is already gone or whose machine is no longer registered. Idle overlays for live machines are kept.');">
+                <button type="submit" class="btn btn-sm btn-outline-danger mt-2"
+                        {% if not totals.reclaimable %}disabled{% endif %}
+                        data-prune-btn
+                        title="Delete every file-missing or machine-orphaned overlay.">
+                    <i class="bi bi-trash3 me-1"></i>Prune reclaimable
+                </button>
+            </form>
+        </div></div>
+    </div>
+</div>
+
+<div class="card mb-4" id="overlays">
+    <div class="card-header bg-light fw-semibold d-flex flex-wrap align-items-center gap-2 py-2">
+        <span class="text-nowrap"><i class="bi bi-layers me-1"></i>Overlays</span>
+    </div>
+    {% if overlays %}
+    <div class="table-responsive">
+        <table class="table table-hover align-middle mb-0">
+            <thead class="table-light">
+                <tr>
+                    <th scope="col">State</th>
+                    <th scope="col">Machine</th>
+                    <th scope="col">Profile</th>
+                    <th scope="col">Base image</th>
+                    <th scope="col" class="text-end">Disk used</th>
+                    <th scope="col">Last modified</th>
+                    <th scope="col">Created</th>
+                    <th scope="col">Last boot</th>
+                    <th scope="col">NBD</th>
+                    <th scope="col" class="text-end">Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for ov in overlays %}
+                <tr data-ov-row="{{ ov.key }}">
+                    <td data-cell="state">{{ state_badge(ov.state) }}</td>
+                    <td>
+                        <a href="/ui/machines/{{ ov.mac }}" class="text-decoration-none">
+                            <code>{{ ov.mac }}</code>
+                        </a>
+                        {% if not ov.machine_exists %}
+                        <span class="badge text-bg-light border text-muted ms-1" title="pixie no longer has a row for this MAC">unregistered</span>
+                        {% endif %}
+                        {% if ov.machine_labels %}
+                        <div class="mt-1">
+                            {% for lbl in ov.machine_labels %}
+                            <span class="badge text-bg-light border">{{ lbl }}</span>
+                            {% endfor %}
+                        </div>
+                        {% endif %}
+                    </td>
+                    <td><code>{{ ov.profile }}</code></td>
+                    <td>
+                        {% if ov.image_name %}
+                        <a href="/ui/catalog/{{ ov.image_name }}" class="text-decoration-none">{{ ov.image_name }}</a>
+                        {% else %}
+                        <code class="small" title="{{ ov.image_sha }}">{{ ov.image_sha[:12] }}</code>
+                        {% endif %}
+                        {% if ov.base_bytes %}
+                        <div class="text-muted small">over {{ ov.base_bytes | humanize_bytes }} base</div>
+                        {% endif %}
+                    </td>
+                    <td class="text-end text-nowrap" data-cell="used">
+                        {% if ov.file_exists %}
+                        <span class="fw-semibold">{{ ov.used_bytes | humanize_bytes }}</span>
+                        {% else %}
+                        <span class="text-muted">-</span>
+                        {% endif %}
+                    </td>
+                    <td class="small text-nowrap" data-cell="mtime">
+                        {{ ov.mtime | fmt_ts if ov.mtime else '-' }}
+                    </td>
+                    <td class="small text-muted text-nowrap">{{ ov.created_at | fmt_ts }}</td>
+                    <td class="small text-muted text-nowrap">{{ ov.last_boot_at | fmt_ts if ov.last_boot_at else '-' }}</td>
+                    <td data-cell="nbd">
+                        {% if ov.running %}
+                        <span class="badge text-bg-success">:{{ ov.nbd_port }}</span>
+                        {% else %}
+                        <span class="text-muted small">idle</span>
+                        {% endif %}
+                    </td>
+                    <td class="text-end">
+                        <form method="post" action="/ui/overlays/reset" class="d-inline"
+                              onsubmit="return confirm('Reset overlay {{ ov.profile }} for {{ ov.mac }}? The qcow2 is deleted; the next nbdboot lazy-creates a fresh overlay from the base image. Any state in the current overlay is lost.');">
+                            <input type="hidden" name="mac" value="{{ ov.mac }}">
+                            <input type="hidden" name="image_sha" value="{{ ov.image_sha }}">
+                            <input type="hidden" name="profile" value="{{ ov.profile }}">
+                            <button type="submit" class="btn btn-sm btn-outline-danger text-nowrap"
+                                    title="Delete this overlay's qcow2; next boot starts fresh from the base image.">
+                                <i class="bi bi-arrow-counterclockwise me-1"></i>Reset
+                            </button>
+                        </form>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% else %}
+    <div class="card-body">
+        <p class="text-muted mb-0">
+            <i class="bi bi-inbox me-1"></i>
+            No overlays yet. An overlay is created the first time a machine
+            bound to <code>nbdboot</code> with a persistent profile PXE-boots.
+            Bind one on a <a href="/ui/machines">machine</a>'s detail page.
+        </p>
+    </div>
+    {% endif %}
+</div>
+
+<div id="events">
+{{ recent_events_card(overlay_events, 'overlay', empty_message='No overlay events yet.') }}
+</div>
+
+<script>
+// Live refresh: every 5 s hit /ui/overlays-live.json and update each
+// row's disk-used / last-modified / NBD cells + the summary tiles.
+// Rows that vanish server-side (reset out of band) are dimmed rather
+// than removed, so the operator's scroll position is stable; the next
+// full load drops them. New overlays aren't injected (sort order would
+// be wrong without a re-render) -- they appear on the next page load.
+(function () {
+    const POLL_MS = 5000;
+
+    function humanizeBytes(n) {
+        if (n === null || n === undefined || n < 0) return "-";
+        const units = ["B", "KiB", "MiB", "GiB", "TiB", "PiB"];
+        let size = n, i = 0;
+        while (size >= 1024 && i < units.length - 1) { size /= 1024; i++; }
+        return i === 0 ? `${Math.round(size)} B` : `${size.toFixed(1)} ${units[i]}`;
+    }
+
+    function stateBadge(state) {
+        switch (state) {
+            case "active":  return `<span class="badge text-bg-success"><i class="bi bi-check-circle me-1"></i>Active</span>`;
+            case "idle":    return `<span class="badge text-bg-secondary"><i class="bi bi-pause-circle me-1"></i>Idle</span>`;
+            case "orphaned":return `<span class="badge text-bg-warning"><i class="bi bi-question-circle me-1"></i>Orphaned</span>`;
+            default:        return `<span class="badge text-bg-danger"><i class="bi bi-exclamation-triangle me-1"></i>File missing</span>`;
+        }
+    }
+
+    const rows = document.querySelectorAll("[data-ov-row]");
+
+    async function poll() {
+        try {
+            const r = await fetch("/ui/overlays-live.json", {credentials: "same-origin"});
+            if (!r.ok) return;
+            const data = await r.json();
+            const rowsData = data.rows || {};
+            rows.forEach((tr) => {
+                const key = tr.getAttribute("data-ov-row");
+                const d = rowsData[key];
+                const setCell = (name, html) => {
+                    const cell = tr.querySelector(`[data-cell="${name}"]`);
+                    if (cell && cell.innerHTML !== html) cell.innerHTML = html;
+                };
+                if (!d) { tr.classList.add("opacity-50"); return; }
+                tr.classList.remove("opacity-50");
+                setCell("state", stateBadge(d.state));
+                setCell("used", d.file_exists
+                    ? `<span class="fw-semibold">${humanizeBytes(d.used_bytes)}</span>`
+                    : `<span class="text-muted">-</span>`);
+                setCell("mtime", d.mtime_display || "-");
+                setCell("nbd", d.running
+                    ? `<span class="badge text-bg-success">:${d.nbd_port}</span>`
+                    : `<span class="text-muted small">idle</span>`);
+            });
+            const t = data.totals || {};
+            const setTotal = (name, txt) => {
+                const el = document.querySelector(`[data-total="${name}"]`);
+                if (el && el.textContent !== String(txt)) el.textContent = txt;
+            };
+            setTotal("count", t.count);
+            setTotal("used", humanizeBytes(t.used_bytes));
+            setTotal("running", t.running);
+            setTotal("active", t.active);
+            setTotal("reclaimable", t.reclaimable);
+            setTotal("reclaimable-used", humanizeBytes(t.reclaimable_bytes));
+            const pruneBtn = document.querySelector("[data-prune-btn]");
+            if (pruneBtn) pruneBtn.disabled = !t.reclaimable;
+        } catch (e) { /* swallow; retry next tick */ }
+    }
+
+    setInterval(poll, POLL_MS);
+})();
+</script>
+{% endblock %}

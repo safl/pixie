@@ -539,6 +539,40 @@ def _recent_events_for(events_log: EventsLog, subject_kind: str) -> list[Event]:
     return events_log.list(subject_kind=subject_kind, limit=_RECENT_EVENTS_LIMIT)
 
 
+def _reset_overlay_row(state: Any, mac: str, image_sha: str, profile: str) -> bool:
+    """Tear down one persistent overlay: terminate its qemu-nbd, unlink
+    the qcow2, drop the ``overlays`` row, and emit ``overlay.reset``.
+
+    Returns True iff a row existed. Idempotent: a missing row or a
+    missing file are both no-ops. Shared by the per-machine Reset button
+    and the Overlays page (single Reset + bulk Prune) so every teardown
+    path behaves identically. Kills qemu-nbd first so the qcow2 isn't
+    held open when we unlink it."""
+    from pathlib import Path as _Path
+
+    from pixie.events._kinds import OVERLAY_RESET
+    from pixie.pxe._renderer import _overlay_export_name
+
+    overlays = state.overlays_store
+    row = overlays.get(mac, image_sha, profile)
+    if row is None:
+        return False
+    state.nbd_server.terminate(_overlay_export_name(row))
+    with contextlib_suppress(FileNotFoundError, OSError):
+        _Path(row.qcow2_path).unlink()
+    overlays.delete(mac, image_sha, profile)
+    events = getattr(state, "events_log", None)
+    if events is not None:
+        events.emit(
+            OVERLAY_RESET,
+            subject_kind="machine",
+            subject_id=mac,
+            summary=f"{mac}: overlay {profile!r} reset (image {image_sha[:12]})",
+            details={"mac": mac, "image_sha": image_sha, "profile": profile},
+        )
+    return True
+
+
 def create_app() -> FastAPI:
     """Build the FastAPI app. Factory shape so tests can construct a
     fresh app per fixture without global state."""
@@ -1213,35 +1247,113 @@ def create_app() -> FastAPI:
         Confirm-modal is on the client. Server-side just carries the
         deletion out. Any operator who lands here without confirming
         picked the button already."""
-        from pathlib import Path as _Path
-
-        overlays = request.app.state.overlays_store
-        row = overlays.get(mac, image_sha, profile)
-        if row is not None:
-            # Kill the qemu-nbd first so the qcow2 isn't held open when
-            # we unlink it; qemu-nbd releases its open fd on SIGTERM.
-            from pixie.pxe._renderer import _overlay_export_name
-
-            request.app.state.nbd_server.terminate(_overlay_export_name(row))
-            with contextlib_suppress(FileNotFoundError, OSError):
-                _Path(row.qcow2_path).unlink()
-            overlays.delete(mac, image_sha, profile)
-            events = getattr(request.app.state, "events_log", None)
-            if events is not None:
-                from pixie.events._kinds import OVERLAY_RESET
-
-                events.emit(
-                    OVERLAY_RESET,
-                    subject_kind="machine",
-                    subject_id=mac,
-                    summary=f"{mac}: overlay {profile!r} reset (image {image_sha[:12]})",
-                    details={
-                        "mac": mac,
-                        "image_sha": image_sha,
-                        "profile": profile,
-                    },
-                )
+        _reset_overlay_row(request.app.state, mac, image_sha, profile)
         return RedirectResponse(url=f"/ui/machines/{mac}", status_code=status.HTTP_303_SEE_OTHER)
+
+    # ---------- ui: overlays management -----------------------------
+    #
+    # Persistent per-machine qcow2 overlays get their own page. The
+    # bind form only shows one machine's profiles, so fleet-wide disk
+    # pressure + reclaimable junk have no home there. Rows join the
+    # overlays table against the machine registry, catalog, NBD
+    # supervisor + the qcow2 on disk (see web/_overlays.py). Reset
+    # tears one down; Prune reclaims every file-missing / machine-
+    # orphaned row in one shot (never an idle keep).
+
+    def _overlay_views_now(request: Request) -> list[Any]:
+        from pixie.web._overlays import build_overlay_views
+
+        state = request.app.state
+        return build_overlay_views(
+            overlays=state.overlays_store,
+            machines=state.machines_store,
+            catalog=state.catalog_store,
+            nbd=state.nbd_server,
+        )
+
+    @app.get("/ui/overlays", response_model=None)
+    def ui_overlays(
+        request: Request,
+        _auth: None = Depends(_require_ui_auth),
+    ) -> HTMLResponse:
+        from pixie.web._overlays import overlay_totals
+
+        views = _overlay_views_now(request)
+        # Recent overlay-lifecycle events (created / reset / booted).
+        # subject_kind is "machine" for all of them, so filter by the
+        # ``overlay.`` kind prefix rather than subject_kind here.
+        overlay_events = [
+            e for e in request.app.state.events_log.list(limit=200) if e.kind.startswith("overlay.")
+        ][:_RECENT_EVENTS_LIMIT]
+        return templates.TemplateResponse(
+            request,
+            "overlays.html",
+            {
+                "version": pixie.__version__,
+                "overlays": views,
+                "totals": overlay_totals(views),
+                "overlay_events": overlay_events,
+                "authed": True,
+                "page": "overlays",
+            },
+        )
+
+    @app.get("/ui/overlays-live.json")
+    def ui_overlays_live(
+        request: Request,
+        _auth: None = Depends(_require_ui_auth),
+    ) -> JSONResponse:
+        from pixie.web._overlays import overlay_totals
+
+        store: SettingsStore = request.app.state.settings_store
+        views = _overlay_views_now(request)
+        rows: dict[str, dict[str, Any]] = {}
+        for v in views:
+            j = v.to_json()
+            j["mtime_display"] = format_ts(v.mtime, store) if v.mtime else "-"
+            rows[v.key] = j
+        return JSONResponse({"rows": rows, "totals": overlay_totals(views).to_json()})
+
+    @app.post("/ui/overlays/reset")
+    def ui_overlays_reset(
+        request: Request,
+        mac: str = Form(...),
+        image_sha: str = Form(...),
+        profile: str = Form(...),
+        _auth: None = Depends(_require_ui_auth),
+    ) -> RedirectResponse:
+        """Tear down a single overlay from the Overlays page. Same
+        operation as the per-machine Reset button; redirects back to
+        the overlays list instead of the machine detail."""
+        _reset_overlay_row(request.app.state, mac, image_sha, profile)
+        return RedirectResponse(url="/ui/overlays", status_code=status.HTTP_303_SEE_OTHER)
+
+    @app.post("/ui/overlays/prune")
+    def ui_overlays_prune(
+        request: Request,
+        _auth: None = Depends(_require_ui_auth),
+    ) -> RedirectResponse:
+        """Reclaim every overlay whose qcow2 is gone from disk or whose
+        machine pixie no longer tracks. Deliberate ``idle`` keeps (a
+        profile a live machine could rebind to) are left untouched."""
+        pruned = 0
+        for v in _overlay_views_now(request):
+            if v.reclaimable and _reset_overlay_row(
+                request.app.state, v.mac, v.image_sha, v.profile
+            ):
+                pruned += 1
+        events = getattr(request.app.state, "events_log", None)
+        if events is not None and pruned:
+            from pixie.events._kinds import OVERLAY_RESET
+
+            events.emit(
+                OVERLAY_RESET,
+                subject_kind="machine",
+                subject_id="",
+                summary=f"pruned {pruned} reclaimable overlay(s)",
+                details={"pruned": pruned},
+            )
+        return RedirectResponse(url="/ui/overlays", status_code=status.HTTP_303_SEE_OTHER)
 
     @app.post("/ui/machines/{mac}/labels/edit")
     def ui_machines_labels_edit(
