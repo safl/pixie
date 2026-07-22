@@ -131,3 +131,74 @@ def test_argparse_deploy_accepts_flags() -> None:
     assert args.admin_password == "hunter2"
     assert args.host_addr == "10.20.30.40"
     assert args.force is True
+
+
+def test_argparse_purge_accepts_flags() -> None:
+    parser = _build_parser()
+    args = parser.parse_args(["purge", "/opt/pixie", "--data", "--images", "--all", "--yes"])
+    assert args.cmd == "purge"
+    assert args.data and args.images and args.all and args.yes
+
+
+def _fake_stdin_no_tty(monkeypatch: pytest.MonkeyPatch) -> None:
+    import io
+
+    from pixie.deploy import _main
+
+    monkeypatch.setattr(_main.sys, "stdin", io.StringIO(""))  # isatty() -> False
+
+
+def test_purge_data_yes_removes_bind_mounted_data(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from pixie.deploy import _main
+
+    monkeypatch.setattr(_main, "_compose_cmd", lambda: ["true"])
+    (tmp_path / "envvars").write_text("PIXIE_ADMIN_PASSWORD=x\n")
+    data = tmp_path / "data"
+    data.mkdir()
+    (data / "state.db").write_text("x")
+    args = _build_parser().parse_args(["purge", str(tmp_path), "--data", "--yes"])
+    assert _main._cmd_purge(args) == 0
+    assert not data.exists()  # bind-mounted data actually removed
+
+
+def test_purge_yes_without_data_keeps_state(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from pixie.deploy import _main
+
+    monkeypatch.setattr(_main, "_compose_cmd", lambda: ["true"])
+    (tmp_path / "envvars").write_text("x\n")
+    data = tmp_path / "data"
+    data.mkdir()
+    args = _build_parser().parse_args(["purge", str(tmp_path), "--yes"])
+    assert _main._cmd_purge(args) == 0
+    assert data.exists()  # plain stop leaves state in place
+
+
+def test_purge_without_yes_aborts_unattended(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from pixie.deploy import _main
+
+    _fake_stdin_no_tty(monkeypatch)
+    monkeypatch.setattr(_main, "_compose_cmd", lambda: ["true"])
+    (tmp_path / "envvars").write_text("x\n")
+    data = tmp_path / "data"
+    data.mkdir()
+    args = _build_parser().parse_args(["purge", str(tmp_path), "--data"])
+    assert _main._cmd_purge(args) == 1  # refused; no TTY, no --yes
+    assert data.exists()  # nothing changed
+
+
+def test_purge_all_removes_deploy_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from pixie.deploy import _main
+
+    monkeypatch.setattr(_main, "_compose_cmd", lambda: ["true"])
+    (tmp_path / "envvars").write_text("x\n")
+    (tmp_path / "compose.yml").write_text("services: {}\n")
+    (tmp_path / "data").mkdir()
+    args = _build_parser().parse_args(["purge", str(tmp_path), "--all", "--yes"])
+    assert _main._cmd_purge(args) == 0
+    assert not tmp_path.exists()  # --all removes the deploy dir
