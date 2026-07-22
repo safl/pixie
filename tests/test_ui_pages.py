@@ -206,8 +206,7 @@ def test_ui_machine_detail_renders_cpu_and_memory_from_lshw(client: TestClient) 
     assert r.status_code == 204
     body = c.get("/ui/machines/aa:bb:cc:dd:ee:03").text
     assert "AMD EPYC 7402P 24-Core Processor" in body
-    assert ">24<" in body  # cores stat block
-    assert ">48<" in body  # threads stat block
+    assert "24 cores / 48 threads" in body  # compact CPU line
     assert "16.0 GiB" in body  # occupied DIMM size in the slot tooltip
     assert "1 / 2 slots populated" in body
 
