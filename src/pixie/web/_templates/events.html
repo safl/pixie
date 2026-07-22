@@ -74,6 +74,23 @@
             <i class="bi bi-x-circle"></i>
         </a>
         {% endif %}
+        {# Bulk actions, pushed to the right. Acknowledge advances the
+           ack cursor so the dashboard error count zeros (the log is
+           left intact); Clear wipes the whole log after a confirm. #}
+        <form method="post" action="/ui/events/ack" class="m-0 ms-auto">
+            <input type="hidden" name="next" value="/ui/events">
+            <button type="submit" class="btn btn-sm btn-outline-secondary text-nowrap"
+                    title="Mark current errors as seen: zeros the dashboard error count. Deletes nothing.">
+                <i class="bi bi-check2-all me-1"></i>Acknowledge
+            </button>
+        </form>
+        <form method="post" action="/ui/events/clear" class="m-0"
+              onsubmit="return confirm('Clear the entire event log? This permanently deletes every event.');">
+            <button type="submit" class="btn btn-sm btn-outline-danger text-nowrap"
+                    title="Permanently delete every event from the log.">
+                <i class="bi bi-trash3 me-1"></i>Clear log
+            </button>
+        </form>
         {{ pagination_inline(page_state, preserved, label='events') }}
     </div>
     {% if events %}

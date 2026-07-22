@@ -188,6 +188,11 @@ AUTH_LOGIN_SUCCEEDED = "auth.login.succeeded"
 AUTH_LOGIN_FAILED = "auth.login.failed"
 """POST /ui/login with a wrong admin password."""
 
+EVENTS_CLEARED = "events.cleared"
+"""Operator wiped the event log via ``POST /ui/events/clear``. Emitted
+right after the wipe so the freshly-empty log still records who reset
+it and when; carries the deleted-row count in ``details``."""
+
 
 # The canonical closed set. Every kind above is registered here; the
 # ``EventsLog.emit`` call rejects anything not in this frozenset.
@@ -222,6 +227,7 @@ KNOWN_EVENT_KINDS: frozenset[str] = frozenset(
         TFTP_STOPPED,
         AUTH_LOGIN_SUCCEEDED,
         AUTH_LOGIN_FAILED,
+        EVENTS_CLEARED,
     }
 )
 
