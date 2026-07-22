@@ -7,14 +7,33 @@ perceives, defaults that survived a `pip install -U`, and gates that
 landed in CI.
 
 Per-release commit history lives in `git log`; this file is the
-operator-facing summary. Nothing between the 0.1.0 skeleton and the
-next real release has been tagged: the intermediate work all lands
-under `[Unreleased]` until an operator can drive the full flow end-
-to-end on real hardware.
+operator-facing summary.
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-07-22
+
+First real release after the 0.1.0 skeleton: nbdboot (ephemeral +
+persistent per-machine overlays) validated end-to-end on real
+hardware, plus a bty-lab-shaped deploy CLI and an operator-managed
+event log.
+
 ### Added
+
+**Event-log Acknowledge + Clear actions.** The `/ui/events` page grows
+two bulk actions: **Acknowledge** advances the ack cursor so the
+dashboard's unacknowledged-error count zeros without touching the log,
+and **Clear** wipes the whole log (behind a confirm) and drops one
+`events.cleared` marker so the reset itself stays on the record.
+Mirrors the ack/clear affordances bty's event log carried.
+
+**`pixie-lab purge` reworked to match `bty-lab`.** `purge` now prints
+a plan and gates the destructive parts behind a `y/N` confirmation
+(`-y`/`--yes` to skip; a non-TTY refuses without `--yes`). Flags:
+`--data` deletes the on-disk state (previously `--wipe-data`, which
+never actually removed the bind-mounted `data/`), `--images` removes
+the container image, and `--all` also removes the deploy directory
+(implies `--data`).
 
 **Per-machine persistent qcow2 overlays under `nbdboot`.** A new
 `overlay_profile` field on the machine binding flips one target from
