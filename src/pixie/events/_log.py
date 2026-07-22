@@ -153,6 +153,15 @@ class EventsLog:
             row.id = int(cur.lastrowid) if cur.lastrowid is not None else None
         return row
 
+    def clear(self) -> int:
+        """Delete every event row; return how many were removed. Backs
+        the operator-facing 'clear log' action. The caller is expected
+        to emit an :data:`~pixie.events._kinds.EVENTS_CLEARED` marker
+        immediately after so the reset itself stays on the record."""
+        with _DB_WRITE_LOCK, self._conn() as conn:
+            cur = conn.execute("DELETE FROM events")
+            return cur.rowcount if cur.rowcount is not None else 0
+
     def stats(self, ack_ts: str = "") -> dict[str, Any]:
         """Aggregate counters for the dashboard events card.
 

@@ -52,6 +52,7 @@ from pixie.events._kinds import (
     CATALOG_FETCH_UNCHANGED,
     CATALOG_IMPORT_FAILED,
     CATALOG_IMPORT_OK,
+    EVENTS_CLEARED,
     EXPORT_NBDKIT_SPAWNED,
     TFTP_STARTED,
     TFTP_STOPPED,
@@ -1489,6 +1490,7 @@ def create_app() -> FastAPI:
     @app.post("/ui/events/ack")
     def ui_events_ack(
         request: Request,
+        next: str = Form("/ui/"),
         _auth: None = Depends(_require_ui_auth),
     ) -> RedirectResponse:
         """Advance the events-ack cursor to now so the dashboard's
@@ -1500,15 +1502,38 @@ def create_app() -> FastAPI:
         searching still happens on ``/ui/events`` via the existing
         kind + subject_kind pickers.
 
-        Follow-the-redirect pattern: HTML POST from the dashboard's
-        Acknowledge button lands back on /ui/ (302). JSON callers
-        that want the new ack ts back can GET
-        /ui/dashboard-live.json immediately after.
+        ``next`` lets the caller pick the landing page: the dashboard
+        button omits it (default /ui/); the events page passes
+        /ui/events so the operator stays put. Constrained to a /ui/
+        path so the field can't be turned into an open redirect.
         """
         from pixie._util import now_iso as _ack_now
 
         request.app.state.settings_store.set_value("events_ack_ts", _ack_now())
-        return RedirectResponse(url="/ui/", status_code=status.HTTP_303_SEE_OTHER)
+        target = next if next.startswith("/ui/") else "/ui/"
+        return RedirectResponse(url=target, status_code=status.HTTP_303_SEE_OTHER)
+
+    @app.post("/ui/events/clear")
+    def ui_events_clear(
+        request: Request,
+        _auth: None = Depends(_require_ui_auth),
+    ) -> RedirectResponse:
+        """Wipe the whole event log, then drop one ``events.cleared``
+        marker so the freshly-empty log still records the reset. Also
+        advances the ack cursor: with the history gone there's nothing
+        left to be unacknowledged, so the dashboard error count zeros.
+        Destructive; the events page gates the button behind a confirm
+        dialog."""
+        from pixie._util import now_iso as _ack_now
+
+        removed = request.app.state.events_log.clear()
+        request.app.state.events_log.emit(
+            EVENTS_CLEARED,
+            summary=f"event log cleared ({removed} rows)",
+            details={"removed": removed},
+        )
+        request.app.state.settings_store.set_value("events_ack_ts", _ack_now())
+        return RedirectResponse(url="/ui/events", status_code=status.HTTP_303_SEE_OTHER)
 
     # ---------- live fetch progress ---------------------------------
     #

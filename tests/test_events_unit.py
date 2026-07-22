@@ -151,3 +151,36 @@ def test_ui_events_requires_auth(client: TestClient) -> None:
     r = client.get("/ui/events", follow_redirects=False)
     assert r.status_code == 303
     assert r.headers["location"] == "/ui/login"
+
+
+def test_clear_removes_all_events(tmp_path: Path) -> None:
+    log = EventsLog(tmp_path / "state.db")
+    for i in range(4):
+        log.emit("catalog.fetch.started", subject_kind="entry", subject_id=f"e{i}")
+    assert log.clear() == 4
+    assert log.list() == []
+
+
+def test_ui_events_clear_wipes_and_leaves_marker(client: TestClient) -> None:
+    c = _authed(client)  # the login itself emits auth.login.succeeded
+    r = c.post("/ui/events/clear", follow_redirects=False)
+    assert r.status_code == 303
+    assert r.headers["location"] == "/ui/events"
+    # The log is wiped except for the events.cleared marker the route drops.
+    assert "events.cleared" in c.get("/ui/events").text
+
+
+def test_ui_events_ack_honours_next_and_guards_open_redirect(client: TestClient) -> None:
+    c = _authed(client)
+    r = c.post("/ui/events/ack", data={"next": "/ui/events"}, follow_redirects=False)
+    assert r.status_code == 303
+    assert r.headers["location"] == "/ui/events"
+    # A non-/ui/ next is refused (no open redirect) and falls back to /ui/.
+    r2 = c.post("/ui/events/ack", data={"next": "https://evil.test/"}, follow_redirects=False)
+    assert r2.headers["location"] == "/ui/"
+
+
+def test_ui_events_clear_requires_auth(client: TestClient) -> None:
+    r = client.post("/ui/events/clear", follow_redirects=False)
+    assert r.status_code == 303
+    assert r.headers["location"] == "/ui/login"
