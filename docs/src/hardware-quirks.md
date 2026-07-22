@@ -69,6 +69,38 @@ workaround kicks in the kernel logs:
 
 ...and the live-boot initrd fetches the squashfs normally.
 
+## Target firmware prerequisites (not cmdline)
+
+Two quirks are about the target's firmware / BMC rather than a kernel
+token, but they produce the same "nbdboot doesn't work" report.
+
+### UEFI network boot must be enabled in BIOS
+
+nbdboot only happens if the target's UEFI actually PXE-boots. If the
+board's network stack / PXE option-ROM is disabled in BIOS setup, or
+the network device isn't in the boot order, the machine silently boots
+its local disk instead - and, because that local install answers SSH,
+it's easy to mistake for a working nbdboot. Some BMCs make this worse:
+a one-shot **or** persistent "boot from PXE" override set over IPMI /
+Redfish is accepted by the BMC (`bootparam get 5` shows `Force PXE`)
+yet **ignored by the BIOS**, and the target never even appears in
+pixie's access log. Seen on a Supermicro board whose BIOS network boot
+had been turned off. Fix in BIOS setup directly: enable the UEFI
+network stack + PXE, and put the NIC ahead of the local disk in the
+boot order. Confirm success from pixie's side (a `GET /pxe/<mac>` in
+the log, then `online.started … ramboot.up` status events), not from
+SSH being open.
+
+### Don't trust IPMI SOL to prove a boot
+
+Some BMCs (e.g. the GIGABYTE MC12-LE0's Aspeed) do **not** mirror the
+host serial console to IPMI SOL, so SOL stays blank even though the
+target booted fine and `serial-getty@ttyS1` is running. Absence of a
+login prompt on SOL is not proof of a failed boot on those boards.
+Judge nbdboot by ground truth instead: root is `/dev/nbd0` (not the
+SATA/NVMe disk), a live NBD socket to pixie's export port, and the
+image's hostname rather than the local install's.
+
 ## Adding a row
 
 If you hit new hardware, keep the row short. Reader wants:

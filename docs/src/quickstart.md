@@ -12,7 +12,7 @@ pipx install pixie-lab
 `pipx` is preferred so pixie's runtime deps stay isolated from the
 system Python. `uv tool install pixie-lab` works too.
 
-The `pixie-lab` distribution ships two console-scripts: `pixie-deploy`
+The `pixie-lab` distribution ships two console-scripts: `pixie-lab`
 generates the container deployment bundle, and `pixie` is the
 operator TUI baked into the pixie live env (targets run it after
 booting the live env; operators don't call it directly on their
@@ -22,11 +22,11 @@ workstation).
 
 ```
 mkdir /opt/pixie && cd /opt/pixie
-pixie-deploy init
+pixie-lab init
 ${EDITOR:-vi} envvars     # set PIXIE_HOST_ADDR + PIXIE_ADMIN_PASSWORD
 ```
 
-`pixie-deploy init` writes `compose.yml`, `envvars` (with placeholder
+`pixie-lab init` writes `compose.yml`, `envvars` (with placeholder
 values), and `envvars.example` into the current directory. Edit
 `envvars` to point pixie at your LAN address and set a real admin
 password.
