@@ -11,7 +11,21 @@ operator-facing summary.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-07-23
+
+Operator-facing surface + release plumbing. A fleet overlay-management
+page, a tightened inventory view, and a dedicated live-env pane; the
+release now ships the container image + boot media + a curated catalog,
+and pixie can fetch its own live-env.
+
 ### Added
+
+**Fleet-wide overlay management page.** A new **Overlays** page
+(`/ui/overlays`) lists every persistent nbdboot qcow2 across the fleet
+with disk-used, last-modified, serving port, and a state
+(active / idle / orphaned / missing); per-row Reset and a Prune that
+reclaims only the orphaned + missing ones. The machine-detail Inventory
+view was tightened from stacked stat-cards into one dense summary.
 
 **Pixie ships a curated catalog and defaults to it, not nosi's.** A
 fresh (empty) catalog is seeded on first start from a `catalog.toml`
