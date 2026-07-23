@@ -54,6 +54,8 @@ from pixie.events._kinds import (
     CATALOG_IMPORT_OK,
     EVENTS_CLEARED,
     EXPORT_NBDKIT_SPAWNED,
+    LIVE_ENV_FETCH_DONE,
+    LIVE_ENV_FETCH_FAILED,
     TFTP_STARTED,
     TFTP_STOPPED,
 )
@@ -75,9 +77,11 @@ from pixie.web._auth import (
     using_default_password,
 )
 from pixie.web._settings_store import (
+    DEFAULT_LIVE_ENV_SRC,
     KEY_DATETIME_FORMAT,
     KEY_DISPLAY_TZ,
     KEY_LIVE_ENV_EXTRA_CMDLINE,
+    KEY_LIVE_ENV_SRC,
     SettingsStore,
     SettingValueError,
     format_ts,
@@ -425,6 +429,20 @@ def _deployment_envvar_docs() -> list[dict[str, str]]:
             ),
         },
         {
+            "name": "PIXIE_LIVE_ENV_SRC",
+            "default": (
+                "https://github.com/safl/pixie/releases/latest/download/"
+                "pixie-live-env-x86_64.tar.gz"
+            ),
+            "purpose": (
+                "Tarball the dashboard 'Fetch live-env' action pulls the"
+                " netboot-pc bake from (https:// or oras://). Defaults to"
+                " the latest pixie GitHub release; point at a mirror for"
+                " air-gapped deploys. Live-editable override on the"
+                " Settings > Live-env card."
+            ),
+        },
+        {
             "name": FETCH_POOL_SIZE_ENV,
             "default": str(DEFAULT_FETCH_POOL_SIZE),
             "purpose": (
@@ -673,6 +691,11 @@ def create_app() -> FastAPI:
         thread_name_prefix="pixie-fetch",
     )
     app.state.fetch_states = {}
+    # Single-slot progress dict for the operator "Fetch live-env"
+    # action (there is one live env per pixie, not one per resource).
+    # Shape mirrors a fetch_states entry: state -> fetching / done /
+    # error, plus phase + byte counters while the download runs.
+    app.state.live_env_fetch_state = {}
 
     # SessionMiddleware signs the ``pixie-token`` cookie. Sliding TTL:
     # 7 days from last touch. ``https_only=False`` because pixie is
@@ -1559,6 +1582,8 @@ def create_app() -> FastAPI:
             "live_env_ready": live_env_ready,
             "live_env_dir": str(live_env_dir) if live_env_dir is not None else "",
             "live_env_files": live_env_files,
+            "live_env_src": request.app.state.settings_store.resolve_live_env_src(),
+            "live_env_fetch_state": dict(request.app.state.live_env_fetch_state),
         }
 
     @app.get("/ui/dashboard-live.json")
@@ -2125,6 +2150,8 @@ def create_app() -> FastAPI:
         fmt_effective = store.resolve_datetime_format()
         cmdline_override = store.get(KEY_LIVE_ENV_EXTRA_CMDLINE) or ""
         cmdline_effective = store.resolve_live_env_extra_cmdline()
+        live_env_src_override = store.get(KEY_LIVE_ENV_SRC) or ""
+        live_env_src_effective = store.resolve_live_env_src()
         deployment_envvars = _deployment_envvar_docs()
         deployment_state = _deployment_state()
         return {
@@ -2153,6 +2180,13 @@ def create_app() -> FastAPI:
                 "default": "",
                 "env": "PIXIE_LIVE_ENV_EXTRA_CMDLINE",
                 "updated_at": store.updated_at(KEY_LIVE_ENV_EXTRA_CMDLINE) or "",
+            },
+            "live_env_src": {
+                "override": live_env_src_override,
+                "effective": live_env_src_effective,
+                "default": DEFAULT_LIVE_ENV_SRC,
+                "env": "PIXIE_LIVE_ENV_SRC",
+                "updated_at": store.updated_at(KEY_LIVE_ENV_SRC) or "",
             },
             "flash_error": flash_error,
         }
@@ -2250,6 +2284,86 @@ def create_app() -> FastAPI:
         else:
             store.clear(KEY_LIVE_ENV_EXTRA_CMDLINE)
         return RedirectResponse(url="/ui/settings", status_code=status.HTTP_303_SEE_OTHER)
+
+    @app.post("/ui/settings/live-env-src/edit", response_model=None)
+    def ui_settings_live_env_src_edit(
+        request: Request,
+        live_env_src: str = Form(""),
+        _auth: None = Depends(_require_ui_auth),
+    ) -> RedirectResponse:
+        """Persist the live-env fetch-src override. Blank clears it so
+        the value falls back to $PIXIE_LIVE_ENV_SRC then the default
+        GitHub-release URL."""
+        store: SettingsStore = request.app.state.settings_store
+        raw = (live_env_src or "").strip()
+        if raw:
+            store.set_value(KEY_LIVE_ENV_SRC, raw)
+        else:
+            store.clear(KEY_LIVE_ENV_SRC)
+        return RedirectResponse(url="/ui/settings", status_code=status.HTTP_303_SEE_OTHER)
+
+    @app.post("/ui/live-env/fetch")
+    def ui_live_env_fetch(
+        request: Request,
+        _auth: None = Depends(_require_ui_auth),
+    ) -> RedirectResponse:
+        """Download the live-env tarball (from PIXIE_LIVE_ENV_SRC or its
+        override) and stage vmlinuz + initrd + live.squashfs under
+        PIXIE_LIVE_ENV_DIR, on the fetch pool. The in-app replacement
+        for a manual ``make build VARIANT=netboot-pc`` + copy. Progress
+        lands on ``app.state.live_env_fetch_state`` for the dashboard to
+        poll; idempotent while a fetch is already running."""
+        state = request.app.state
+        live_env_dir = state.live_env_dir
+        fs = state.live_env_fetch_state
+        if live_env_dir is None:
+            fs.clear()
+            fs.update(
+                {
+                    "state": "error",
+                    "error": "no live-env dir (PIXIE_LIVE_ENV_DIR unset or unwritable)",
+                    "at_iso": _now_iso(),
+                }
+            )
+            return RedirectResponse(url="/ui/", status_code=status.HTTP_303_SEE_OTHER)
+        if fs.get("state") == "fetching":
+            return RedirectResponse(url="/ui/", status_code=status.HTTP_303_SEE_OTHER)
+
+        src = state.settings_store.resolve_live_env_src()
+        fs.clear()
+        fs.update({"state": "fetching", "src": src, "phase": "starting", "at_iso": _now_iso()})
+        events = getattr(state, "events_log", None)
+
+        def _run() -> None:
+            from pixie.catalog._live_env import stage_live_env
+
+            def _report(payload: dict[str, Any]) -> None:
+                # Layer phase / byte counters onto the "fetching" pill.
+                fs.update(payload)
+
+            try:
+                result = stage_live_env(src, live_env_dir, progress=_report)
+            except Exception as exc:
+                fs.clear()
+                fs.update({"state": "error", "src": src, "error": str(exc), "at_iso": _now_iso()})
+                if events is not None:
+                    events.emit(
+                        LIVE_ENV_FETCH_FAILED,
+                        summary=f"live-env fetch failed: {exc}",
+                        details={"src": src, "error": str(exc)},
+                    )
+                return
+            fs.clear()
+            fs.update({"state": "done", "src": src, "sha256": result.sha256, "at_iso": _now_iso()})
+            if events is not None:
+                events.emit(
+                    LIVE_ENV_FETCH_DONE,
+                    summary=f"live-env staged from {src} (sha {result.sha256[:12]})",
+                    details={"src": src, "sha256": result.sha256, "bytes": result.size},
+                )
+
+        state.fetch_pool.submit(_run)
+        return RedirectResponse(url="/ui/", status_code=status.HTTP_303_SEE_OTHER)
 
     # ---------- feature routers --------------------------------------
     #

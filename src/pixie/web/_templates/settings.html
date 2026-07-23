@@ -147,6 +147,42 @@
                 </span>
             </div>
         </form>
+
+        <hr class="my-4">
+
+        {# Where the dashboard "Fetch live-env" action pulls the
+           netboot-pc bake from. Blank = the GitHub-release default. #}
+        <form method="post" action="/ui/settings/live-env-src/edit" class="row g-3">
+            <div class="col-12">
+                <label for="live_env_src" class="form-label">
+                    Live-env fetch source
+                    <span class="badge text-bg-{% if live_env_src.override %}primary{% else %}secondary{% endif %} ms-1">
+                        {% if live_env_src.override %}override{% elif live_env_src.effective != live_env_src.default %}env{% else %}default{% endif %}
+                    </span>
+                </label>
+                <input type="text" id="live_env_src" name="live_env_src"
+                       class="form-control font-monospace"
+                       value="{{ live_env_src.override }}"
+                       placeholder="{{ live_env_src.default }}">
+                <div class="form-text">
+                    Tarball the dashboard <span class="fw-semibold">Fetch live-env</span>
+                    action downloads (<code>https://</code> or <code>oras://</code>);
+                    it must unpack to <code>vmlinuz</code> + <code>initrd</code> +
+                    <code>live.squashfs</code>. Blank falls back to
+                    <code>{{ live_env_src.env }}</code> then the latest pixie
+                    GitHub release. Point at a mirror for air-gapped deploys.
+                    Currently effective: <code>{{ live_env_src.effective }}</code>.
+                    {% if live_env_src.updated_at %}
+                    <br>Last updated: <code>{{ live_env_src.updated_at | fmt_ts }}</code>.
+                    {% endif %}
+                </div>
+            </div>
+            <div class="col-12">
+                <button type="submit" class="btn btn-primary">
+                    <i class="bi bi-check2 me-1"></i>Save source
+                </button>
+            </div>
+        </form>
     </div>
 </div>
 
