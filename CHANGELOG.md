@@ -11,6 +11,20 @@ operator-facing summary.
 
 ## [Unreleased]
 
+### Added
+
+**Releases now ship the container image and the boot media, not just
+the PyPI package.** Tagging `v*` publishes the appliance image to
+`ghcr.io/safl/pixie` (`:<version>` + `:latest`) and creates a GitHub
+Release with the boot media attached: the netboot-pc live-env bake
+(`vmlinuz` + `initrd` + `squashfs`) that the `pixie-flash-once` /
+`pixie-flash-always` / `pixie-inventory` / `pixie-tui` modes chain
+into, and the `usbboot-pc` bootable `.iso.gz`, each with a `.sha256`.
+Previously a tag published only to PyPI, so the ghcr image that
+`pixie-lab deploy` pins and the live-env media both existed only as
+ephemeral CI artifacts or a local `make build` -- a fresh
+`pixie-lab deploy` pulled an image that was never pushed.
+
 ## [0.2.0] - 2026-07-22
 
 First real release after the 0.1.0 skeleton: nbdboot (ephemeral +

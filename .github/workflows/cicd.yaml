@@ -17,6 +17,14 @@ name: cicd
 #     version cannot be re-uploaded -- so the job gates on every
 #     prior job (test + integration + build-container + build-wheel
 #     + build-media + every PXE chain test) succeeding first.
+#   * ``publish-container``: build + push the appliance image to
+#     ghcr.io/<owner>/pixie (``:<version>`` + ``:latest``), v* tags
+#     only. Before this the image was smoke-built and thrown away, so
+#     the documented ghcr image was never populated by CI.
+#   * ``publish-release``: create the GitHub Release for the tag and
+#     attach the media ``build-media`` produces -- the netboot-pc
+#     live-env bake + the usbboot-pc bootable image + checksums. These
+#     used to live only as ephemeral, login-gated workflow artifacts.
 #
 # First publish (claiming the pixie-lab name) requires a one-time
 # PyPI setup: register a Pending Publisher on https://pypi.org
@@ -602,3 +610,104 @@ jobs:
           # later job is retrying), succeed silently rather than
           # fail.
           skip-existing: true
+
+  publish-container:
+    name: Publish container image to ghcr
+    # Build + push the appliance image to ghcr.io/<owner>/pixie on a
+    # v* tag: ``:<version>`` (the tag minus its leading ``v``) plus
+    # ``:latest``. This is the image the compose deploy runs; before
+    # this the ``build-container`` job only smoke-built it and threw it
+    # away, so ghcr.io/safl/pixie was never populated by CI. Gated on
+    # the whole pipeline like publish-pypi -- never ship an image the
+    # boot-chain tests did not pass against.
+    needs:
+      - test
+      - integration
+      - build-container
+      - build-wheel
+      - build-media
+      - test-pxe
+      - test-pxe-nbdboot
+      - test-pxe-inventory
+      - test-pxe-tui
+      - test-pxe-flash
+      - test-pxe-flash-always
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v6
+      - name: Log in to ghcr.io
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" \
+            | podman login ghcr.io -u "${{ github.actor }}" --password-stdin
+      - name: Build + push image
+        run: |
+          set -eu
+          IMAGE=ghcr.io/${{ github.repository_owner }}/pixie
+          VERSION=${GITHUB_REF_NAME#v}
+          podman build \
+            --build-arg PIXIE_VERSION="$VERSION" \
+            -t "$IMAGE:$VERSION" \
+            -t "$IMAGE:latest" \
+            -f Containerfile .
+          podman push "$IMAGE:$VERSION"
+          podman push "$IMAGE:latest"
+
+  publish-release:
+    name: Publish GitHub Release (media assets)
+    # Attach the media CI already builds -- the netboot-pc live-env
+    # bake (vmlinuz + initrd + squashfs) and the usbboot-pc bootable
+    # image -- to a GitHub Release on v* tags. Before this they only
+    # existed as ephemeral, login-gated workflow artifacts, so an
+    # operator had no released live-env or USB image to download. Same
+    # full-pipeline gate as the other publish jobs.
+    needs:
+      - test
+      - integration
+      - build-container
+      - build-wheel
+      - build-media
+      - test-pxe
+      - test-pxe-nbdboot
+      - test-pxe-inventory
+      - test-pxe-tui
+      - test-pxe-flash
+      - test-pxe-flash-always
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: write
+    steps:
+      - name: Download media artifacts
+        uses: actions/download-artifact@v8
+        with:
+          # Both build-media matrix legs upload under this shape:
+          # ``pixie-netboot-pc-x86_64`` + ``pixie-usbboot-pc-x86_64``.
+          # merge-multiple flattens both into one directory.
+          pattern: pixie-*-pc-x86_64
+          merge-multiple: true
+          path: release-assets
+      - name: List release assets
+        run: ls -la release-assets
+      - name: Create / update GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release-assets/*
+          # Fail loud if the glob matched nothing -- a release with no
+          # media is the bug this job exists to prevent.
+          fail_on_unmatched_files: true
+          generate_release_notes: true
+          body: |
+            ## Distribution
+
+            - Container image: `ghcr.io/${{ github.repository_owner }}/pixie:latest` and the matching version tag (this tag without the leading `v`).
+            - Python CLI: `uv tool install pixie-lab` (or `pip install pixie-lab`).
+
+            ## Media assets attached here
+
+            - `pixie-netboot-pc-x86_64-*.{vmlinuz,initrd,squashfs}` — the pixie live-env (netboot-pc bake) the `pixie-flash-once` / `pixie-flash-always` / `pixie-inventory` / `pixie-tui` boot modes chain into. Stage the trio under `PIXIE_LIVE_ENV_DIR` (defaults to `data/live-env/`).
+            - `pixie-usbboot-pc-x86_64-*.iso.gz` — bootable USB / ISO media for the pixie live env.
+            - `*.sha256` — checksums for the above.
