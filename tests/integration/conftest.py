@@ -159,6 +159,13 @@ def container(tmp_path_factory: pytest.TempPathFactory) -> Iterator[dict[str, ob
             f"PIXIE_TFTP_PORT={HOST_TFTP_PORT}",
             "-e",
             "PIXIE_TFTP_BIND=127.0.0.1",
+            # Start with an empty catalog: the integration suite adds +
+            # deletes its own entries and its per-test reset can't remove
+            # the seeded entries (their names contain spaces the reset's
+            # un-encoded delete query doesn't handle). Deterministic +
+            # matches the unit conftest.
+            "-e",
+            "PIXIE_SEED_CATALOG=0",
             # A local writable dir for state; the container's default
             # /var/lib/pixie is intended to be a volume mount.
             "-v",
