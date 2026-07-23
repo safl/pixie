@@ -93,6 +93,19 @@ podman build -t pixie:local -f Containerfile .
 cd /opt/pixie && podman compose --env-file envvars up -d
 ```
 
+### Stage the live env
+
+The `pixie-flash-*`, `pixie-inventory`, and `pixie-tui` boot modes chain
+into pixie's live env (`vmlinuz` + `initrd` + `live.squashfs`). Click
+**Fetch live-env** on the dashboard Live-env card and pixie pulls the
+netboot-pc bake from `PIXIE_LIVE_ENV_SRC` (default: the latest pixie
+GitHub release's `pixie-live-env-x86_64.tar.gz`) and stages it under
+`PIXIE_LIVE_ENV_DIR` itself - no manual bake or copy. For an air-gapped
+install, point `PIXIE_LIVE_ENV_SRC` (or the live override on
+Settings > Live-env) at a local mirror of that tarball. You can still
+build it yourself with `make build VARIANT=netboot-pc` and drop the
+three files into `data/live-env/` by hand.
+
 ## Environment variables
 
 Pixie reads these at container startup. The compose file passes the
@@ -130,6 +143,12 @@ netboot bundles), `overlays/<mac>/<image_sha>/<profile>.qcow2`
 **`PIXIE_LIVE_ENV_DIR`** (default: `$PIXIE_DATA_DIR/live-env`) - the
 `pixie-*` boot modes degrade to an unavailable plan when this dir is
 missing or incomplete.
+
+**`PIXIE_LIVE_ENV_SRC`** (default: the latest pixie GitHub release's
+`pixie-live-env-x86_64.tar.gz`) - the tarball the dashboard **Fetch
+live-env** action downloads and stages into `PIXIE_LIVE_ENV_DIR`.
+Accepts `https://` or `oras://`; it must unpack to `vmlinuz` + `initrd`
++ `live.squashfs`. Overridable live on Settings > Live-env.
 
 ### NBD supervisor
 

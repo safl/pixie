@@ -13,6 +13,18 @@ operator-facing summary.
 
 ### Added
 
+**Pixie can fetch its own live-env.** The dashboard Live-env card grows
+a **Fetch live-env** button: pixie downloads the netboot-pc bake as a
+single tarball (`PIXIE_LIVE_ENV_SRC`, defaulting to the latest GitHub
+release's `pixie-live-env-x86_64.tar.gz`) and stages
+`vmlinuz` + `initrd` + `live.squashfs` under `PIXIE_LIVE_ENV_DIR`,
+reusing the catalog fetch's curl transport. This replaces the only
+artifact an operator previously had to bake locally
+(`make build VARIANT=netboot-pc`) or hand-copy. The source is
+overridable per deploy on Settings > Live-env (point at a mirror for
+air-gapped installs). The `publish-release` job assembles that tarball
+so the default source resolves.
+
 **Releases now ship the container image and the boot media, not just
 the PyPI package.** Tagging `v*` publishes the appliance image to
 `ghcr.io/safl/pixie` (`:<version>` + `:latest`) and creates a GitHub

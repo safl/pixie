@@ -692,6 +692,23 @@ jobs:
           path: release-assets
       - name: List release assets
         run: ls -la release-assets
+      - name: Assemble live-env fetch tarball
+        # pixie's in-app "Fetch live-env" pulls ONE tarball that unpacks
+        # to vmlinuz + initrd + live.squashfs (see catalog/_live_env.py).
+        # Repackage the netboot-pc trio under those stable names so
+        # ``.../releases/latest/download/pixie-live-env-x86_64.tar.gz``
+        # -- the default PIXIE_LIVE_ENV_SRC -- resolves.
+        run: |
+          set -eu
+          d=$(mktemp -d)
+          cp release-assets/pixie-netboot-pc-x86_64-*.vmlinuz  "$d/vmlinuz"
+          cp release-assets/pixie-netboot-pc-x86_64-*.initrd   "$d/initrd"
+          cp release-assets/pixie-netboot-pc-x86_64-*.squashfs "$d/live.squashfs"
+          tar -C "$d" -czf release-assets/pixie-live-env-x86_64.tar.gz \
+            vmlinuz initrd live.squashfs
+          ( cd release-assets && sha256sum pixie-live-env-x86_64.tar.gz \
+              > pixie-live-env-x86_64.tar.gz.sha256 )
+          ls -la release-assets
       - name: Create / update GitHub Release
         uses: softprops/action-gh-release@v2
         with:
@@ -708,6 +725,7 @@ jobs:
 
             ## Media assets attached here
 
-            - `pixie-netboot-pc-x86_64-*.{vmlinuz,initrd,squashfs}` — the pixie live-env (netboot-pc bake) the `pixie-flash-once` / `pixie-flash-always` / `pixie-inventory` / `pixie-tui` boot modes chain into. Stage the trio under `PIXIE_LIVE_ENV_DIR` (defaults to `data/live-env/`).
+            - `pixie-live-env-x86_64.tar.gz` — the live-env trio packaged for pixie's in-app **Fetch live-env** action (the default `PIXIE_LIVE_ENV_SRC`). Click Fetch live-env on the dashboard and pixie pulls + stages this itself; no manual bake or copy.
+            - `pixie-netboot-pc-x86_64-*.{vmlinuz,initrd,squashfs}` — the same live-env (netboot-pc bake) as loose files, if you prefer to stage `PIXIE_LIVE_ENV_DIR` (`data/live-env/`) by hand. Used by the `pixie-flash-once` / `pixie-flash-always` / `pixie-inventory` / `pixie-tui` boot modes.
             - `pixie-usbboot-pc-x86_64-*.iso.gz` — bootable USB / ISO media for the pixie live env.
             - `*.sha256` — checksums for the above.

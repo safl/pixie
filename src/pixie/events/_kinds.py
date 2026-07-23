@@ -193,6 +193,24 @@ EVENTS_CLEARED = "events.cleared"
 right after the wipe so the freshly-empty log still records who reset
 it and when; carries the deleted-row count in ``details``."""
 
+# ---------- live-env fetch ------------------------------------------
+#
+# The operator "Fetch live-env" action pulls the netboot-pc bake into
+# PIXIE_LIVE_ENV_DIR. No subject (``subject_kind`` = ""): the live env
+# is per-pixie, not per-resource. Dotted ``.done`` / ``.failed`` names
+# mirror the catalog-fetch kinds so ``.failed`` auto-classifies as an
+# error via the ERROR_KINDS ``LIKE '%.failed'`` probe.
+
+LIVE_ENV_FETCH_DONE = "live_env.fetch.done"
+"""``POST /ui/live-env/fetch`` downloaded + staged vmlinuz + initrd +
+live.squashfs into PIXIE_LIVE_ENV_DIR. Carries the src + content sha in
+``details``."""
+
+LIVE_ENV_FETCH_FAILED = "live_env.fetch.failed"
+"""The live-env fetch failed (bad src scheme, download error, or a
+tarball missing a required file). Carries the src + error in
+``details``."""
+
 
 # The canonical closed set. Every kind above is registered here; the
 # ``EventsLog.emit`` call rejects anything not in this frozenset.
@@ -228,6 +246,8 @@ KNOWN_EVENT_KINDS: frozenset[str] = frozenset(
         AUTH_LOGIN_SUCCEEDED,
         AUTH_LOGIN_FAILED,
         EVENTS_CLEARED,
+        LIVE_ENV_FETCH_DONE,
+        LIVE_ENV_FETCH_FAILED,
     }
 )
 

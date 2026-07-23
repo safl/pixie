@@ -138,18 +138,35 @@
    chain and a bound target sits at a legible "media not staged"
    screen. Surface the readiness signal + per-file bytes so an
    operator can tell at a glance whether the boot modes are live. #}
+{% set lfs = stats.live_env_fetch_state or {} %}
 <div class="card shadow-sm mb-4">
-    <div class="card-header bg-light d-flex align-items-center">
+    <div class="card-header bg-light d-flex align-items-center gap-2">
         <h2 class="h5 mb-0"><i class="bi bi-boombox me-2"></i>Live-env media</h2>
-        {% if stats.live_env_ready %}
-        <span class="badge text-bg-success ms-auto">
-            <i class="bi bi-check-circle me-1"></i>ready
-        </span>
-        {% else %}
-        <span class="badge text-bg-warning ms-auto">
-            <i class="bi bi-exclamation-triangle me-1"></i>not staged
-        </span>
-        {% endif %}
+        <div class="ms-auto d-flex align-items-center gap-2">
+            {% if stats.live_env_ready %}
+            <span class="badge text-bg-success">
+                <i class="bi bi-check-circle me-1"></i>ready
+            </span>
+            {% else %}
+            <span class="badge text-bg-warning">
+                <i class="bi bi-exclamation-triangle me-1"></i>not staged
+            </span>
+            {% endif %}
+            {# Pull the netboot-pc bake straight from the configured
+               source (a GitHub release by default) into PIXIE_LIVE_ENV_DIR
+               -- the in-app replacement for a manual bake + copy. #}
+            <form method="post" action="/ui/live-env/fetch" class="m-0">
+                <button type="submit" class="btn btn-sm btn-outline-primary text-nowrap"
+                        {% if lfs.state == 'fetching' %}disabled{% endif %}
+                        title="Download the live-env tarball from the configured source and stage it.">
+                    {% if lfs.state == 'fetching' %}
+                    <span class="spinner-border spinner-border-sm me-1" role="status"></span>Fetching...
+                    {% else %}
+                    <i class="bi bi-cloud-download me-1"></i>{% if stats.live_env_ready %}Re-fetch{% else %}Fetch live-env{% endif %}
+                    {% endif %}
+                </button>
+            </form>
+        </div>
     </div>
     <div class="card-body">
         {% if stats.live_env_ready %}
@@ -166,11 +183,27 @@
             <code>{{ stats.live_env_dir or '(unset)' }}</code>.
             Every <code>pixie-*</code> boot_mode falls back to the
             "unavailable" iPXE plan until the three files below are
-            present. Copy vmlinuz + initrd + live.squashfs from the
-            latest <code>pixie-netboot-pc-x86_64</code> bake into
-            that directory. Restart the container is NOT required
-            (the renderer checks the files each render).
+            present. Click <span class="fw-semibold">Fetch live-env</span>
+            to pull them from the source below, or copy vmlinuz + initrd
+            + live.squashfs in by hand. No container restart needed
+            (the renderer re-checks the files each render).
         </p>
+        {% endif %}
+        <p class="small text-muted mb-2">
+            Source:
+            <code>{{ stats.live_env_src }}</code>
+            <span class="ms-1">(override on <a href="/ui/settings">Settings</a>)</span>
+        </p>
+        {% if lfs.state == 'fetching' %}
+        <div class="alert alert-info py-2 small mb-2">
+            <span class="spinner-border spinner-border-sm me-1" role="status"></span>
+            Fetching live-env{% if lfs.phase %} ({{ lfs.phase }}){% endif %}... this can take a while for the ~1&nbsp;GiB squashfs.
+        </div>
+        {% elif lfs.state == 'error' %}
+        <div class="alert alert-danger py-2 small mb-2">
+            <i class="bi bi-exclamation-triangle me-1"></i>
+            Last fetch failed: {{ lfs.error }}
+        </div>
         {% endif %}
         <dl class="row small mb-0">
             {% for name, size in stats.live_env_files.items() %}
@@ -186,6 +219,12 @@
         </dl>
     </div>
 </div>
+{% if lfs.state == 'fetching' %}
+{# The fetch runs on the server's thread pool; poll the page so the
+   spinner flips to "ready" (or an error) on its own. A big squashfs
+   download takes a while, so 5 s is frequent enough without hammering. #}
+<script>setTimeout(function () { location.reload(); }, 5000);</script>
+{% endif %}
 
 <div class="card shadow-sm">
     <div class="card-header bg-light d-flex align-items-center">

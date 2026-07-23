@@ -64,6 +64,18 @@ DEFAULT_DATETIME_FORMAT = "%Y-%m-%d %H:%M:%S %Z"
 KEY_LIVE_ENV_EXTRA_CMDLINE = "live_env.extra_cmdline"
 ENV_LIVE_ENV_EXTRA_CMDLINE = "PIXIE_LIVE_ENV_EXTRA_CMDLINE"
 
+# Where the operator "Fetch live-env" action pulls the netboot-pc bake
+# from: a single tarball ``src`` (``https://`` or ``oras://``, the same
+# schemes the catalog fetch speaks) that unpacks to vmlinuz + initrd +
+# live.squashfs. Defaults to the pixie GitHub release's stable-named
+# asset via ``/releases/latest/download/`` so a plain deploy can pull
+# the live env with no config; override for an air-gapped mirror.
+KEY_LIVE_ENV_SRC = "live_env.src"
+ENV_LIVE_ENV_SRC = "PIXIE_LIVE_ENV_SRC"
+DEFAULT_LIVE_ENV_SRC = (
+    "https://github.com/safl/pixie/releases/latest/download/pixie-live-env-x86_64.tar.gz"
+)
+
 
 class SettingValueError(ValueError):
     """A stored override failed validation at resolve time. The
@@ -166,6 +178,17 @@ class SettingsStore:
             self.get(KEY_LIVE_ENV_EXTRA_CMDLINE)
             or (os.environ.get(ENV_LIVE_ENV_EXTRA_CMDLINE) or "").strip()
             or ""
+        )
+
+    def resolve_live_env_src(self) -> str:
+        """Effective live-env fetch src: DB override -> env -> default
+        (the pixie GitHub release asset). Never empty; the caller feeds
+        it straight to the live-env fetch, which raises on a bad
+        scheme."""
+        return (
+            self.get(KEY_LIVE_ENV_SRC)
+            or (os.environ.get(ENV_LIVE_ENV_SRC) or "").strip()
+            or DEFAULT_LIVE_ENV_SRC
         )
 
 
