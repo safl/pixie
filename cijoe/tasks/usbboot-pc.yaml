@@ -32,12 +32,11 @@ doc: |
      reconfigures it for ``--binary-images iso-hybrid`` with both
      ``syslinux`` (BIOS) and ``grub-efi`` (UEFI) bootloaders,
      runs ``lb clean --all && lb build``, and publishes
-     ``pixie-usbboot-pc-x86_64.iso.gz`` plus a sha256 manifest under
-     ``publish.dir`` (the raw .iso is dropped after compression -
-     it exceeds GitHub's 2 GiB per-release-asset upload limit).
-     gzip is chosen over xz/zstd because Etcher's bundled xz
-     decompressor fails on our output regardless of how it's
-     shaped; gzip works in every flasher.
+     ``pixie-usbboot-pc-x86_64-v<version>.iso`` (uncompressed) plus a
+     sha256 manifest under ``publish.dir``. Published uncompressed so
+     every flasher (dd / Etcher / Rufus / Ventoy) reads it directly with
+     no decompress step; at ~200 MiB it stays well under GitHub's 2 GiB
+     per-release-asset upload limit.
 
   Requires: live-build on the build host (``apt install live-build``)
   plus passwordless sudo (live-build's chroot operations are
