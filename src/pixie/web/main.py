@@ -425,8 +425,7 @@ def _deployment_envvar_docs() -> list[dict[str, str]]:
                 "Extra kernel-cmdline tokens appended to every"
                 " pixie-live-env chain. Global default; a machine"
                 " with its own extra_cmdline binding overrides. See"
-                " the Live-env card above for the live-editable"
-                " override."
+                " the Live env page for the live-editable override."
             ),
         },
         {
@@ -440,7 +439,7 @@ def _deployment_envvar_docs() -> list[dict[str, str]]:
                 " netboot-pc bake from (https:// or oras://). Defaults to"
                 " the latest pixie GitHub release; point at a mirror for"
                 " air-gapped deploys. Live-editable override on the"
-                " Settings > Live-env card."
+                " Live env page."
             ),
         },
         {
@@ -2209,10 +2208,6 @@ def create_app() -> FastAPI:
             tz_effective = f"(invalid: {exc})"
         fmt_override = store.get(KEY_DATETIME_FORMAT) or ""
         fmt_effective = store.resolve_datetime_format()
-        cmdline_override = store.get(KEY_LIVE_ENV_EXTRA_CMDLINE) or ""
-        cmdline_effective = store.resolve_live_env_extra_cmdline()
-        live_env_src_override = store.get(KEY_LIVE_ENV_SRC) or ""
-        live_env_src_effective = store.resolve_live_env_src()
         deployment_envvars = _deployment_envvar_docs()
         deployment_state = _deployment_state()
         return {
@@ -2234,20 +2229,6 @@ def create_app() -> FastAPI:
                 "default": "%Y-%m-%d %H:%M:%S %Z",
                 "env": "PIXIE_DATETIME_FORMAT",
                 "updated_at": store.updated_at(KEY_DATETIME_FORMAT) or "",
-            },
-            "live_env_extra_cmdline": {
-                "override": cmdline_override,
-                "effective": cmdline_effective,
-                "default": "",
-                "env": "PIXIE_LIVE_ENV_EXTRA_CMDLINE",
-                "updated_at": store.updated_at(KEY_LIVE_ENV_EXTRA_CMDLINE) or "",
-            },
-            "live_env_src": {
-                "override": live_env_src_override,
-                "effective": live_env_src_effective,
-                "default": DEFAULT_LIVE_ENV_SRC,
-                "env": "PIXIE_LIVE_ENV_SRC",
-                "updated_at": store.updated_at(KEY_LIVE_ENV_SRC) or "",
             },
             "flash_error": flash_error,
         }
@@ -2313,8 +2294,55 @@ def create_app() -> FastAPI:
             store.clear(KEY_DATETIME_FORMAT)
         return RedirectResponse(url="/ui/settings", status_code=status.HTTP_303_SEE_OTHER)
 
-    @app.post("/ui/settings/live-env/edit", response_model=None)
-    def ui_settings_live_env_edit(
+    def _live_env_context(request: Request, flash_error: str | None = None) -> dict[str, Any]:
+        """Render context for the dedicated /ui/live-env pane: staged
+        media state (ready + per-file sizes), the fetch source + extra
+        cmdline overrides (with provenance), and any in-flight fetch."""
+        state = request.app.state
+        store: SettingsStore = state.settings_store
+        live_env_dir = state.live_env_dir
+        files: dict[str, int | None] = {"vmlinuz": None, "initrd": None, "live.squashfs": None}
+        if live_env_dir is not None:
+            for name in files:
+                p = live_env_dir / name
+                try:
+                    files[name] = p.stat().st_size if p.is_file() else None
+                except OSError:
+                    files[name] = None
+        return {
+            "version": pixie.__version__,
+            "authed": True,
+            "page": "live-env",
+            "live_env_ready": all(v is not None for v in files.values()),
+            "live_env_dir": str(live_env_dir) if live_env_dir is not None else "",
+            "live_env_files": files,
+            "live_env_fetch_state": dict(state.live_env_fetch_state),
+            "live_env_src": {
+                "override": store.get(KEY_LIVE_ENV_SRC) or "",
+                "effective": store.resolve_live_env_src(),
+                "default": DEFAULT_LIVE_ENV_SRC,
+                "env": "PIXIE_LIVE_ENV_SRC",
+                "updated_at": store.updated_at(KEY_LIVE_ENV_SRC) or "",
+            },
+            "live_env_extra_cmdline": {
+                "override": store.get(KEY_LIVE_ENV_EXTRA_CMDLINE) or "",
+                "effective": store.resolve_live_env_extra_cmdline(),
+                "default": "",
+                "env": "PIXIE_LIVE_ENV_EXTRA_CMDLINE",
+                "updated_at": store.updated_at(KEY_LIVE_ENV_EXTRA_CMDLINE) or "",
+            },
+            "flash_error": flash_error,
+        }
+
+    @app.get("/ui/live-env", response_class=HTMLResponse)
+    def ui_live_env(
+        request: Request,
+        _auth: None = Depends(_require_ui_auth),
+    ) -> HTMLResponse:
+        return templates.TemplateResponse(request, "live_env.html", _live_env_context(request))
+
+    @app.post("/ui/live-env/cmdline/edit", response_model=None)
+    def ui_live_env_cmdline_edit(
         request: Request,
         extra_cmdline: str = Form(""),
         _auth: None = Depends(_require_ui_auth),
@@ -2330,8 +2358,8 @@ def create_app() -> FastAPI:
         if "\n" in raw or "\r" in raw:
             return templates.TemplateResponse(
                 request,
-                "settings.html",
-                _settings_context(
+                "live_env.html",
+                _live_env_context(
                     request,
                     flash_error=(
                         "Live-env extra cmdline must be a single line "
@@ -2344,10 +2372,10 @@ def create_app() -> FastAPI:
             store.set_value(KEY_LIVE_ENV_EXTRA_CMDLINE, raw)
         else:
             store.clear(KEY_LIVE_ENV_EXTRA_CMDLINE)
-        return RedirectResponse(url="/ui/settings", status_code=status.HTTP_303_SEE_OTHER)
+        return RedirectResponse(url="/ui/live-env", status_code=status.HTTP_303_SEE_OTHER)
 
-    @app.post("/ui/settings/live-env-src/edit", response_model=None)
-    def ui_settings_live_env_src_edit(
+    @app.post("/ui/live-env/src/edit", response_model=None)
+    def ui_live_env_src_edit(
         request: Request,
         live_env_src: str = Form(""),
         _auth: None = Depends(_require_ui_auth),
@@ -2361,7 +2389,7 @@ def create_app() -> FastAPI:
             store.set_value(KEY_LIVE_ENV_SRC, raw)
         else:
             store.clear(KEY_LIVE_ENV_SRC)
-        return RedirectResponse(url="/ui/settings", status_code=status.HTTP_303_SEE_OTHER)
+        return RedirectResponse(url="/ui/live-env", status_code=status.HTTP_303_SEE_OTHER)
 
     @app.post("/ui/live-env/fetch")
     def ui_live_env_fetch(
@@ -2386,9 +2414,9 @@ def create_app() -> FastAPI:
                     "at_iso": _now_iso(),
                 }
             )
-            return RedirectResponse(url="/ui/", status_code=status.HTTP_303_SEE_OTHER)
+            return RedirectResponse(url="/ui/live-env", status_code=status.HTTP_303_SEE_OTHER)
         if fs.get("state") == "fetching":
-            return RedirectResponse(url="/ui/", status_code=status.HTTP_303_SEE_OTHER)
+            return RedirectResponse(url="/ui/live-env", status_code=status.HTTP_303_SEE_OTHER)
 
         src = state.settings_store.resolve_live_env_src()
         fs.clear()
@@ -2424,7 +2452,7 @@ def create_app() -> FastAPI:
                 )
 
         state.fetch_pool.submit(_run)
-        return RedirectResponse(url="/ui/", status_code=status.HTTP_303_SEE_OTHER)
+        return RedirectResponse(url="/ui/live-env", status_code=status.HTTP_303_SEE_OTHER)
 
     # ---------- feature routers --------------------------------------
     #
