@@ -183,7 +183,7 @@ jobs:
         with:
           name: pixie-usbboot-pc-x86_64
           path: |
-            ~/system_imaging/disk/pixie-usbboot-pc-x86_64-v*.iso.gz
+            ~/system_imaging/disk/pixie-usbboot-pc-x86_64-v*.iso
             ~/system_imaging/disk/pixie-usbboot-pc-x86_64-v*.sha256
 
   test-pxe:
@@ -732,5 +732,5 @@ jobs:
 
             - `pixie-live-env-x86_64.tar.gz` — the live-env trio packaged for pixie's in-app **Fetch live-env** action (the default `PIXIE_LIVE_ENV_SRC`). Click Fetch live-env on the dashboard and pixie pulls + stages this itself; no manual bake or copy.
             - `pixie-netboot-pc-x86_64-*.{vmlinuz,initrd,squashfs}` — the same live-env (netboot-pc bake) as loose files, if you prefer to stage `PIXIE_LIVE_ENV_DIR` (`data/live-env/`) by hand. Used by the `pixie-flash-once` / `pixie-flash-always` / `pixie-inventory` / `pixie-tui` boot modes.
-            - `pixie-usbboot-pc-x86_64-*.iso.gz` — bootable USB / ISO media for the pixie live env.
+            - `pixie-usbboot-pc-x86_64-*.iso` — bootable USB / ISO media for the pixie live env (uncompressed; `dd` / Etcher / Ventoy ready).
             - `*.sha256` — checksums for the above.
