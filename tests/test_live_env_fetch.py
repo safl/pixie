@@ -140,7 +140,7 @@ def test_ui_live_env_fetch_success(client: TestClient, monkeypatch: pytest.Monke
 
     r = c.post("/ui/live-env/fetch", follow_redirects=False)
     assert r.status_code == 303
-    assert r.headers["location"] == "/ui/"
+    assert r.headers["location"] == "/ui/live-env"
     fs = _wait_fetch_done(c)
     assert fs["state"] == "done"
     assert fs["sha256"] == "a" * 64
@@ -169,24 +169,35 @@ def test_ui_live_env_fetch_failure_records_error(
     assert any(e["kind"] == "live_env.fetch.failed" for e in body["events"])
 
 
-def test_ui_settings_live_env_src_override_roundtrip(client: TestClient) -> None:
+def test_ui_live_env_src_override_roundtrip(client: TestClient) -> None:
     c = authed(client)
     r = c.post(
-        "/ui/settings/live-env-src/edit",
+        "/ui/live-env/src/edit",
         data={"live_env_src": "https://mirror.local/pixie-live-env-x86_64.tar.gz"},
         follow_redirects=False,
     )
     assert r.status_code == 303
+    assert r.headers["location"] == "/ui/live-env"
     store = c.app.state.settings_store
     assert store.resolve_live_env_src() == "https://mirror.local/pixie-live-env-x86_64.tar.gz"
     # blank clears back to default
-    c.post("/ui/settings/live-env-src/edit", data={"live_env_src": ""}, follow_redirects=False)
+    c.post("/ui/live-env/src/edit", data={"live_env_src": ""}, follow_redirects=False)
     assert store.resolve_live_env_src() == DEFAULT_LIVE_ENV_SRC
 
 
-def test_dashboard_shows_fetch_button_and_source(client: TestClient) -> None:
+def test_live_env_pane_has_fetch_action_and_source(client: TestClient) -> None:
     c = authed(client)
-    body = c.get("/ui/").text
-    assert "Fetch live-env" in body
+    body = c.get("/ui/live-env").text
+    assert "Fetch live env" in body
     assert "/ui/live-env/fetch" in body
     assert "pixie-live-env-x86_64.tar.gz" in body  # the default source
+    assert "extra_cmdline" in body  # the cmdline option moved here too
+
+
+def test_dashboard_live_env_is_output_only(client: TestClient) -> None:
+    """The dashboard reports readiness + links to the pane; it carries
+    no fetch action (the operator's actions live on /ui/live-env)."""
+    c = authed(client)
+    body = c.get("/ui/").text
+    assert 'href="/ui/live-env"' in body  # links to the pane
+    assert "/ui/live-env/fetch" not in body  # no action form on the dashboard

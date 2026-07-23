@@ -203,13 +203,13 @@ def test_live_env_extra_cmdline_resolution(tmp_path: Path, monkeypatch: pytest.M
 
 
 def test_ui_settings_live_env_edit_persists(client: TestClient) -> None:
-    """POST /ui/settings/live-env/edit stores the tokens; a subsequent
+    """POST /ui/live-env/cmdline/edit stores the tokens; a subsequent
     GET /pxe/<mac> lands them on the kernel line."""
     from pathlib import Path as _Path
 
     c = _authed(client)
     r = c.post(
-        "/ui/settings/live-env/edit",
+        "/ui/live-env/cmdline/edit",
         data={"extra_cmdline": "pci=realloc=on,nocrs"},
         follow_redirects=False,
     )
@@ -238,7 +238,7 @@ def test_ui_settings_live_env_rejects_newline(client: TestClient) -> None:
     than serving a broken plan."""
     c = _authed(client)
     r = c.post(
-        "/ui/settings/live-env/edit",
+        "/ui/live-env/cmdline/edit",
         data={"extra_cmdline": "pci=realloc=on,nocrs\namd_iommu=off"},
     )
     assert r.status_code == 400
@@ -253,5 +253,5 @@ def test_ui_settings_live_env_blank_clears(client: TestClient) -> None:
     c = _authed(client)
     store = c.app.state.settings_store  # type: ignore[attr-defined]
     store.set_value(KEY_LIVE_ENV_EXTRA_CMDLINE, "pci=realloc=on,nocrs")
-    c.post("/ui/settings/live-env/edit", data={"extra_cmdline": ""})
+    c.post("/ui/live-env/cmdline/edit", data={"extra_cmdline": ""})
     assert store.get(KEY_LIVE_ENV_EXTRA_CMDLINE) is None

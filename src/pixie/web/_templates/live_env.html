@@ -1,0 +1,169 @@
+{% extends "layout.html" %}
+{% from "_partials/page_description.html" import page_description %}
+{% block title %}Live env - pixie{% endblock %}
+
+{% block subnav %}
+<nav class="navbar subnav-strip" aria-label="Section sub-navigation">
+    <div class="container">
+        <span class="subnav-jumps d-flex align-items-center flex-wrap">
+            <a href="#media">Media</a>
+            <a href="#fetch">Fetch</a>
+            <a href="#options">Options</a>
+        </span>
+    </div>
+</nav>
+{% endblock %}
+
+{% block content %}
+{% set lfs = live_env_fetch_state or {} %}
+{{ page_description('boombox', 'The pixie live env (netboot-pc bake: vmlinuz + initrd + live.squashfs) that the pixie-flash-once / pixie-flash-always / pixie-inventory / pixie-tui boot modes chain into. Fetch it from the configured source, or point that source at a mirror. Until all three files are staged, those boot modes fall back to an "unavailable" iPXE plan.') }}
+
+{% if flash_error %}
+<div class="alert alert-danger py-2">{{ flash_error }}</div>
+{% endif %}
+
+{# ---- Media state (output) --------------------------------------- #}
+<div class="card shadow-sm mb-4" id="media">
+    <div class="card-header bg-light d-flex align-items-center gap-2">
+        <h2 class="h5 mb-0"><i class="bi bi-boombox me-2"></i>Staged media</h2>
+        {% if live_env_ready %}
+        <span class="badge text-bg-success ms-auto"><i class="bi bi-check-circle me-1"></i>ready</span>
+        {% else %}
+        <span class="badge text-bg-warning ms-auto"><i class="bi bi-exclamation-triangle me-1"></i>not staged</span>
+        {% endif %}
+    </div>
+    <div class="card-body">
+        <p class="small text-muted mb-2">
+            Staged under <code>{{ live_env_dir or '(unset)' }}</code>, served to targets at
+            <code>/boot/pixie-live-env/</code>. The renderer re-checks these files on every
+            <code>GET /pxe/&lt;mac&gt;</code>, so a fresh fetch takes effect without a restart.
+        </p>
+        <dl class="row small mb-0">
+            {% for name, size in live_env_files.items() %}
+            <dt class="col-sm-3 font-monospace">{{ name }}</dt>
+            <dd class="col-sm-9">
+                {% if size is not none %}
+                <span class="text-success"><i class="bi bi-check-circle me-1"></i>{{ (size / 1024 / 1024) | round(1) }} MiB</span>
+                {% else %}
+                <span class="text-warning"><i class="bi bi-x-circle me-1"></i>missing</span>
+                {% endif %}
+            </dd>
+            {% endfor %}
+        </dl>
+    </div>
+</div>
+
+{# ---- Fetch (action) --------------------------------------------- #}
+<div class="card shadow-sm mb-4" id="fetch">
+    <div class="card-header bg-light fw-semibold">
+        <i class="bi bi-cloud-download me-1"></i>Fetch live env
+    </div>
+    <div class="card-body">
+        {% if lfs.state == 'fetching' %}
+        <div class="alert alert-info py-2 small">
+            <span class="spinner-border spinner-border-sm me-1" role="status"></span>
+            Fetching live-env{% if lfs.phase %} ({{ lfs.phase }}){% endif %}... this can take a while for the ~1&nbsp;GiB squashfs.
+        </div>
+        {% elif lfs.state == 'error' %}
+        <div class="alert alert-danger py-2 small">
+            <i class="bi bi-exclamation-triangle me-1"></i>Last fetch failed: {{ lfs.error }}
+        </div>
+        {% elif lfs.state == 'done' %}
+        <div class="alert alert-success py-2 small">
+            <i class="bi bi-check-circle me-1"></i>Last fetch staged the live env{% if lfs.sha256 %} (sha {{ lfs.sha256[:12] }}){% endif %}.
+        </div>
+        {% endif %}
+
+        {# Editable source, then the fetch button that consumes it. #}
+        <form method="post" action="/ui/live-env/src/edit" class="row g-2 align-items-end mb-3">
+            <div class="col-12 col-lg-9">
+                <label for="live_env_src" class="form-label mb-1">
+                    Source
+                    <span class="badge text-bg-{% if live_env_src.override %}primary{% else %}secondary{% endif %} ms-1">
+                        {% if live_env_src.override %}override{% elif live_env_src.effective != live_env_src.default %}env{% else %}default{% endif %}
+                    </span>
+                </label>
+                <input type="text" id="live_env_src" name="live_env_src"
+                       class="form-control font-monospace"
+                       value="{{ live_env_src.override }}"
+                       placeholder="{{ live_env_src.default }}">
+            </div>
+            <div class="col-12 col-lg-3">
+                <button type="submit" class="btn btn-outline-secondary w-100">
+                    <i class="bi bi-check2 me-1"></i>Save source
+                </button>
+            </div>
+            <div class="col-12">
+                <div class="form-text">
+                    Tarball to download (<code>https://</code> or <code>oras://</code>); must unpack to
+                    <code>vmlinuz</code> + <code>initrd</code> + <code>live.squashfs</code>. Blank falls
+                    back to <code>{{ live_env_src.env }}</code> then the latest pixie GitHub release.
+                    Effective: <code>{{ live_env_src.effective }}</code>.
+                    {% if live_env_src.updated_at %}<br>Last updated: <code>{{ live_env_src.updated_at | fmt_ts }}</code>.{% endif %}
+                </div>
+            </div>
+        </form>
+
+        <form method="post" action="/ui/live-env/fetch" class="m-0">
+            <button type="submit" class="btn btn-primary" {% if lfs.state == 'fetching' %}disabled{% endif %}>
+                {% if lfs.state == 'fetching' %}
+                <span class="spinner-border spinner-border-sm me-1" role="status"></span>Fetching...
+                {% else %}
+                <i class="bi bi-cloud-download me-1"></i>{% if live_env_ready %}Re-fetch live env{% else %}Fetch live env{% endif %}
+                {% endif %}
+            </button>
+            <span class="text-muted small ms-2">Downloads + stages the three files; overwrites what's there.</span>
+        </form>
+    </div>
+</div>
+
+{# ---- Options (config) ------------------------------------------- #}
+<div class="card shadow-sm mb-4" id="options">
+    <div class="card-header bg-light fw-semibold">
+        <i class="bi bi-sliders me-1"></i>Options
+    </div>
+    <div class="card-body">
+        <form method="post" action="/ui/live-env/cmdline/edit" class="row g-3">
+            <div class="col-12">
+                <label for="extra_cmdline" class="form-label">
+                    Extra kernel cmdline
+                    <span class="badge text-bg-{% if live_env_extra_cmdline.override %}primary{% else %}secondary{% endif %} ms-1">
+                        {% if live_env_extra_cmdline.override %}override{% elif live_env_extra_cmdline.effective %}env{% else %}default{% endif %}
+                    </span>
+                </label>
+                <input type="text" id="extra_cmdline" name="extra_cmdline"
+                       class="form-control font-monospace"
+                       value="{{ live_env_extra_cmdline.override }}"
+                       placeholder="e.g. pci=realloc=on,nocrs"
+                       list="live-env-cmdline-suggestions">
+                <datalist id="live-env-cmdline-suggestions">
+                    <option value="pci=realloc=on,nocrs">
+                </datalist>
+                <div class="form-text">
+                    Tokens appended verbatim to the <code>pixie-live-env</code> kernel cmdline
+                    (after <code>pixie.mac=</code> / <code>bty.mac=</code>, so last-token-wins on any
+                    conflict). Whitespace-separated; single line. Blank falls back to
+                    <code>{{ live_env_extra_cmdline.env }}</code> then no append. A machine with its own
+                    <code>extra_cmdline</code> binding overrides this global. Effective:
+                    {% if live_env_extra_cmdline.effective %}<code>{{ live_env_extra_cmdline.effective }}</code>{% else %}<em class="text-muted">(none)</em>{% endif %}.
+                    Known-good values per hardware in
+                    <a href="https://github.com/safl/pixie/blob/main/docs/src/hardware-quirks.md" target="_blank" rel="noreferrer">docs/hardware-quirks.md</a>.
+                    {% if live_env_extra_cmdline.updated_at %}<br>Last updated: <code>{{ live_env_extra_cmdline.updated_at | fmt_ts }}</code>.{% endif %}
+                </div>
+            </div>
+            <div class="col-12">
+                <button type="submit" class="btn btn-primary"><i class="bi bi-check2 me-1"></i>Save</button>
+                <span class="text-muted small ms-2">
+                    Takes effect on the NEXT <code>GET /pxe/&lt;mac&gt;</code>; a target already mid-boot must be power-cycled.
+                </span>
+            </div>
+        </form>
+    </div>
+</div>
+
+{% if lfs.state == 'fetching' %}
+{# The fetch runs on the server's thread pool; reload so the spinner
+   flips to ready / error on its own. #}
+<script>setTimeout(function () { location.reload(); }, 5000);</script>
+{% endif %}
+{% endblock %}
