@@ -681,6 +681,7 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v6
       - name: Download media artifacts
         uses: actions/download-artifact@v8
         with:
@@ -708,6 +709,10 @@ jobs:
             vmlinuz initrd live.squashfs
           ( cd release-assets && sha256sum pixie-live-env-x86_64.tar.gz \
               > pixie-live-env-x86_64.tar.gz.sha256 )
+          # Ship the curated catalog (the netboot-capable nosi subset)
+          # so DEFAULT_CATALOG_URL (.../releases/latest/download/catalog.toml)
+          # resolves and pixie's Import + live-env TUI default work.
+          cp src/pixie/catalog/catalog.toml release-assets/catalog.toml
           ls -la release-assets
       - name: Create / update GitHub Release
         uses: softprops/action-gh-release@v2

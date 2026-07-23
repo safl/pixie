@@ -13,6 +13,19 @@ operator-facing summary.
 
 ### Added
 
+**Pixie ships a curated catalog and defaults to it, not nosi's.** A
+fresh (empty) catalog is seeded on first start from a `catalog.toml`
+bundled in the package: a strict subset of the upstream nosi catalog
+restricted to the four netboot-capable images pixie's nbdboot + live-env
+chains actually test and support (debian-13-headless, ubuntu-2404 /
+2604-headless, fedora-44-headless, each with its netboot bundle). The
+desktop / proxmox / rpios / freebsd variants that have no netboot bundle
+are omitted. The "Import catalog" field and the live-env TUI now default
+to the pixie release copy of this curated catalog rather than the full
+nosi catalog; both remain overridable by URL. Seeding is one-shot,
+never clobbers an operator-populated catalog, and is disabled with
+`PIXIE_SEED_CATALOG=0`.
+
 **Pixie can fetch its own live-env.** The dashboard Live-env card grows
 a **Fetch live-env** button: pixie downloads the netboot-pc bake as a
 single tarball (`PIXIE_LIVE_ENV_SRC`, defaulting to the latest GitHub
