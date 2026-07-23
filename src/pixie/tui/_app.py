@@ -328,9 +328,11 @@ def collect_lshw(*, timeout: float = 30.0) -> object | None:
 # v0.46 stopped publishing a pixie-side catalog.toml mirror and pointed
 # pixie at the upstream image-builder (``safl/nosi``); the wizard's
 # ``[d] default`` shortcut tracks the same source so both consumers
-# resolve to one catalog. The pixie release no longer ships a
-# catalog.toml asset, so the old URL would 404.
-_BTY_DEFAULT_CATALOG_URL = "https://github.com/safl/nosi/releases/latest/download/catalog.toml"
+# resolve to one catalog. Points at pixie's curated catalog (the
+# netboot-capable nosi subset) shipped as a pixie release asset, so the
+# live-env wizard defaults to the same known-good set the appliance
+# seeds -- not the full upstream nosi catalog.
+_BTY_DEFAULT_CATALOG_URL = "https://github.com/safl/pixie/releases/latest/download/catalog.toml"
 
 
 # ---------------------------------------------------------------------------

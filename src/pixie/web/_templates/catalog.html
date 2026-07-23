@@ -21,7 +21,9 @@
             <input type="url" id="catalog_url" name="url"
                    class="form-control form-control-sm"
                    style="max-width: 22rem; min-width: 0;"
+                   value="{{ default_catalog_url }}"
                    placeholder="catalog.toml URL"
+                   title="Defaults to pixie's curated catalog (the netboot-capable subset). Replace to import a different catalog.toml, e.g. the full nosi catalog."
                    required>
             <button type="submit" class="btn btn-sm btn-primary flex-shrink-0 text-nowrap">
                 Import

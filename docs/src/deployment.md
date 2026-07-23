@@ -150,6 +150,11 @@ live-env** action downloads and stages into `PIXIE_LIVE_ENV_DIR`.
 Accepts `https://` or `oras://`; it must unpack to `vmlinuz` + `initrd`
 + `live.squashfs`. Overridable live on Settings > Live-env.
 
+**`PIXIE_SEED_CATALOG`** (default: `1`) - seed a fresh (empty) catalog
+from the bundled curated catalog (the netboot-capable nosi subset) on
+first start. Set to `0` to start with an empty catalog. Runs once and
+never overwrites an operator-populated catalog.
+
 ### NBD supervisor
 
 **`PIXIE_NBD_BIND`** (default: `0.0.0.0`) - address nbdkit binds

@@ -27,6 +27,12 @@ os.environ.setdefault("PIXIE_FETCH_RETRY", "0")
 os.environ.setdefault("PIXIE_FETCH_RETRY_DELAY", "0")
 os.environ.setdefault("PIXIE_FETCH_RETRY_MAX_TIME", "5")
 
+# Keep the unit suite's catalog empty by default: the app seeds the
+# bundled curated catalog on first start otherwise, which every
+# empty-catalog / count assertion would trip on. The seed feature has
+# its own test that flips this back on explicitly.
+os.environ.setdefault("PIXIE_SEED_CATALOG", "0")
+
 
 @pytest.fixture
 def client(monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:

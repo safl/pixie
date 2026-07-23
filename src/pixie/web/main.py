@@ -36,6 +36,7 @@ from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
 
 import pixie
+from pixie.catalog import DEFAULT_CATALOG_URL
 from pixie.catalog._routes import router as catalog_router
 from pixie.catalog._store import CatalogStore
 from pixie.events import EventsLog
@@ -443,6 +444,16 @@ def _deployment_envvar_docs() -> list[dict[str, str]]:
             ),
         },
         {
+            "name": "PIXIE_SEED_CATALOG",
+            "default": "1",
+            "purpose": (
+                "Seed a fresh (empty) catalog from the bundled curated"
+                " catalog (the netboot-capable nosi subset) on first"
+                " start. Set to 0 to start with an empty catalog. Runs"
+                " once; never clobbers an operator-populated catalog."
+            ),
+        },
+        {
             "name": FETCH_POOL_SIZE_ENV,
             "default": str(DEFAULT_FETCH_POOL_SIZE),
             "purpose": (
@@ -591,6 +602,53 @@ def _reset_overlay_row(state: Any, mac: str, image_sha: str, profile: str) -> bo
     return True
 
 
+def _seed_catalog_at_startup(app: FastAPI) -> None:
+    """Seed a fresh (empty) catalog from the bundled curated catalog on
+    first start, so a plain deploy comes up with the netboot-capable set
+    offline. Gated on ``PIXIE_SEED_CATALOG`` (default on) and a one-shot
+    ``catalog.seeded`` settings marker so it runs exactly once and never
+    clobbers an operator-populated catalog: a non-empty catalog is left
+    untouched (the marker is still set so the check is skipped next
+    time). A bad bundled file is logged, not fatal -- the app must come
+    up regardless."""
+    import logging
+
+    from pixie.catalog import (
+        CATALOG_SEEDED_KEY,
+        SEED_CATALOG_ENV,
+        bundled_catalog_bytes,
+    )
+    from pixie.catalog._schema import parse_catalog_toml
+
+    if (os.environ.get(SEED_CATALOG_ENV, "1") or "").strip() == "0":
+        return
+    settings = app.state.settings_store
+    if settings.get(CATALOG_SEEDED_KEY):
+        return
+    store = app.state.catalog_store
+    if store.list_entries():
+        # Existing catalog (upgrade path): mark seeded, don't pollute.
+        settings.set_value(CATALOG_SEEDED_KEY, "1")
+        return
+    try:
+        entries = parse_catalog_toml(bundled_catalog_bytes())
+    except (ValueError, OSError) as exc:
+        logging.getLogger(__name__).warning("catalog seed: bundled catalog unreadable: %s", exc)
+        return
+    for entry in entries:
+        store.upsert(entry)
+    settings.set_value(CATALOG_SEEDED_KEY, "1")
+    events = getattr(app.state, "events_log", None)
+    if events is not None:
+        events.emit(
+            CATALOG_IMPORT_OK,
+            subject_kind="catalog",
+            subject_id="(bundled)",
+            summary=f"seeded {len(entries)} curated catalog entries on first start",
+            details={"count": len(entries), "source": "bundled"},
+        )
+
+
 def create_app() -> FastAPI:
     """Build the FastAPI app. Factory shape so tests can construct a
     fresh app per fixture without global state."""
@@ -655,6 +713,8 @@ def create_app() -> FastAPI:
     app.state.machines_store = MachinesStore(app.state.catalog_store.db_path)
     app.state.events_log = EventsLog(app.state.catalog_store.db_path)
     app.state.settings_store = SettingsStore(app.state.catalog_store.db_path)
+    # Seed the curated catalog on a fresh deploy (env-gated, one-shot).
+    _seed_catalog_at_startup(app)
     app.state.nbd_server = NbdServer(
         port_base=_resolve_nbd_port_base(),
         bind=_resolve_nbd_bind(),
@@ -951,6 +1011,7 @@ def create_app() -> FastAPI:
                 "page_state": page_state,
                 "preserved": preserved,
                 "catalog_events": catalog_events,
+                "default_catalog_url": DEFAULT_CATALOG_URL,
                 "authed": True,
                 "page": "catalog",
             },

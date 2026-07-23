@@ -1,0 +1,81 @@
+version = 1
+
+# pixie curated catalog -- a strict SUBSET of the upstream nosi catalog
+# (https://github.com/safl/nosi/releases/latest/download/catalog.toml),
+# restricted to the images that ship a netboot bundle. Those are the
+# only images pixie's nbdboot chain (and the flash / inventory / tui
+# live-env chains that ride the same bundle) actually test + support,
+# so shipping just this subset keeps a fresh pixie's catalog to the
+# known-good set instead of the full nosi menu (desktop / proxmox /
+# rpios / freebsd variants have no netboot bundle and are omitted).
+#
+# Pixie seeds a fresh (empty) catalog from this file on first start and
+# defaults its "Import catalog" + live-env TUI to the pixie release copy
+# of it, rather than the nosi catalog. Override either freely; this is a
+# convenience default, not a lock-in.
+#
+# Refs use the rolling ``:latest`` oras tags so the shipped catalog
+# stays current without re-releasing pixie; the layer digest is still
+# verified at fetch time. Each disk image cross-references its bundle by
+# URL via ``netboot_src`` (pixie's tight form), so the nbdboot renderer
+# resolves the pair without the legacy name-string ``netboot_ref``.
+
+[[images]]
+name = "nosi debian-13-headless"
+src = "oras://ghcr.io/safl/nosi/debian-13-headless:latest"
+format = "img.gz"
+arch = "x86_64"
+description = "Debian 13 (trixie) headless. General-purpose headless base with the nosi dev toolset."
+netboot_src = "oras://ghcr.io/safl/nosi/debian-13-headless-netboot:latest"
+
+[[images]]
+name = "nosi debian-13-headless netboot bundle"
+src = "oras://ghcr.io/safl/nosi/debian-13-headless-netboot:latest"
+format = "tar.gz"
+arch = "x86_64"
+description = "Netboot bundle for debian-13-headless: vmlinuz + initrd so pixie can nbdboot it over NBD."
+
+[[images]]
+name = "nosi ubuntu-2404-headless"
+src = "oras://ghcr.io/safl/nosi/ubuntu-2404-headless:latest"
+format = "img.gz"
+arch = "x86_64"
+description = "Ubuntu 24.04 LTS (noble) headless. Broad driver support for CUDA / ROCm devices and Mellanox NICs / DPUs."
+netboot_src = "oras://ghcr.io/safl/nosi/ubuntu-2404-headless-netboot:latest"
+
+[[images]]
+name = "nosi ubuntu-2404-headless netboot bundle"
+src = "oras://ghcr.io/safl/nosi/ubuntu-2404-headless-netboot:latest"
+format = "tar.gz"
+arch = "x86_64"
+description = "Netboot bundle for ubuntu-2404-headless: vmlinuz + initrd so pixie can nbdboot it over NBD."
+
+[[images]]
+name = "nosi ubuntu-2604-headless"
+src = "oras://ghcr.io/safl/nosi/ubuntu-2604-headless:latest"
+format = "img.gz"
+arch = "x86_64"
+description = "Ubuntu 26.04 LTS (resolute) headless. A more recent kernel and user-land on Ubuntu LTS."
+netboot_src = "oras://ghcr.io/safl/nosi/ubuntu-2604-headless-netboot:latest"
+
+[[images]]
+name = "nosi ubuntu-2604-headless netboot bundle"
+src = "oras://ghcr.io/safl/nosi/ubuntu-2604-headless-netboot:latest"
+format = "tar.gz"
+arch = "x86_64"
+description = "Netboot bundle for ubuntu-2604-headless: vmlinuz + initrd so pixie can nbdboot it over NBD."
+
+[[images]]
+name = "nosi fedora-44-headless"
+src = "oras://ghcr.io/safl/nosi/fedora-44-headless:latest"
+format = "img.gz"
+arch = "x86_64"
+description = "Fedora 44 headless. An RHEL-family alternative (dnf, SELinux, EL package universe)."
+netboot_src = "oras://ghcr.io/safl/nosi/fedora-44-headless-netboot:latest"
+
+[[images]]
+name = "nosi fedora-44-headless netboot bundle"
+src = "oras://ghcr.io/safl/nosi/fedora-44-headless-netboot:latest"
+format = "tar.gz"
+arch = "x86_64"
+description = "Netboot bundle for fedora-44-headless: vmlinuz + initrd so pixie can nbdboot it over NBD."
