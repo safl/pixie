@@ -9,9 +9,14 @@
 </div>
 {% endblock %}
 {% block content %}
-{{ page_description('speedometer2', 'Live counts across pixie: machines the operator manages, catalog images pixie can serve, NBD exports pixie is running right now. All tiles refresh every 5 s from the same endpoints the pages below use.') }}
-<div class="row g-3 mb-4">
-    <div class="col-md-3">
+{{ page_description('speedometer2', 'Status across pixie, following the model: machines you manage, Catalog sources you can fetch, the Images those sources materialise (with on-disk footprint + how much is reclaimable), the per-machine Overlays, and events. Output-only - each tile links to its page for actions. Refreshes every 5 s.') }}
+{# Tiles mirror the storage/lifecycle model + the nav: Machines,
+   Catalog (sources you can fetch), Images (the materialised entities
+   with footprint + reclaimable refcount), Overlays (per-machine
+   single-writer layers), Events. Output-only -- each tile reports and
+   links to its pane; no actions live here. #}
+<div class="row row-cols-2 row-cols-md-3 row-cols-xl-5 g-3 mb-4">
+    <div class="col">
         <div class="card shadow-sm h-100">
             <div class="card-body">
                 <div class="d-flex align-items-center mb-2">
@@ -20,20 +25,18 @@
                 </div>
                 <div class="display-6 fw-semibold" data-stat="machines_total">{{ stats.machines_total }}</div>
                 <dl class="row small text-muted mb-0 mt-2">
-                    <dt class="col-6">Bound</dt>
-                    <dd class="col-6 text-end" data-stat="machines_bound">{{ stats.machines_bound }}</dd>
-                    <dt class="col-6">Inventoried</dt>
-                    <dd class="col-6 text-end" data-stat="machines_with_inventory">{{ stats.machines_with_inventory }}</dd>
+                    <dt class="col-7">Bound</dt>
+                    <dd class="col-5 text-end" data-stat="machines_bound">{{ stats.machines_bound }}</dd>
+                    <dt class="col-7">Inventoried</dt>
+                    <dd class="col-5 text-end" data-stat="machines_with_inventory">{{ stats.machines_with_inventory }}</dd>
                 </dl>
             </div>
             <div class="card-footer bg-light border-top-0 py-2">
-                <a href="/ui/machines" class="text-decoration-none small">
-                    Open <i class="bi bi-arrow-right"></i>
-                </a>
+                <a href="/ui/machines" class="text-decoration-none small">Open <i class="bi bi-arrow-right"></i></a>
             </div>
         </div>
     </div>
-    <div class="col-md-3">
+    <div class="col">
         <div class="card shadow-sm h-100">
             <div class="card-body">
                 <div class="d-flex align-items-center mb-2">
@@ -42,50 +45,58 @@
                 </div>
                 <div class="display-6 fw-semibold" data-stat="catalog_total">{{ stats.catalog_total }}</div>
                 <dl class="row small text-muted mb-0 mt-2">
-                    <dt class="col-6">Disk images</dt>
-                    <dd class="col-6 text-end font-monospace" data-stat="catalog_images">
-                        {{ stats.catalog_images_fetched }} / {{ stats.catalog_images_total }}
-                    </dd>
-                    <dt class="col-6">Netboot bundles</dt>
-                    <dd class="col-6 text-end font-monospace" data-stat="catalog_bundles">
-                        {{ stats.catalog_bundles_fetched }} / {{ stats.catalog_bundles_total }}
-                    </dd>
+                    <dt class="col-7">Sources</dt>
+                    <dd class="col-5 text-end" data-stat="catalog_total_sub">{{ stats.catalog_total }}</dd>
+                    <dt class="col-7">Not fetched</dt>
+                    <dd class="col-5 text-end" data-stat="catalog_unfetched">{{ stats.catalog_unfetched }}</dd>
                 </dl>
             </div>
             <div class="card-footer bg-light border-top-0 py-2">
-                <a href="/ui/catalog" class="text-decoration-none small">
-                    Open <i class="bi bi-arrow-right"></i>
-                </a>
+                <a href="/ui/catalog" class="text-decoration-none small">Sources <i class="bi bi-arrow-right"></i></a>
             </div>
         </div>
     </div>
-    <div class="col-md-3">
+    <div class="col">
         <div class="card shadow-sm h-100">
             <div class="card-body">
                 <div class="d-flex align-items-center mb-2">
-                    <i class="bi bi-hdd-network fs-4 text-primary me-2"></i>
-                    <h2 class="h6 mb-0">NBD serving</h2>
+                    <i class="bi bi-hdd-fill fs-4 text-primary me-2"></i>
+                    <h2 class="h6 mb-0">Images</h2>
                 </div>
-                <div class="display-6 fw-semibold" data-stat="exports_total">{{ stats.exports_total }}</div>
+                <div class="display-6 fw-semibold" data-stat="images_count">{{ stats.images_count }}</div>
                 <dl class="row small text-muted mb-0 mt-2">
-                    <dt class="col-6"><span class="text-success">Running</span></dt>
-                    <dd class="col-6 text-end" data-stat="exports_running">{{ stats.exports_running }}</dd>
-                    <dt class="col-6"><span class="text-danger">Error</span></dt>
-                    <dd class="col-6 text-end" data-stat="exports_error">{{ stats.exports_error }}</dd>
+                    <dt class="col-7">On disk</dt>
+                    <dd class="col-5 text-end" data-stat="images_bytes_display">{{ stats.images_bytes_display }}</dd>
+                    <dt class="col-7">Reclaimable</dt>
+                    <dd class="col-5 text-end" data-stat="images_reclaimable">{{ stats.images_reclaimable }}</dd>
                 </dl>
             </div>
             <div class="card-footer bg-light border-top-0 py-2">
-                <a href="/ui/catalog" class="text-decoration-none small">
-                    Open <i class="bi bi-arrow-right"></i>
-                </a>
+                <a href="/ui/images" class="text-decoration-none small">Open <i class="bi bi-arrow-right"></i></a>
             </div>
         </div>
     </div>
-    {# Events card: total row count + errors-since-ack (red pill on
-       non-zero) + newest ts. Ack POSTs /ui/events/ack which advances
-       the settings.events_ack_ts cursor so error_count zeros until
-       the next error-shaped event fires. #}
-    <div class="col-md-3">
+    <div class="col">
+        <div class="card shadow-sm h-100">
+            <div class="card-body">
+                <div class="d-flex align-items-center mb-2">
+                    <i class="bi bi-layers fs-4 text-primary me-2"></i>
+                    <h2 class="h6 mb-0">Overlays</h2>
+                </div>
+                <div class="display-6 fw-semibold" data-stat="overlays_count">{{ stats.overlays_count }}</div>
+                <dl class="row small text-muted mb-0 mt-2">
+                    <dt class="col-7">Disk used</dt>
+                    <dd class="col-5 text-end" data-stat="overlays_bytes_display">{{ stats.overlays_bytes_display }}</dd>
+                    <dt class="col-7"><span class="text-success">Serving</span></dt>
+                    <dd class="col-5 text-end" data-stat="overlays_running">{{ stats.overlays_running }}</dd>
+                </dl>
+            </div>
+            <div class="card-footer bg-light border-top-0 py-2">
+                <a href="/ui/overlays" class="text-decoration-none small">Open <i class="bi bi-arrow-right"></i></a>
+            </div>
+        </div>
+    </div>
+    <div class="col">
         <div class="card shadow-sm h-100">
             <div class="card-body">
                 <div class="d-flex align-items-center mb-2">
@@ -94,39 +105,22 @@
                 </div>
                 <div class="display-6 fw-semibold" data-stat="events_total">{{ stats.events_total }}</div>
                 <dl class="row small text-muted mb-0 mt-2">
-                    <dt class="col-6">
-                        <span class="text-danger">Errors</span>
-                        {% if stats.events_error_count > 0 %}
-                        <form method="post" action="/ui/events/ack" style="display:inline;">
-                            <button type="submit"
-                                    class="btn btn-link btn-sm p-0 ms-1 small"
-                                    title="Advance the ack cursor to now">
-                                Ack
-                            </button>
-                        </form>
-                        {% endif %}
-                    </dt>
-                    <dd class="col-6 text-end" data-stat="events_error_count">
+                    <dt class="col-7"><span class="text-danger">Errors</span></dt>
+                    <dd class="col-5 text-end" data-stat="events_error_count">
                         {% if stats.events_error_count > 0 %}
                         <span class="badge text-bg-danger">{{ stats.events_error_count }}</span>
                         {% else %}
                         <span class="text-success">0</span>
                         {% endif %}
                     </dd>
-                    <dt class="col-6">Last</dt>
-                    <dd class="col-6 text-end small" data-stat="events_last_ts">
-                        {% if stats.events_last_ts %}
-                        {{ stats.events_last_ts | fmt_ts }}
-                        {% else %}
-                        -
-                        {% endif %}
+                    <dt class="col-7">Last</dt>
+                    <dd class="col-5 text-end small" data-stat="events_last_ts">
+                        {% if stats.events_last_ts %}{{ stats.events_last_ts | fmt_ts }}{% else %}-{% endif %}
                     </dd>
                 </dl>
             </div>
             <div class="card-footer bg-light border-top-0 py-2">
-                <a href="/ui/events" class="text-decoration-none small">
-                    Open <i class="bi bi-arrow-right"></i>
-                </a>
+                <a href="/ui/events" class="text-decoration-none small">Open <i class="bi bi-arrow-right"></i></a>
             </div>
         </div>
     </div>
@@ -265,23 +259,19 @@
             setN("machines_bound", s.machines_bound);
             setN("machines_with_inventory", s.machines_with_inventory);
             setN("catalog_total", s.catalog_total);
-            setN("exports_total", s.exports_total);
-            setN("exports_running", s.exports_running);
-            setN("exports_error", s.exports_error);
-            document.querySelectorAll('[data-stat="catalog_images"]').forEach((el) => {
-                const t = `${s.catalog_images_fetched} / ${s.catalog_images_total}`;
-                if (el.textContent.trim() !== t) el.textContent = t;
-            });
-            document.querySelectorAll('[data-stat="catalog_bundles"]').forEach((el) => {
-                const t = `${s.catalog_bundles_fetched} / ${s.catalog_bundles_total}`;
-                if (el.textContent.trim() !== t) el.textContent = t;
-            });
+            setN("catalog_total_sub", s.catalog_total);
+            setN("catalog_unfetched", s.catalog_unfetched);
+            setN("images_count", s.images_count);
+            setN("images_bytes_display", s.images_bytes_display);
+            setN("images_reclaimable", s.images_reclaimable);
+            setN("overlays_count", s.overlays_count);
+            setN("overlays_bytes_display", s.overlays_bytes_display);
+            setN("overlays_running", s.overlays_running);
             setN("events_total", s.events_total);
             // Errors: swap the whole cell so the badge appears / clears
-            // in step with the count. Text-only mode ("0" green) when
-            // zero; red pill when non-zero. Kept as an innerHTML swap so
-            // the "Ack" form-button also (dis)appears at the right side
-            // without a page reload; matches the Jinja template above.
+            // in step with the count. Text-only ("0" green) at zero, red
+            // pill when non-zero. (Acknowledge lives on the Events page --
+            // the dashboard is output-only.)
             document.querySelectorAll('[data-stat="events_error_count"]').forEach((el) => {
                 const n = s.events_error_count | 0;
                 const html = n > 0

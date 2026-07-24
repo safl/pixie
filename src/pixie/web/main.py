@@ -1699,6 +1699,29 @@ def create_app() -> FastAPI:
         machines = machines_store.list()
         images = [e for e in entries if getattr(e, "bindable", False)]
         bundles = [e for e in entries if not getattr(e, "bindable", False)]
+        # New model: Catalog = sources; Images = the materialised
+        # entities (identity = disk sha) with a footprint + usage
+        # refcount; Overlays = per-machine writable. Roll those up so
+        # the dashboard speaks the same vocabulary as the nav.
+        from pixie.web._images import build_image_views
+        from pixie.web._inventory import humanize_bytes
+        from pixie.web._overlays import build_overlay_views, overlay_totals
+
+        overlays_store = request.app.state.overlays_store
+        image_views = build_image_views(
+            catalog=catalog,
+            exports=exports_store,
+            overlays=overlays_store,
+            machines=machines_store,
+            nbd=nbd,
+        )
+        images_bytes = sum(v.footprint_bytes for v in image_views)
+        images_reclaimable = sum(1 for v in image_views if not v.in_use)
+        ov_tot = overlay_totals(
+            build_overlay_views(
+                overlays=overlays_store, machines=machines_store, catalog=catalog, nbd=nbd
+            )
+        )
         # Live-env media state. ``pixie-tui`` / ``pixie-inventory`` /
         # ``pixie-flash-*`` all need vmlinuz + initrd + live.squashfs
         # staged under ``PIXIE_LIVE_ENV_DIR`` (defaults to
@@ -1735,10 +1758,19 @@ def create_app() -> FastAPI:
             "machines_with_inventory": sum(1 for m in machines if m.inventory),
             "catalog_total": len(entries),
             "catalog_fetched": sum(1 for e in entries if getattr(e, "content_sha256", "")),
+            "catalog_unfetched": sum(1 for e in entries if not getattr(e, "content_sha256", "")),
             "catalog_images_total": len(images),
             "catalog_images_fetched": sum(1 for e in images if e.content_sha256),
             "catalog_bundles_total": len(bundles),
             "catalog_bundles_fetched": sum(1 for e in bundles if e.content_sha256),
+            "images_count": len(image_views),
+            "images_bytes": images_bytes,
+            "images_bytes_display": humanize_bytes(images_bytes),
+            "images_reclaimable": images_reclaimable,
+            "overlays_count": ov_tot.count,
+            "overlays_bytes": ov_tot.used_bytes,
+            "overlays_bytes_display": humanize_bytes(ov_tot.used_bytes),
+            "overlays_running": ov_tot.running,
             "exports_total": len(exports),
             "exports_running": sum(1 for e in exports if e.status == "running"),
             "exports_error": sum(1 for e in exports if e.status == "error"),
