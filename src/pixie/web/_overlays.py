@@ -24,6 +24,7 @@ from pixie.exports._store import Overlay, OverlaysStore
 from pixie.exports._supervisor import NbdServer
 from pixie.machines._store import MachinesStore
 from pixie.pxe._renderer import _overlay_export_name
+from pixie.web._fsutil import file_allocated_bytes
 
 # State classification, keyed on the alias identity (not a machine).
 # ``serving`` = a qemu-nbd is streaming it right now; ``held`` = a
@@ -115,7 +116,7 @@ def _stat_file(path: Path) -> tuple[bool, int, int, str]:
         st = path.stat()
     except OSError:
         return (False, 0, 0, "")
-    allocated = int(getattr(st, "st_blocks", 0)) * 512
+    allocated = file_allocated_bytes(path)
     mtime = datetime.fromtimestamp(st.st_mtime, UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
     return (True, allocated, int(st.st_size), mtime)
 

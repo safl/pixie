@@ -21,6 +21,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import PlainTextResponse
 
 from pixie.events._kinds import (
+    MACHINE_DISCOVERED,
     MACHINE_INVENTORY_UPDATED,
     PXE_PLAN_RENDERED,
     PXE_PLAN_UNAVAILABLE,
@@ -163,6 +164,10 @@ def pxe_plan(request: Request, mac: str) -> PlainTextResponse:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     machines = _get_machines(request)
+    # Detect first-ever contact BEFORE the upsert so the discovery
+    # event fires exactly once (touch_seen itself can't emit -- stores
+    # hold no EventsLog by design).
+    is_new = machines.get(canon) is None
     row = machines.touch_seen(canon, ip=_client_ip(request))
 
     ctx = _render_context(request)
@@ -174,6 +179,14 @@ def pxe_plan(request: Request, mac: str) -> PlainTextResponse:
     # reason as a comment, which we extract for details.
     log = getattr(request.app.state, "events_log", None)
     if log is not None:
+        if is_new:
+            log.emit(
+                MACHINE_DISCOVERED,
+                subject_kind="machine",
+                subject_id=canon,
+                summary=f"{canon}: first contact, auto-registered {row.boot_mode}",
+                details={"boot_mode": row.boot_mode, "ip": row.last_seen_ip},
+            )
         is_unavailable = "\nexit\n" in body and "unavailable" in body.lower()
         if is_unavailable:
             log.emit(

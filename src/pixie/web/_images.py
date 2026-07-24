@@ -7,7 +7,7 @@ that content IS the **Image**, a distinct entity from the catalog row
 (multiple catalog rows can resolve to one image sha). An image has
 derived forms (the raw disk + rootfs.raw, and a boot bundle =
 vmlinuz + initrd resolved via ``netboot_src``) and live *usages*:
-machines bound to it, an ephemeral NBD export (nbdkit), and per-machine
+machines bound to it, an ephemeral NBD export (nbdkit), and alias-keyed
 persistent overlays (qemu-nbd). Every usage keys off the same disk
 ``content_sha256``, so this module is a group-by-sha with a footprint +
 usage-count rollup. Those counts are also the refcount that makes a
@@ -26,30 +26,7 @@ from pixie.exports._store import ExportsStore, OverlaysStore
 from pixie.exports._supervisor import NbdServer
 from pixie.machines._store import MachinesStore
 from pixie.pxe._renderer import _overlay_export_name
-
-
-def _dir_allocated_bytes(directory: Path) -> int:
-    """Sum of *allocated* bytes (``st_blocks * 512``) of the files
-    directly under ``directory`` -- the honest on-disk footprint of a
-    blob/artifact/overlay dir. Missing dir -> 0."""
-    total = 0
-    try:
-        for p in directory.iterdir():
-            if p.is_file():
-                try:
-                    total += int(getattr(p.stat(), "st_blocks", 0)) * 512
-                except OSError:
-                    continue
-    except OSError:
-        return 0
-    return total
-
-
-def _file_allocated_bytes(path: Path) -> int:
-    try:
-        return int(getattr(path.stat(), "st_blocks", 0)) * 512
-    except OSError:
-        return 0
+from pixie.web._fsutil import dir_allocated_bytes, file_allocated_bytes
 
 
 @dataclass
@@ -139,7 +116,7 @@ def build_image_views(
 
     views: list[ImageView] = []
     for sha, ents in groups.items():
-        disk_bytes = _dir_allocated_bytes(catalog.blob_path(sha).parent)
+        disk_bytes = dir_allocated_bytes(catalog.blob_path(sha).parent)
 
         # Boot form: any of these entries' ``netboot_src`` -> the bundle
         # entry -> its unpacked artifacts dir.
@@ -156,7 +133,7 @@ def build_image_views(
             if (adir / "manifest.json").is_file() or (adir / "vmlinuz").is_file():
                 boot_present = True
                 boot_name = bundle.name
-                boot_bytes = _dir_allocated_bytes(adir)
+                boot_bytes = dir_allocated_bytes(adir)
                 break
 
         mach = [
@@ -169,7 +146,7 @@ def build_image_views(
         )
         ovs = [o for o in all_overlays if o.image_sha == sha]
         ov_running = sum(1 for o in ovs if nbd.port_for(_overlay_export_name(o)) is not None)
-        ov_bytes = sum(_file_allocated_bytes(Path(o.qcow2_path)) for o in ovs)
+        ov_bytes = sum(file_allocated_bytes(Path(o.qcow2_path)) for o in ovs)
 
         views.append(
             ImageView(
@@ -198,7 +175,7 @@ def build_image_views(
             ImageView(
                 sha=sub.name,
                 names=[],
-                disk_bytes=_dir_allocated_bytes(sub),
+                disk_bytes=dir_allocated_bytes(sub),
                 boot_present=False,
                 boot_bundle_name="",
                 boot_bytes=0,

@@ -50,7 +50,18 @@ source management -- add, import, Fetch, delete-entry -- and a fetched
 disk-image row now links to its **Image** for footprint, live NBD /
 overlay usage, and GC.
 
+**Legacy `/ui/exports` lands on Images.** The kept-alive redirect for
+the old exports URL (and the Stop-export action) now points at the
+Images view, where NBD export usage is surfaced per content sha, rather
+than at Catalog.
+
 ### Added
+
+**First-contact machines emit a `machine.discovered` audit event.** The
+first time an unknown MAC hits `GET /pxe/<mac>` and is auto-registered,
+pixie now records one `machine.discovered` event (carrying the
+auto-registered boot mode + the client IP); repeat contacts do not
+re-emit. The kind was reserved but never fired before.
 
 **Images: the materialised content behind Catalog sources.** A new
 **Images** page (`/ui/images`) separates the *source* (a Catalog entry,

@@ -21,7 +21,9 @@ from __future__ import annotations
 # ---------- catalog + fetch pipeline ---------------------------------
 #
 # Every catalog-store mutation emits one of these. ``subject_kind`` is
-# always ``"entry"``; ``subject_id`` is the catalog entry name.
+# ``"entry"`` (``subject_id`` = the catalog entry name) for the per-row
+# kinds; the ``catalog.import.*`` pair is catalog-scoped instead
+# (``subject_kind = "catalog"``) since one import touches many entries.
 
 CATALOG_ENTRY_ADDED = "catalog.entry.added"
 """A new row landed via POST /catalog/entries, POST /ui/catalog/add,
@@ -95,25 +97,25 @@ EXPORT_NBDKIT_EXITED = "export.nbdkit.exited"
 (``_refresh_row`` noticed no live proc for a ``running`` row).
 ``details.previous_port`` + ``details.error`` explain."""
 
-# ---------- persistent overlays (per-machine qcow2) -----------------
+# ---------- persistent overlays (alias-keyed volumes) ---------------
 #
-# ``subject_kind`` is always ``"machine"``; ``subject_id`` is the
-# canonical MAC. ``details`` names the (image_sha, profile) triple.
+# ``subject_kind`` is always ``"overlay"``; ``subject_id`` is the
+# globally-unique ``alias`` (``""`` for a fleet-wide bulk action). An
+# overlay is a single-writer qcow2 volume over one base image, not a
+# per-machine file; ``details`` carries ``alias`` / ``image_sha`` /
+# ``qcow2_path`` as relevant.
 
 OVERLAY_CREATED = "overlay.created"
-"""A per-machine qcow2 overlay was materialised for the first time
-for a ``(mac, image_sha, profile)`` triple. ``details`` carries
-``image_sha``, ``profile``, and ``qcow2_path``."""
+"""An alias-keyed qcow2 overlay was materialised for the first time
+(lazy-created on the first nbdboot render, or after a Reset).
+``details`` carries ``alias``, ``image_sha``, and ``qcow2_path``."""
 
 OVERLAY_RESET = "overlay.reset"
-"""Operator hit Reset on the machine detail page: the qemu-nbd was
-terminated, the qcow2 was unlinked, the overlays row was deleted.
+"""Operator hit Reset (one alias) or Prune (bulk) on the Overlays
+page: the qemu-nbd was terminated, the qcow2 unlinked, the overlays
+row deleted. ``subject_id`` is the alias for a single Reset, ``""``
+for a bulk Prune (``details.pruned`` counts the reclaimed volumes).
 Next plan render lazily creates a fresh overlay from the base."""
-
-OVERLAY_BOOTED = "overlay.booted"
-"""Plan render for an already-existing overlay row (heartbeat).
-Emitted on every persistent nbdboot render so an operator can grep
-the events log for "which overlays am I actually using?"."""
 
 # ---------- machines + PXE ------------------------------------------
 #
@@ -121,10 +123,11 @@ the events log for "which overlays am I actually using?"."""
 # canonical MAC address.
 
 MACHINE_DISCOVERED = "machine.discovered"
-"""First-ever GET /pxe/<mac> for a MAC pixie has not seen before.
-Emitted from ``machines_store.touch_seen`` when a new row is
-created; subsequent hits do NOT emit (they update ``last_seen_at``
-via the ``pxe.plan.rendered`` event instead)."""
+"""First-ever GET /pxe/<mac> for a MAC pixie has not seen before. The
+``/pxe/<mac>`` route detects the absent row before ``touch_seen``
+auto-registers it and emits this once; subsequent hits do NOT emit
+(they update ``last_seen_at`` via the ``pxe.plan.rendered`` event
+instead). ``details.boot_mode`` is the auto-registered default."""
 
 MACHINE_BOUND = "machine.bound"
 """First bind for a MAC: PUT /machines/<mac> or POST
@@ -232,7 +235,6 @@ KNOWN_EVENT_KINDS: frozenset[str] = frozenset(
         EXPORT_NBDKIT_EXITED,
         OVERLAY_CREATED,
         OVERLAY_RESET,
-        OVERLAY_BOOTED,
         MACHINE_DISCOVERED,
         MACHINE_BOUND,
         MACHINE_BINDING_CHANGED,

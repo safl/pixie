@@ -54,7 +54,7 @@
         {% if image.machines %}
         <div class="table-responsive mb-3">
             <table class="table table-sm table-hover align-middle mb-0">
-                <thead><tr><th>MAC</th><th>Boot mode</th><th>Overlay profile</th></tr></thead>
+                <thead><tr><th>MAC</th><th>Boot mode</th><th>Overlay alias</th></tr></thead>
                 <tbody>
                     {% for mu in image.machines %}
                     <tr>
@@ -70,7 +70,7 @@
 
         <h3 class="h6">NBD export (ephemeral, nbdkit)</h3>
         {% if image.export_running %}
-        <p class="small mb-3">Serving on {% for p in image.export_ports %}<span class="badge text-bg-success">:{{ p }}</span> {% endfor %} &mdash; see <a href="/ui/catalog">Catalog</a>.</p>
+        <p class="small mb-3">Serving on {% for p in image.export_ports %}<span class="badge text-bg-success">:{{ p }}</span> {% endfor %}(ephemeral nbdkit for this image's disk blob).</p>
         {% else %}<p class="small text-muted mb-3">No ephemeral export running.</p>{% endif %}
 
         <h3 class="h6">Overlays (persistent, qemu-nbd) <span class="badge text-bg-{% if image.overlays_total %}info{% else %}light border text-muted{% endif %}">{{ image.overlays_total }}</span></h3>

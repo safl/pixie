@@ -9,11 +9,11 @@
 </div>
 {% endblock %}
 {% block content %}
-{{ page_description('speedometer2', 'Status across pixie, following the model: machines you manage, Catalog sources you can fetch, the Images those sources materialise (with on-disk footprint + how much is reclaimable), the per-machine Overlays, and events. Output-only - each tile links to its page for actions. Refreshes every 5 s.') }}
+{{ page_description('speedometer2', 'Status across pixie, following the model: machines you manage, Catalog sources you can fetch, the Images those sources materialise (with on-disk footprint + how much is reclaimable), the alias-keyed overlay volumes, and events. Output-only - each tile links to its page for actions. Refreshes every 5 s.') }}
 {# Tiles mirror the storage/lifecycle model + the nav: Machines,
    Catalog (sources you can fetch), Images (the materialised entities
-   with footprint + reclaimable refcount), Overlays (per-machine
-   single-writer layers), Events. Output-only -- each tile reports and
+   with footprint + reclaimable refcount), Overlays (alias-keyed
+   single-writer volumes), Events. Output-only -- each tile reports and
    links to its pane; no actions live here. #}
 <div class="row row-cols-2 row-cols-md-3 row-cols-xl-5 g-3 mb-4">
     <div class="col">
