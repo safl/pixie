@@ -1,15 +1,15 @@
 """View-model + stats for the persistent-overlay management surface.
 
 The ``overlays`` table (see :class:`pixie.exports._store.OverlaysStore`)
-holds one row per ``(mac, image_sha, profile)`` triple, each pointing at
-a qcow2 on pixie's data volume. The per-machine bind form only ever
-shows ONE machine's profiles, so an operator watching disk pressure
+holds one row per ``alias`` -- a globally-unique writable volume over
+ONE base image. The per-machine bind form only ever shows the aliases
+relevant to one machine's image, so an operator watching disk pressure
 across the fleet has no aggregate view. This module joins each overlay
-row against the machine registry (is this the target's *current*
-binding?), the catalog (what base image does it wrap?), the NBD
-supervisor (is a qemu-nbd serving it right now?), and the qcow2 on disk
-(how much has it actually grown to?) so the Overlays page can render one
-honest row per overlay.
+row against the machine registry (which machine, if any, currently holds
+it?), the catalog (what base image does it wrap?), the NBD supervisor
+(is a qemu-nbd serving it right now?), and the qcow2 on disk (how much
+has it actually grown to?) so the Overlays page can render one honest
+row per overlay.
 """
 
 from __future__ import annotations
@@ -25,38 +25,40 @@ from pixie.exports._supervisor import NbdServer
 from pixie.machines._store import MachinesStore
 from pixie.pxe._renderer import _overlay_export_name
 
-# State classification. ``active`` = backs the machine's next boot;
-# ``idle`` = kept but not the current binding; ``missing`` = a row whose
-# qcow2 is gone from disk; ``orphaned`` = a qcow2 for a machine pixie no
-# longer tracks. Only ``missing`` + ``orphaned`` are auto-reclaimable --
-# an ``idle`` overlay is a deliberate keep for a future rebind, so Prune
+# State classification, keyed on the alias identity (not a machine).
+# ``serving`` = a qemu-nbd is streaming it right now; ``held`` = a
+# machine holds the exclusive-writer lock but nothing is serving;
+# ``free`` = unattached, available for a machine to claim; ``orphaned``
+# = attached to a MAC pixie no longer tracks; ``missing`` = the qcow2 is
+# gone from disk. Only ``orphaned`` + ``missing`` are auto-reclaimable
+# -- a ``free`` overlay is a deliberate keep for a future bind, so Prune
 # leaves it alone.
-STATE_ACTIVE = "active"
-STATE_IDLE = "idle"
-STATE_MISSING = "missing"
+STATE_SERVING = "serving"
+STATE_HELD = "held"
+STATE_FREE = "free"
 STATE_ORPHANED = "orphaned"
-RECLAIMABLE_STATES = frozenset({STATE_MISSING, STATE_ORPHANED})
+STATE_MISSING = "missing"
+RECLAIMABLE_STATES = frozenset({STATE_ORPHANED, STATE_MISSING})
 
-# Sort buckets: live first, deliberate keeps next, junk last. Biggest
-# consumer first within a bucket so the operator's eye lands on what is
-# both live and heavy before what is reclaimable.
-_STATE_ORDER = {STATE_ACTIVE: 0, STATE_IDLE: 1, STATE_ORPHANED: 2, STATE_MISSING: 3}
-
-
-def overlay_key(mac: str, image_sha: str, profile: str) -> str:
-    """Stable per-overlay DOM/JSON key. ``|`` cannot appear in a MAC, a
-    hex sha, or the profile allowlist, so it round-trips cleanly and the
-    live-refresh JS can address each row without ambiguity."""
-    return f"{mac}|{image_sha}|{profile}"
+# Sort buckets: live first, held next, deliberate free keeps, junk last.
+# Biggest consumer first within a bucket so the operator's eye lands on
+# what is both live and heavy before what is reclaimable.
+_STATE_ORDER = {
+    STATE_SERVING: 0,
+    STATE_HELD: 1,
+    STATE_FREE: 2,
+    STATE_ORPHANED: 3,
+    STATE_MISSING: 4,
+}
 
 
 @dataclass
 class OverlayView:
     """One overlay row joined against machine + catalog + NBD + disk."""
 
-    mac: str
+    alias: str
     image_sha: str
-    profile: str
+    attached_mac: str
     qcow2_path: str
     export_name: str
     created_at: str
@@ -72,11 +74,14 @@ class OverlayView:
     is_active: bool = False
     image_name: str = ""
     base_bytes: int = 0
-    state: str = STATE_IDLE
+    state: str = STATE_FREE
 
     @property
     def key(self) -> str:
-        return overlay_key(self.mac, self.image_sha, self.profile)
+        """Stable per-overlay DOM/JSON key. The alias is globally unique
+        and its allowlist excludes ``|``, so it round-trips cleanly and
+        the live-refresh JS can address each row without ambiguity."""
+        return self.alias
 
     @property
     def reclaimable(self) -> bool:
@@ -127,25 +132,28 @@ def build_overlay_view(
     export_name = _overlay_export_name(ov)
     exists, used, apparent, mtime = _stat_file(Path(ov.qcow2_path))
     port = nbd.port_for(export_name)
-    machine = machines.get(ov.mac)
+    running = port is not None
+    # ``attached_mac`` == "" means the overlay is free; otherwise resolve
+    # the holding machine so we can tell "held by a live machine" from
+    # "held by a MAC pixie forgot" (orphaned, reclaimable).
+    machine = machines.get(ov.attached_mac) if ov.attached_mac else None
     is_active = bool(
-        machine is not None
-        and machine.boot_mode == "nbdboot"
-        and machine.image_content_sha256 == ov.image_sha
-        and machine.overlay_profile == ov.profile
+        machine is not None and machine.boot_mode == "nbdboot" and machine.overlay_alias == ov.alias
     )
     if not exists:
         state = STATE_MISSING
-    elif machine is None:
+    elif ov.attached_mac and machine is None:
         state = STATE_ORPHANED
-    elif is_active:
-        state = STATE_ACTIVE
+    elif running:
+        state = STATE_SERVING
+    elif ov.attached_mac:
+        state = STATE_HELD
     else:
-        state = STATE_IDLE
+        state = STATE_FREE
     return OverlayView(
-        mac=ov.mac,
+        alias=ov.alias,
         image_sha=ov.image_sha,
-        profile=ov.profile,
+        attached_mac=ov.attached_mac,
         qcow2_path=ov.qcow2_path,
         export_name=export_name,
         created_at=ov.created_at,
@@ -154,7 +162,7 @@ def build_overlay_view(
         used_bytes=used,
         apparent_bytes=apparent,
         mtime=mtime,
-        running=port is not None,
+        running=running,
         nbd_port=port or 0,
         machine_exists=machine is not None,
         machine_labels=list(machine.labels) if machine is not None else [],
@@ -188,7 +196,7 @@ def build_overlay_views(
         )
         for ov in overlays.list_all()
     ]
-    views.sort(key=lambda v: (_STATE_ORDER.get(v.state, 9), -v.used_bytes, v.mac, v.profile))
+    views.sort(key=lambda v: (_STATE_ORDER.get(v.state, 9), -v.used_bytes, v.alias))
     return views
 
 
@@ -219,7 +227,7 @@ def overlay_totals(views: list[OverlayView]) -> OverlayTotals:
         count=len(views),
         used_bytes=sum(v.used_bytes for v in views),
         running=sum(1 for v in views if v.running),
-        active=sum(1 for v in views if v.state == STATE_ACTIVE),
+        active=sum(1 for v in views if v.is_active),
         reclaimable=sum(1 for v in views if v.reclaimable),
         reclaimable_bytes=sum(v.used_bytes for v in views if v.reclaimable),
     )

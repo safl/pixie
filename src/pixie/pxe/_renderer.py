@@ -49,11 +49,18 @@ def _mac_slug(mac: str) -> str:
 
 
 def _overlay_export_name(overlay: Overlay) -> str:
-    """NBD export name for a persistent overlay. Distinct shape from
-    ``_export_name_for`` so the operator can tell a persistent qemu-nbd
-    export from an ephemeral nbdkit one at a glance in ``nbdinfo``
-    output or in the events log."""
-    return f"pixie-ov-{_mac_slug(overlay.mac)}-{overlay.image_sha[:8]}-{overlay.profile}"
+    """NBD export name for a persistent overlay. The alias is globally
+    unique, so it alone names the export -- distinct ``pixie-ov-`` shape
+    from the ephemeral ``_export_name_for`` so an operator can tell a
+    persistent qemu-nbd export from an ephemeral nbdkit one at a glance."""
+    return f"pixie-ov-{overlay.alias}"
+
+
+def overlay_qcow2_path(overlays_dir: Path, alias: str) -> Path:
+    """On-disk qcow2 for an overlay ``alias``. Flat under
+    ``<overlays_dir>/<alias>.qcow2`` -- the alias is globally unique, so
+    no per-mac / per-image sub-tree is needed."""
+    return overlays_dir / f"{alias}.qcow2"
 
 
 DEFAULT_OVERLAY_SIZE = "10G"
@@ -103,9 +110,9 @@ class PlanRenderer:
         self._exports = exports
         self._overlays = overlays
         self._nbd = nbd
-        # Filesystem root for per-machine qcow2 overlays. A bound
-        # ``(mac, image_sha, profile)`` triple materialises at
-        # ``<overlays_dir>/<mac_slug>/<image_sha>/<profile>.qcow2``.
+        # Filesystem root for qcow2 overlays. Each globally-unique alias
+        # materialises flat at ``<overlays_dir>/<alias>.qcow2`` (see
+        # :func:`overlay_qcow2_path`).
         self._overlays_dir = overlays_dir
         # Optional events log so overlay lifecycle events (created /
         # booted) land alongside the rest of pixie's audit trail. None
@@ -224,45 +231,59 @@ class PlanRenderer:
             )
 
         # Persistent overlay path: if the machine's bind carries a
-        # non-blank ``overlay_profile``, serve the per-machine qcow2
-        # via qemu-nbd instead of the shared read-only blob via
-        # nbdkit. Client mounts /dev/nbd0 read-write directly (no
-        # tmpfs+overlayfs on the client side); writes land in the
-        # qcow2 and persist across reboots. Lazy-creates the qcow2
-        # file + overlay row on the first render.
-        if machine.overlay_profile:
-            profile = machine.overlay_profile
-            # Per _ensure_overlay: the qcow2's ``backing_file`` is
-            # whichever file the fetch pipeline prefers (rootfs.raw
-            # if present, else the whole-disk blob). The target sees
-            # /dev/nbd0 as ext4 at offset 0 in the common case, so
-            # qemu-nbd no longer needs ``--offset`` bookkeeping.
-            try:
-                overlay = self._ensure_overlay(machine.mac, image_sha, profile, blob)
-            except RuntimeError as exc:
+        # non-blank ``overlay_alias``, serve that alias's qcow2 via
+        # qemu-nbd instead of the shared read-only blob via nbdkit.
+        # Client mounts /dev/nbd0 read-write directly (no tmpfs+overlayfs
+        # on the client side); writes land in the qcow2 and persist
+        # across reboots. The overlay row is created at bind time; the
+        # qcow2 file is lazy-created here on the first render.
+        if machine.overlay_alias:
+            alias = machine.overlay_alias
+            overlay = self._overlays.get(alias)
+            if overlay is None:
+                return self._unavailable(
+                    machine, f"overlay {alias!r} not found; rebind this machine to it"
+                )
+            # Single-writer: refuse if a DIFFERENT machine already holds
+            # exclusive write. qcow2's own image-lock is the backstop,
+            # but this gives a legible plan instead of a boot-time hang.
+            if overlay.attached_mac and overlay.attached_mac != machine.mac:
                 return self._unavailable(
                     machine,
-                    f"overlay {profile!r} could not be prepared: {exc}",
+                    f"overlay {alias!r} held by {overlay.attached_mac}; detach it there first",
                 )
+            # Ensure the qcow2 exists (lazy on first render / post-Reset).
+            # ``backing_file`` points at whichever file the fetch pipeline
+            # prefers (rootfs.raw if present, else the whole-disk blob),
+            # so the target sees /dev/nbd0 as ext4 at offset 0.
+            qcow2 = Path(overlay.qcow2_path)
+            if not qcow2.is_file():
+                try:
+                    NbdServer.create_qcow2(qcow2, preferred_serve_path(blob))
+                except RuntimeError as exc:
+                    return self._unavailable(
+                        machine, f"overlay {alias!r} could not be prepared: {exc}"
+                    )
+                if self._events is not None:
+                    self._events.emit(
+                        "overlay.created",
+                        subject_kind="overlay",
+                        subject_id=alias,
+                        summary=f"overlay {alias!r} qcow2 created (image {image_sha[:12]})",
+                        details={"alias": alias, "image_sha": image_sha, "qcow2_path": str(qcow2)},
+                    )
             try:
-                port = self._nbd.spawn_qcow2(
-                    _overlay_export_name(overlay),
-                    Path(overlay.qcow2_path),
-                )
+                port = self._nbd.spawn_qcow2(_overlay_export_name(overlay), qcow2)
             except RuntimeError as exc:
                 return self._unavailable(
-                    machine,
-                    f"qemu-nbd refused to start for overlay {overlay.profile!r}: {exc}",
+                    machine, f"qemu-nbd refused to start for overlay {alias!r}: {exc}"
                 )
-            self._overlays.update_runtime(
-                machine.mac,
-                image_sha,
-                machine.overlay_profile,
-                nbd_port=port,
-                status="running",
-                error="",
-            )
-            self._overlays.touch_last_boot(machine.mac, image_sha, machine.overlay_profile)
+            # Claim the exclusive-writer hold, and drop any stale hold
+            # this machine still has on other aliases.
+            self._overlays.attach(alias, machine.mac)
+            self._overlays.detach_mac(machine.mac, keep=alias)
+            self._overlays.update_runtime(alias, nbd_port=port, status="running", error="")
+            self._overlays.touch_last_boot(alias)
             return self._env.get_template("nbdboot.j2").render(
                 mac=machine.mac,
                 host=ctx.host,
@@ -298,48 +319,6 @@ class PlanRenderer:
             extra_cmdline=extra_cmdline,
             persist=False,
         )
-
-    def _ensure_overlay(self, mac: str, image_sha: str, profile: str, base_blob: Path) -> Overlay:
-        """Look up the ``(mac, image_sha, profile)`` overlay row; create
-        the qcow2 + row on first call, or recreate the qcow2 if the
-        file went missing (post-Reset). Returns the row. Emits an
-        ``overlay.created`` event when the row is fresh."""
-        row = self._overlays.get(mac, image_sha, profile)
-        qcow2_path = self._qcow2_path_for(mac, image_sha, profile)
-        if row is not None and Path(row.qcow2_path).is_file():
-            return row
-        is_new_row = row is None
-        if not qcow2_path.is_file():
-            # Point the qcow2's ``backing_file`` at whichever file the
-            # fetch pipeline extracted for us: ``rootfs.raw`` when it
-            # exists, else the whole-disk blob. In the common case the
-            # qcow2 wraps just the ext4 partition, so the target sees
-            # /dev/nbd0 as a mountable ext4 filesystem at offset 0.
-            NbdServer.create_qcow2(qcow2_path, preferred_serve_path(base_blob))
-        overlay = Overlay(
-            mac=mac,
-            image_sha=image_sha,
-            profile=profile,
-            qcow2_path=str(qcow2_path),
-        )
-        self._overlays.upsert(overlay)
-        if self._events is not None and is_new_row:
-            self._events.emit(
-                "overlay.created",
-                subject_kind="machine",
-                subject_id=mac,
-                summary=(f"{mac}: overlay {profile!r} created (image {image_sha[:12]})"),
-                details={
-                    "mac": mac,
-                    "image_sha": image_sha,
-                    "profile": profile,
-                    "qcow2_path": str(qcow2_path),
-                },
-            )
-        return overlay
-
-    def _qcow2_path_for(self, mac: str, image_sha: str, profile: str) -> Path:
-        return self._overlays_dir / _mac_slug(mac) / image_sha / f"{profile}.qcow2"
 
     def _unavailable(self, machine: Machine, reason: str) -> str:
         _log.info("pxe %s unavailable: %s", machine.mac, reason)

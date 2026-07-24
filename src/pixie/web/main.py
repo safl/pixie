@@ -292,20 +292,12 @@ def _respawn_overlays_at_startup(app: FastAPI) -> None:
         qcow2_path = _Path(overlay.qcow2_path)
         if not qcow2_path.exists():
             overlays_store.update_runtime(
-                overlay.mac,
-                overlay.image_sha,
-                overlay.profile,
+                overlay.alias,
                 nbd_port=0,
                 status="error",
                 error=f"qcow2 missing at {qcow2_path}",
             )
-            log.warning(
-                "overlay %s/%s/%s: qcow2 missing at %s",
-                overlay.mac,
-                overlay.image_sha,
-                overlay.profile,
-                qcow2_path,
-            )
+            log.warning("overlay %s: qcow2 missing at %s", overlay.alias, qcow2_path)
             continue
         # No ``--offset`` bookkeeping in the extract-at-fetch design:
         # each qcow2 was created with ``backing_file`` pointing at
@@ -318,36 +310,20 @@ def _respawn_overlays_at_startup(app: FastAPI) -> None:
             )
         except RuntimeError as exc:
             overlays_store.update_runtime(
-                overlay.mac,
-                overlay.image_sha,
-                overlay.profile,
+                overlay.alias,
                 nbd_port=0,
                 status="error",
                 error=f"respawn failed: {exc}",
             )
-            log.warning(
-                "overlay %s/%s/%s: qemu-nbd respawn failed: %s",
-                overlay.mac,
-                overlay.image_sha,
-                overlay.profile,
-                exc,
-            )
+            log.warning("overlay %s: qemu-nbd respawn failed: %s", overlay.alias, exc)
             continue
         overlays_store.update_runtime(
-            overlay.mac,
-            overlay.image_sha,
-            overlay.profile,
+            overlay.alias,
             nbd_port=port,
             status="running",
             error="",
         )
-        log.info(
-            "overlay %s/%s/%s: respawned on port %d",
-            overlay.mac,
-            overlay.image_sha,
-            overlay.profile,
-            port,
-        )
+        log.info("overlay %s: respawned on port %d", overlay.alias, port)
 
 
 def _require_ui_auth(request: Request) -> None:
@@ -567,36 +543,38 @@ def _recent_events_for(events_log: EventsLog, subject_kind: str) -> list[Event]:
     return events_log.list(subject_kind=subject_kind, limit=_RECENT_EVENTS_LIMIT)
 
 
-def _reset_overlay_row(state: Any, mac: str, image_sha: str, profile: str) -> bool:
-    """Tear down one persistent overlay: terminate its qemu-nbd, unlink
-    the qcow2, drop the ``overlays`` row, and emit ``overlay.reset``.
+def _reset_overlay_row(state: Any, alias: str) -> bool:
+    """Tear down one persistent overlay by ``alias``: terminate its
+    qemu-nbd, unlink the qcow2, drop the ``overlays`` row, and emit
+    ``overlay.reset``.
 
     Returns True iff a row existed. Idempotent: a missing row or a
     missing file are both no-ops. Shared by the per-machine Reset button
     and the Overlays page (single Reset + bulk Prune) so every teardown
     path behaves identically. Kills qemu-nbd first so the qcow2 isn't
-    held open when we unlink it."""
+    held open when we unlink it. The next nbdboot that references the
+    alias lazy-recreates a fresh qcow2 from the base image."""
     from pathlib import Path as _Path
 
     from pixie.events._kinds import OVERLAY_RESET
     from pixie.pxe._renderer import _overlay_export_name
 
     overlays = state.overlays_store
-    row = overlays.get(mac, image_sha, profile)
+    row = overlays.get(alias)
     if row is None:
         return False
     state.nbd_server.terminate(_overlay_export_name(row))
     with contextlib_suppress(FileNotFoundError, OSError):
         _Path(row.qcow2_path).unlink()
-    overlays.delete(mac, image_sha, profile)
+    overlays.delete(alias)
     events = getattr(state, "events_log", None)
     if events is not None:
         events.emit(
             OVERLAY_RESET,
-            subject_kind="machine",
-            subject_id=mac,
-            summary=f"{mac}: overlay {profile!r} reset (image {image_sha[:12]})",
-            details={"mac": mac, "image_sha": image_sha, "profile": profile},
+            subject_kind="overlay",
+            subject_id=alias,
+            summary=f"overlay {alias!r} reset (image {row.image_sha[:12]})",
+            details={"alias": alias, "image_sha": row.image_sha, "attached_mac": row.attached_mac},
         )
     return True
 
@@ -675,11 +653,11 @@ def create_app() -> FastAPI:
         # them again. Idempotent per name; harmless on cold boot
         # (empty export list -> no-op).
         _respawn_exports_at_startup(app)
-        # Same intent for persistent per-machine overlays: any qcow2
-        # whose file still exists gets a qemu-nbd resurrected so the
-        # next ``GET /pxe/<mac>`` for a machine bound to
-        # ``overlay_profile != ''`` finds a running export at a known
-        # port. Idempotent.
+        # Same intent for persistent named overlays: any qcow2 whose
+        # file still exists gets a qemu-nbd resurrected so the next
+        # ``GET /pxe/<mac>`` for a machine bound to a non-blank
+        # ``overlay_alias`` finds a running export at a known port.
+        # Idempotent.
         _respawn_overlays_at_startup(app)
         try:
             yield
@@ -1214,14 +1192,21 @@ def create_app() -> FastAPI:
             for e in request.app.state.catalog_store.list_entries()
             if getattr(e, "bindable", False)
         ]
-        # Overlay profiles that already exist for THIS (machine, image);
-        # empty until the machine's been bound to a real image + at
-        # least one persistent profile has been created.
-        overlay_profiles: list[Any] = []
+        # Overlay aliases the operator may attach for THIS machine's
+        # currently-bound base image: every alias over that image that is
+        # free (attached_mac == "") or already held by this machine. An
+        # alias held by a DIFFERENT machine is single-writer-locked and
+        # deliberately not offered. Empty until the machine's been bound
+        # to a real image + at least one overlay over it exists.
+        overlay_aliases: list[Any] = []
         if machine.image_content_sha256:
-            overlay_profiles = request.app.state.overlays_store.list_for_machine_and_image(
-                machine.mac, machine.image_content_sha256
-            )
+            overlay_aliases = [
+                o
+                for o in request.app.state.overlays_store.list_for_image(
+                    machine.image_content_sha256
+                )
+                if o.attached_mac in ("", machine.mac)
+            ]
         # Plain-English narration of what the next PXE will do given
         # the current bind. Rendered into the preview panel so an
         # operator sees a real description on page load, not a bare
@@ -1237,7 +1222,7 @@ def create_app() -> FastAPI:
             boot_mode=machine.boot_mode,
             image_name=picked_image.name if picked_image else "",
             disk_label=machine.target_disk_serial,
-            overlay_profile=machine.overlay_profile,
+            overlay_alias=machine.overlay_alias,
         )
         return templates.TemplateResponse(
             request,
@@ -1249,7 +1234,7 @@ def create_app() -> FastAPI:
                 "events": events,
                 "bindable_entries": bindable_entries,
                 "boot_mode_meta": BOOT_MODE_META,
-                "overlay_profiles": overlay_profiles,
+                "overlay_aliases": overlay_aliases,
                 "initial_bind_preview": initial_bind_preview,
                 "global_live_env_extra_cmdline": (
                     request.app.state.settings_store.resolve_live_env_extra_cmdline()
@@ -1267,8 +1252,8 @@ def create_app() -> FastAPI:
         image_content_sha256: str = Form(""),
         target_disk_serial: str = Form(""),
         extra_cmdline: str = Form(""),
-        overlay_profile: str = Form(""),
-        overlay_profile_new: str = Form(""),
+        overlay_alias: str = Form(""),
+        overlay_alias_new: str = Form(""),
         _auth: None = Depends(_require_ui_auth),
     ) -> RedirectResponse:
         """Persist a boot-mode binding. Labels are edited on their
@@ -1280,29 +1265,51 @@ def create_app() -> FastAPI:
         the row survive the bind untouched via ``upsert_binding``
         pulling them off the current row.
 
-        ``overlay_profile`` carries the picker's chosen value; a
-        magic ``__new`` sentinel says "take ``overlay_profile_new``
-        as a new profile name". Blank / __new-without-a-name folds
-        back to ephemeral."""
+        ``overlay_alias`` carries the picker's chosen value; a magic
+        ``__new`` sentinel says "take ``overlay_alias_new`` as a new
+        alias name". Attaching an existing alias IMPLIES its base image
+        (the machine's ``image_content_sha256`` is overridden to the
+        overlay's). A new alias is created over the base image the
+        operator selected in the image dropdown. Single-writer: an alias
+        already held by a DIFFERENT machine is refused (the bind is
+        dropped); the operator must detach it there first. Blank / a
+        ``__new`` without a name / a new alias with no base image all
+        fold back to ephemeral."""
         import contextlib as _contextlib
 
-        from pixie.machines._store import BadMac
+        from pixie.machines._store import BadMac, normalise_mac
+        from pixie.web._overlay_bind import overlay_state, resolve_overlay_bind
 
-        overlay = overlay_profile.strip()
-        if overlay == "__new":
-            overlay = overlay_profile_new.strip()
+        choice = overlay_alias.strip()
+        if choice == "__new":
+            choice = overlay_alias_new.strip()
         with _contextlib.suppress(BadMac, ValueError):
+            canon = normalise_mac(mac)
             store = request.app.state.machines_store
-            current = store.get(mac)
+            overlays, overlays_dir = overlay_state(request.app.state)
+            current = store.get(canon)
             existing_labels = list(current.labels) if current else []
-            store.upsert_binding(
-                mac,
+
+            # Single-writer + alias-implies-image + lazy row-create all
+            # live in the shared resolver so the JSON API behaves the
+            # same. A held-elsewhere alias raises ValueError (suppressed
+            # here -> silent redirect, no partial state).
+            image_sha, resolved = resolve_overlay_bind(
+                overlays=overlays,
+                overlays_dir=overlays_dir,
+                mac=canon,
                 boot_mode=boot_mode,
-                image_content_sha256=image_content_sha256.strip().lower(),
+                image_sha=image_content_sha256.strip().lower(),
+                alias=choice,
+            )
+            store.upsert_binding(
+                canon,
+                boot_mode=boot_mode,
+                image_content_sha256=image_sha,
                 labels=existing_labels,
                 target_disk_serial=target_disk_serial,
                 extra_cmdline=extra_cmdline,
-                overlay_profile=overlay,
+                overlay_alias=resolved,
             )
         return RedirectResponse(url="/ui/machines", status_code=status.HTTP_303_SEE_OTHER)
 
@@ -1310,8 +1317,7 @@ def create_app() -> FastAPI:
     def ui_machines_overlay_reset(
         request: Request,
         mac: str,
-        image_sha: str = Form(...),
-        profile: str = Form(...),
+        alias: str = Form(...),
         _auth: None = Depends(_require_ui_auth),
     ) -> RedirectResponse:
         """Terminate the qemu-nbd for this overlay, unlink the qcow2,
@@ -1322,7 +1328,7 @@ def create_app() -> FastAPI:
         Confirm-modal is on the client. Server-side just carries the
         deletion out. Any operator who lands here without confirming
         picked the button already."""
-        _reset_overlay_row(request.app.state, mac, image_sha, profile)
+        _reset_overlay_row(request.app.state, alias)
         return RedirectResponse(url=f"/ui/machines/{mac}", status_code=status.HTTP_303_SEE_OTHER)
 
     # ---------- ui: overlays management -----------------------------
@@ -1392,15 +1398,13 @@ def create_app() -> FastAPI:
     @app.post("/ui/overlays/reset")
     def ui_overlays_reset(
         request: Request,
-        mac: str = Form(...),
-        image_sha: str = Form(...),
-        profile: str = Form(...),
+        alias: str = Form(...),
         _auth: None = Depends(_require_ui_auth),
     ) -> RedirectResponse:
         """Tear down a single overlay from the Overlays page. Same
         operation as the per-machine Reset button; redirects back to
         the overlays list instead of the machine detail."""
-        _reset_overlay_row(request.app.state, mac, image_sha, profile)
+        _reset_overlay_row(request.app.state, alias)
         return RedirectResponse(url="/ui/overlays", status_code=status.HTTP_303_SEE_OTHER)
 
     @app.post("/ui/overlays/prune")
@@ -1413,9 +1417,7 @@ def create_app() -> FastAPI:
         profile a live machine could rebind to) are left untouched."""
         pruned = 0
         for v in _overlay_views_now(request):
-            if v.reclaimable and _reset_overlay_row(
-                request.app.state, v.mac, v.image_sha, v.profile
-            ):
+            if v.reclaimable and _reset_overlay_row(request.app.state, v.alias):
                 pruned += 1
         events = getattr(request.app.state, "events_log", None)
         if events is not None and pruned:
@@ -1423,7 +1425,7 @@ def create_app() -> FastAPI:
 
             events.emit(
                 OVERLAY_RESET,
-                subject_kind="machine",
+                subject_kind="overlay",
                 subject_id="",
                 summary=f"pruned {pruned} reclaimable overlay(s)",
                 details={"pruned": pruned},
