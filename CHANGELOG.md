@@ -73,6 +73,23 @@ the old exports URL (and the Stop-export action) now points at the
 Images view, where NBD export usage is surfaced per content sha, rather
 than at Catalog.
 
+**Overlay picker shows aliases held elsewhere, disabled.** The
+machine-detail overlay dropdown used to hide any alias held by another
+machine, so an operator searching for it assumed it didn't exist and
+tried to create a duplicate (which the single-writer bind then
+rejected). Held-elsewhere aliases are now shown as a disabled option
+labelled with the holder MAC ("held by `<mac>`") -- visible, but not
+selectable.
+
+**Overlays distinguish "pending" from "file missing".** A reserved
+overlay alias whose qcow2 hasn't been lazy-created yet (never booted)
+previously read as *file missing* -- the same alarming state as a
+booted-then-lost overlay -- and Prune would reclaim it as junk. Such an
+overlay is now classified **pending** (benign, awaiting its first
+nbdboot) and is left alone by Prune; *missing* is reserved for an
+overlay whose qcow2 vanished after a prior boot (real data loss). The
+`last_boot_at` timestamp is the discriminator.
+
 ### Added
 
 **First-contact machines emit a `machine.discovered` audit event.** The

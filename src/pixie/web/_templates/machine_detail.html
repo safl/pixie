@@ -265,11 +265,12 @@
                over one base image; picking one flips this machine from
                ephemeral (writes vanish on reboot) to persistent (writes
                land on the qcow2 and survive). Attaching an existing
-               alias IMPLIES its base image. Only aliases that are free
-               or already held by THIS machine are offered -- an alias
-               held elsewhere is single-writer-locked. ``__new`` reveals
-               a text input for a fresh alias name (created over the
-               image selected above); the bind handler merges the two
+               alias IMPLIES its base image. Aliases free or held by THIS
+               machine are selectable; an alias held by ANOTHER machine is
+               single-writer-locked and shown disabled (with the holder
+               MAC) so the operator sees it exists but is in use. ``__new``
+               reveals a text input for a fresh alias name (created over
+               the image selected above); the bind handler merges the two
                fields into a single ``overlay_alias`` value. #}
             <div data-policy-relevant="nbdboot">
                 <label for="overlay_alias" class="form-label fw-semibold">
@@ -284,10 +285,19 @@
                             Ephemeral (no persist)
                         </option>
                         {% for ov in overlay_aliases %}
+                        {% if ov.attached_mac and ov.attached_mac != machine.mac %}
+                        {# Held by another machine: single-writer-locked, so
+                           show it (the operator sees the alias exists) but
+                           disable it -- binding it would be rejected. #}
+                        <option value="{{ ov.alias }}" disabled>
+                            {{ ov.alias }} (held by {{ ov.attached_mac }})
+                        </option>
+                        {% else %}
                         <option value="{{ ov.alias }}"
                                 {% if machine.overlay_alias == ov.alias %}selected{% endif %}>
                             {{ ov.alias }}{% if ov.attached_mac == machine.mac %} (held here){% else %} (free){% endif %}
                         </option>
+                        {% endif %}
                         {% endfor %}
                         {# Fallback: if the machine is bound to an alias
                            whose overlay row got GC'd, keep the value

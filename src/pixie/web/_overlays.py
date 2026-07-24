@@ -29,14 +29,18 @@ from pixie.web._fsutil import file_allocated_bytes
 # State classification, keyed on the alias identity (not a machine).
 # ``serving`` = a qemu-nbd is streaming it right now; ``held`` = a
 # machine holds the exclusive-writer lock but nothing is serving;
-# ``free`` = unattached, available for a machine to claim; ``orphaned``
-# = attached to a MAC pixie no longer tracks; ``missing`` = the qcow2 is
-# gone from disk. Only ``orphaned`` + ``missing`` are auto-reclaimable
-# -- a ``free`` overlay is a deliberate keep for a future bind, so Prune
-# leaves it alone.
+# ``free`` = unattached, available for a machine to claim; ``pending`` =
+# no qcow2 on disk yet but never booted either -- a reserved alias whose
+# file is lazy-created on its first nbdboot (benign, not junk);
+# ``orphaned`` = attached to a MAC pixie no longer tracks; ``missing`` =
+# the qcow2 is gone from disk AFTER a prior boot (real data loss). Only
+# ``orphaned`` + ``missing`` are auto-reclaimable -- ``free`` is a
+# deliberate keep and ``pending`` is awaiting its first boot, so Prune
+# leaves both alone.
 STATE_SERVING = "serving"
 STATE_HELD = "held"
 STATE_FREE = "free"
+STATE_PENDING = "pending"
 STATE_ORPHANED = "orphaned"
 STATE_MISSING = "missing"
 RECLAIMABLE_STATES = frozenset({STATE_ORPHANED, STATE_MISSING})
@@ -48,8 +52,9 @@ _STATE_ORDER = {
     STATE_SERVING: 0,
     STATE_HELD: 1,
     STATE_FREE: 2,
-    STATE_ORPHANED: 3,
-    STATE_MISSING: 4,
+    STATE_PENDING: 3,
+    STATE_ORPHANED: 4,
+    STATE_MISSING: 5,
 }
 
 
@@ -142,7 +147,11 @@ def build_overlay_view(
         machine is not None and machine.boot_mode == "nbdboot" and machine.overlay_alias == ov.alias
     )
     if not exists:
-        state = STATE_MISSING
+        # No qcow2 on disk. Never booted -> the file just hasn't been
+        # lazy-created yet (pending, benign); booted before -> the file
+        # was lost (missing, reclaimable). ``last_boot_at`` is the
+        # discriminator the operator can't see otherwise.
+        state = STATE_MISSING if ov.last_boot_at else STATE_PENDING
     elif ov.attached_mac and machine is None:
         state = STATE_ORPHANED
     elif running:
