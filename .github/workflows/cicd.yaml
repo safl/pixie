@@ -10,6 +10,11 @@ name: cicd
 #   * ``build-media``: build the live-env media (netboot-pc + usbboot-pc
 #     variants) via the cijoe pipelines under cijoe/tasks/. Requires
 #     live-build + passwordless sudo; the runner has both.
+#   * ``verify-usbboot``: structurally verify the usbboot-pc .iso
+#     (hybrid ISO + El Torito BIOS & UEFI entries + sha256), then boot
+#     it via a real Ventoy stick in QEMU and assert the pixie live env
+#     comes up. Gates the publish jobs so a broken / non-Ventoy .iso
+#     never ships.
 #   * ``build-wheel``: sdist + wheel for PyPI. Runs on every push +
 #     PR so the packaging story is exercised regardless of tag state.
 #   * ``publish-pypi``: trusted publishing of the wheel + sdist,
@@ -556,6 +561,66 @@ jobs:
           path: cijoe/_build/test-pxe
           if-no-files-found: warn
 
+  verify-usbboot:
+    name: Verify usbboot .iso (structural + Ventoy boot in QEMU)
+    # Downloads the usbboot-pc bake, structurally verifies the hybrid
+    # ISO (ISO 9660 + isohybrid MBR + El Torito BIOS & UEFI entries +
+    # sha256), then boots it via a real Ventoy stick in QEMU and asserts
+    # the pixie live env comes up: pixie-usb-grow skips (no PIXIE_IMGS
+    # under a loop-mounted ISO), pixie-images-discover bind-mounts the
+    # operator drop, pixie-on-tty1 renders the CLI wizard. Gates the
+    # release -- a broken / non-bootable / non-Ventoy-compatible ISO
+    # must not ship.
+    needs: build-media
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install host tools (qemu, ovmf, exfat, xorriso)
+        run: |
+          set -eu
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            qemu-system-x86 \
+            qemu-utils \
+            ovmf \
+            exfat-fuse \
+            exfatprogs \
+            xorriso \
+            file
+          sudo chmod a+rw /dev/kvm
+          ls -la /dev/kvm
+
+      - name: Install cijoe
+        run: pipx install --force cijoe
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v8.1.0
+
+      - name: Download usbboot-pc artifact
+        uses: actions/download-artifact@v7
+        with:
+          name: pixie-usbboot-pc-x86_64
+          path: ~/system_imaging/disk/
+
+      - name: Show downloaded artifact contents
+        run: |
+          set -eu
+          echo "--- ~/system_imaging/disk (recursive) ---"
+          find ~/system_imaging/disk -maxdepth 5 -print
+
+      - name: Verify + Ventoy-boot the usbboot .iso
+        run: make test-usb-ventoy
+
+      - name: Upload cijoe output
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: cijoe-output-test-usb-ventoy
+          path: cijoe/cijoe-output
+          if-no-files-found: warn
+
   build-wheel:
     name: Build wheel + sdist
     needs: test
@@ -591,6 +656,7 @@ jobs:
       - test-pxe-tui
       - test-pxe-flash
       - test-pxe-flash-always
+      - verify-usbboot
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/v')
     environment:
@@ -632,6 +698,7 @@ jobs:
       - test-pxe-tui
       - test-pxe-flash
       - test-pxe-flash-always
+      - verify-usbboot
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/v')
     permissions:
@@ -676,6 +743,7 @@ jobs:
       - test-pxe-tui
       - test-pxe-flash
       - test-pxe-flash-always
+      - verify-usbboot
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/v')
     permissions:

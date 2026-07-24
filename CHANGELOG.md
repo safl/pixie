@@ -11,6 +11,20 @@ operator-facing summary.
 
 ## [Unreleased]
 
+### Added
+
+**CI verifies the usbboot `.iso` boots via Ventoy.** A new
+`verify-usbboot` job structurally checks the bake (valid ISO 9660 +
+isohybrid MBR + El Torito BIOS *and* UEFI boot entries + sha256), then
+installs Ventoy onto a QEMU disk, drops the `.iso` + a sentinel image
+catalog onto it, and boots it -- asserting the pixie live env comes up
+correctly on the Ventoy loop-boot path (`pixie-usb-grow` skips with no
+`PIXIE_IMGS` partition, `pixie-images-discover` bind-mounts the
+operator drop at `/var/lib/pixie/images`, and `pixie-on-tty1` renders
+the CLI wizard). The job gates the publish jobs, so a broken,
+non-bootable, or non-Ventoy-compatible ISO can never ship. Ported from
+bty's `test-usb-ventoy`.
+
 ## [0.3.1] - 2026-07-24
 
 ### Fixed
