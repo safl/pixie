@@ -11,6 +11,8 @@ operator-facing summary.
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-07-24
+
 ### Changed
 
 **Machines list Image column reads like the new model.** The bound
@@ -53,8 +55,8 @@ move), and each machine's binding is rewritten to the same derived alias.
 storage/lifecycle vocabulary + the nav: **Machines**, **Catalog**
 (sources you can fetch, with a not-yet-fetched count), **Images** (the
 materialised entities, with on-disk footprint + how many are
-reclaimable), **Overlays** (per-machine writable, with disk-used +
-serving), and **Events** -- instead of the old catalog-images /
+reclaimable), **Overlays** (alias-keyed writable volumes, with disk-used
++ serving), and **Events** -- instead of the old catalog-images /
 NBD-exports framing. The Acknowledge button was removed from the
 dashboard (it's an action; the dashboard is output-only -- ack lives on
 the Events page).
