@@ -65,8 +65,9 @@
                         {% endif %}
                     </td>
                     <td data-cell="image">
-                        {% if m.image_content_sha256 %}
-                        <code title="{{ m.image_content_sha256 }}">{{ m.image_content_sha256[:12] }}</code>
+                        {% set cell = image_cells.get(m.mac) %}
+                        {% if cell and cell[0] %}
+                        <a href="/ui/images/{{ cell[0] }}" title="{{ cell[0] }}" class="text-decoration-none">{% if cell[1] %}{{ cell[1] }}{% else %}<code>{{ cell[0][:12] }}</code>{% endif %}</a>
                         {% else %}
                         <span class="text-muted small">-</span>
                         {% endif %}
@@ -146,6 +147,18 @@
         return `<span class="badge text-bg-secondary"><i class="bi bi-box-arrow-right me-1"></i>${mode}</span>`;
     }
 
+    const esc = (s) => String(s).replace(/[&<>"']/g, (c) => (
+        {"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"}[c]));
+
+    function imageCell(d) {
+        // Mirror the server-side Image cell: link the bound image to its
+        // Images page (name if known, short sha for an orphan blob), or a
+        // muted dash when the boot mode doesn't consume an image.
+        if (!d.image_sha) return `<span class="text-muted small">-</span>`;
+        const label = d.image_name ? esc(d.image_name) : `<code>${d.image_sha.slice(0, 12)}</code>`;
+        return `<a href="/ui/images/${d.image_sha}" title="${d.image_sha}" class="text-decoration-none">${label}</a>`;
+    }
+
     async function poll() {
         try {
             const r = await fetch("/ui/machines-live.json", {credentials: "same-origin"});
@@ -160,9 +173,7 @@
                     if (cell && cell.innerHTML !== html) cell.innerHTML = html;
                 };
                 setCell("boot-mode", bootBadge(d.boot_mode));
-                setCell("image", d.image_content_sha256
-                    ? `<code title="${d.image_content_sha256}">${d.image_content_sha256.slice(0,12)}</code>`
-                    : `<span class="text-muted small">-</span>`);
+                setCell("image", imageCell(d));
                 let inv;
                 if (d.inventory_at) {
                     const disks = d.disks_count || 0;

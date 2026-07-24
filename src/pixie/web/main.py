@@ -66,7 +66,7 @@ from pixie.exports._routes import router as exports_router
 from pixie.exports._store import ExportsStore, OverlaysStore
 from pixie.exports._supervisor import DEFAULT_PORT_BASE, NbdServer
 from pixie.machines._routes import router as machines_router
-from pixie.machines._store import MachinesStore
+from pixie.machines._store import IMAGE_BOOT_MODES, MachinesStore
 from pixie.pxe._renderer import PlanRenderer
 from pixie.pxe._routes import router as pxe_router
 from pixie.tftp import DEFAULT_TFTP_ROOT, TftpServer
@@ -541,6 +541,33 @@ def _recent_events_for(events_log: EventsLog, subject_kind: str) -> list[Event]:
     read with ``subject_id`` + a larger limit and does not go
     through this helper)."""
     return events_log.list(subject_kind=subject_kind, limit=_RECENT_EVENTS_LIMIT)
+
+
+def _bindable_image_names(catalog: Any) -> dict[str, str]:
+    """Map disk-content sha -> a human name, for resolving a machine's
+    bound image to something readable. Multiple catalog entries can
+    resolve to one sha; the alphabetically-first name wins so the label
+    is stable across polls."""
+    names: dict[str, str] = {}
+    for e in sorted(catalog.list_entries(), key=lambda e: e.name):
+        if e.is_bindable() and e.content_sha256 and e.content_sha256 not in names:
+            names[e.content_sha256] = e.name
+    return names
+
+
+def _machine_image_cell(machine: Any, image_names: dict[str, str]) -> tuple[str, str]:
+    """``(sha, display_name)`` for the machines-list Image column.
+
+    Returns ``("", "")`` when the machine's boot mode does not consume a
+    disk image (ipxe-exit / inventory / tui) or nothing is bound -- the
+    column then renders a muted dash instead of a stale sha. Otherwise
+    ``sha`` links to ``/ui/images/<sha>`` and ``display_name`` is the
+    catalog name (``""`` -> the caller falls back to a short sha, e.g.
+    for an orphan blob whose entry was deleted after the bind)."""
+    if machine.boot_mode not in IMAGE_BOOT_MODES or not machine.image_content_sha256:
+        return ("", "")
+    sha = machine.image_content_sha256
+    return (sha, image_names.get(sha, ""))
 
 
 def _reset_overlay_row(state: Any, alias: str) -> bool:
@@ -1140,12 +1167,18 @@ def create_app() -> FastAPI:
         # detail page already does the same but filtered on that one
         # MAC.
         machine_events = _recent_events_for(request.app.state.events_log, "machine")
+        # Resolve each bound image sha to a readable name so the Image
+        # column links to /ui/images/<sha> instead of showing a bare
+        # hash; the cell is blank for modes that don't consume an image.
+        image_names = _bindable_image_names(request.app.state.catalog_store)
+        image_cells = {m.mac: _machine_image_cell(m, image_names) for m in page_machines}
         return templates.TemplateResponse(
             request,
             "machines.html",
             {
                 "version": pixie.__version__,
                 "machines": page_machines,
+                "image_cells": image_cells,
                 "q": q,
                 "sort": sort_state,
                 "page_state": page_state,
@@ -1908,9 +1941,11 @@ def create_app() -> FastAPI:
         _auth: None = Depends(_require_ui_auth),
     ) -> JSONResponse:
         store: SettingsStore = request.app.state.settings_store
+        image_names = _bindable_image_names(request.app.state.catalog_store)
         out: dict[str, dict[str, Any]] = {}
         for m in request.app.state.machines_store.list():
             disks = (m.inventory or {}).get("disks") or []
+            image_sha, image_name = _machine_image_cell(m, image_names)
             # Pre-formatted timestamps let the JS drop cells into the
             # DOM verbatim + stay consistent with the server-rendered
             # fmt_ts filter (same timezone + strftime picks from
@@ -1919,6 +1954,8 @@ def create_app() -> FastAPI:
             out[m.mac] = {
                 "boot_mode": m.boot_mode,
                 "image_content_sha256": m.image_content_sha256,
+                "image_sha": image_sha,
+                "image_name": image_name,
                 "labels": list(m.labels),
                 "last_seen_at": m.last_seen_at,
                 "last_seen_at_display": format_ts(m.last_seen_at, store),

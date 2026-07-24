@@ -164,6 +164,13 @@ CREATE INDEX IF NOT EXISTS idx_machines_image_content_sha
 # live env's flash pipeline has a concrete destination.
 _FLASH_MODES: frozenset[str] = frozenset({"pixie-flash-once", "pixie-flash-always"})
 
+# Boot modes that actually consume the machine's bound disk image on the
+# next PXE: the flash pipeline writes it, nbdboot serves it over NBD. The
+# other modes (ipxe-exit / pixie-inventory / pixie-tui) ignore
+# ``image_content_sha256`` entirely, so surfacing a bound image for them
+# is noise. Used by the machines-list Image column.
+IMAGE_BOOT_MODES: frozenset[str] = _FLASH_MODES | frozenset({"nbdboot"})
+
 # Bty's shape: alphanumeric-leading, alphanumeric + space + . _ - inside,
 # 64 chars max per label, 16 labels max per machine. Matches the CSS-safe
 # subset so a label can render as a ``.badge`` without escaping surprises.

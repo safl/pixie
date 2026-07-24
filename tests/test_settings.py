@@ -27,7 +27,10 @@ def test_format_ts_defaults_to_utc(tmp_path: Path) -> None:
 
     store = SettingsStore(tmp_path / "state.db")
     out = format_ts("2026-07-16T14:30:00Z", store)
-    assert out == "2026-07-16 14:30:00 UTC"
+    # Default format is a plain YYYY-MM-DD HH:MM:SS in 24-hour time with
+    # NO timezone suffix; the default timezone is still UTC, so the raw
+    # Z-time renders unchanged.
+    assert out == "2026-07-16 14:30:00"
 
 
 def test_format_ts_respects_override(tmp_path: Path) -> None:

@@ -242,6 +242,44 @@ def test_ui_machine_detail_bind_form_prefills_current_binding(client: TestClient
     assert 'name="mac" value="aa:bb:cc:dd:ee:04"' in body
 
 
+def test_ui_machines_image_column_resolves_name_and_blanks_non_image_modes(
+    client: TestClient,
+) -> None:
+    """The machines-list Image column links a bound image to its Images
+    page showing the catalog name (image-consuming modes), and shows a
+    muted dash instead of a stale sha for modes that ignore the image."""
+    from pixie.catalog._schema import CatalogEntry
+
+    c = _authed(client)
+    state = c.app.state  # type: ignore[attr-defined]
+    sha = "b" * 64
+    state.catalog_store.upsert(
+        CatalogEntry(name="ubuntu-2604", src="https://x/u.img.gz", format="img.gz")
+    )
+    state.catalog_store.mark_fetched("ubuntu-2604", content_sha256=sha, size_bytes=42)
+
+    # nbdboot consumes the image; ipxe-exit keeps a sha on the row but
+    # never boots it (seeded via the store so the sha is definitely
+    # retained regardless of any route-side stripping).
+    c.put("/machines/aa:bb:cc:dd:ee:a1", json={"boot_mode": "nbdboot", "image_content_sha256": sha})
+    state.machines_store.upsert_binding(
+        "aa:bb:cc:dd:ee:a2", boot_mode="ipxe-exit", image_content_sha256=sha
+    )
+
+    body = c.get("/ui/machines").text
+    assert f'href="/ui/images/{sha}"' in body  # links to the image detail
+    assert "ubuntu-2604" in body  # readable name, not a bare hash
+
+    j = c.get("/ui/machines-live.json").json()
+    a1 = j["aa:bb:cc:dd:ee:a1"]
+    assert a1["image_sha"] == sha
+    assert a1["image_name"] == "ubuntu-2604"
+    a2 = j["aa:bb:cc:dd:ee:a2"]
+    assert a2["image_content_sha256"] == sha  # still on the row
+    assert a2["image_sha"] == ""  # but blanked in the column (mode ignores it)
+    assert a2["image_name"] == ""
+
+
 def test_ui_machine_detail_image_picker_has_boot_mode_gate_markup(
     client: TestClient,
 ) -> None:
