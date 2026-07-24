@@ -202,3 +202,39 @@ def test_purge_all_removes_deploy_dir(tmp_path: Path, monkeypatch: pytest.Monkey
     args = _build_parser().parse_args(["purge", str(tmp_path), "--all", "--yes"])
     assert _main._cmd_purge(args) == 0
     assert not tmp_path.exists()  # --all removes the deploy dir
+
+
+def test_purge_all_reports_gracefully_when_dir_cannot_be_removed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """When the deploy dir sits under a root-owned parent, rmtree empties
+    it but can't rmdir the dir itself. Purge must report that plainly and
+    still exit 0 -- not dump a traceback (the state is gone regardless)."""
+    from pixie.deploy import _main
+
+    monkeypatch.setattr(_main, "_compose_cmd", lambda: ["true"])
+    dest = tmp_path / "pixie"
+    dest.mkdir()
+    (dest / "envvars").write_text("x\n")
+    (dest / "compose.yml").write_text("services: {}\n")
+
+    real_rmtree = _main.shutil.rmtree
+
+    def fake_rmtree(path: object) -> None:
+        p = Path(str(path))
+        if p == dest:
+            # Mimic real rmtree under a root-owned parent: children go,
+            # then the final rmdir(dest) raises.
+            for child in p.iterdir():
+                child.unlink() if child.is_file() else real_rmtree(child)
+            raise PermissionError(13, "Permission denied")
+        real_rmtree(p)
+
+    monkeypatch.setattr(_main.shutil, "rmtree", fake_rmtree)
+
+    args = _build_parser().parse_args(["purge", str(dest), "--all", "--yes"])
+    assert _main._cmd_purge(args) == 0  # caveat, not failure
+    assert dest.exists() and not list(dest.iterdir())  # emptied, dir remains
+    err = capsys.readouterr().err
+    assert "could not remove the directory itself" in err
+    assert "Traceback" not in err

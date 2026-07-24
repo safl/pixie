@@ -99,6 +99,17 @@ disk with no catalog entry -- which is where the un-GC'd disk pressure
 actually hides; they delete straight through. Catalog is unchanged for
 now.
 
+### Fixed
+
+**`pixie-lab purge --all` no longer tracebacks on a root-owned parent.**
+When the deploy dir lives under a directory the operator can't write
+(the common `/opt/pixie` case), purge could empty the dir but not
+remove the dir itself, and surfaced the failure as a raw Python
+traceback. It now clears the state, prints a plain one-line caveat
+("emptied `<dir>`, but could not remove the directory itself ..."), and
+exits 0 -- the purge did its job; only the empty-dir removal was blocked
+by the parent's permissions.
+
 ## [0.3.2] - 2026-07-24
 
 ### Added

@@ -311,10 +311,32 @@ def _cmd_purge(args: argparse.Namespace) -> int:
         shutil.rmtree(data_dir)
         print(f"pixie-lab purge: removed {data_dir}", file=sys.stderr)
 
-    # 4. Delete the deploy directory itself.
+    # 4. Delete the deploy directory itself. ``dest`` often sits under a
+    #    root-owned parent (e.g. /opt), where an unprivileged operator can
+    #    empty the dir but can't rmdir it -- rmtree clears the contents,
+    #    then raises on the final rmdir. Report that plainly instead of
+    #    dumping a traceback; the state is gone either way, so it's a
+    #    caveat, not a failure.
     if remove_dir and dest.exists():
-        shutil.rmtree(dest)
-        print(f"pixie-lab purge: removed {dest}", file=sys.stderr)
+        try:
+            shutil.rmtree(dest)
+            print(f"pixie-lab purge: removed {dest}", file=sys.stderr)
+        except OSError as exc:
+            leftover = sorted(p.name for p in dest.iterdir()) if dest.is_dir() else []
+            if not leftover:
+                print(
+                    f"pixie-lab purge: emptied {dest}, but could not remove the "
+                    f"directory itself ({exc.strerror or exc}) -- its parent is not "
+                    f"writable (a root-owned /opt, say). The empty dir is harmless; "
+                    f"you can redeploy into it or 'sudo rmdir' it.",
+                    file=sys.stderr,
+                )
+            else:
+                print(
+                    f"pixie-lab purge: could not fully remove {dest} "
+                    f"({exc.strerror or exc}); leftover: {', '.join(leftover)}",
+                    file=sys.stderr,
+                )
 
     return 0
 
