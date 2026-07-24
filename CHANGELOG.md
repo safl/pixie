@@ -101,6 +101,16 @@ now.
 
 ### Fixed
 
+**Live-env artifacts are served after a post-startup fetch, no restart
+needed.** The `/boot/pixie-live-env/` mount was created at app startup
+only if the directory already existed, so on a fresh deploy -- where the
+operator stages the netboot-pc bake later via "Fetch live env" -- the
+plan pointed targets at `/boot/pixie-live-env/vmlinuz` and friends that
+then 404'd until pixie was restarted, silently breaking every
+`pixie-inventory` / `-tui` / `-flash` boot. The mount is now created
+unconditionally (dir ensured, `check_dir=False`), so a fetched live-env
+is served immediately.
+
 **`pixie-lab purge --all` no longer tracebacks on a root-owned parent.**
 When the deploy dir lives under a directory the operator can't write
 (the common `/opt/pixie` case), purge could empty the dir but not

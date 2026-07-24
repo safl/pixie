@@ -168,10 +168,11 @@ def _resolve_tftp_bin() -> str:
 def _resolve_live_env_dir() -> Path | None:
     """Directory holding the pixie netboot-pc bake artifacts
     (vmlinuz + initrd + squashfs). Default: ``<state_dir>/live-env``.
-    Explicit override via ``PIXIE_LIVE_ENV_DIR``. Returns None when
-    the resolved path does not exist, so the renderer's
-    ``_live_env_ready()`` cleanly says "no" without the operator
-    having to set the env var to a special sentinel."""
+    Explicit override via ``PIXIE_LIVE_ENV_DIR``. Returns the resolved
+    path whether or not it exists yet -- readiness is decided per-render
+    by stat'ing the individual files, and the serving mount is created
+    with ``check_dir=False``, so a fresh deploy can stage the artifacts
+    into a running container and have them picked up without a restart."""
     override = (os.environ.get(LIVE_ENV_DIR_ENV) or "").strip()
     if override:
         return Path(override)
@@ -799,16 +800,26 @@ def create_app() -> FastAPI:
     templates.env.filters["humanize_hz"] = humanize_hz
     if _STATIC_DIR.is_dir():
         app.mount("/static", StaticFiles(directory=str(_STATIC_DIR)), name="static")
-    # Serve the netboot-pc bake artifacts (vmlinuz + initrd +
-    # squashfs) under ``/boot/pixie-live-env/`` so the live-env iPXE
-    # chain can fetch them. Only mounted when the directory exists;
-    # an operator dropping the three files in without a pixie
-    # restart is picked up by the renderer's ``_live_env_ready()``
-    # check per-render.
-    if app.state.live_env_dir and app.state.live_env_dir.is_dir():
+    # Serve the netboot-pc bake artifacts (vmlinuz + initrd + squashfs)
+    # under ``/boot/pixie-live-env/`` so the live-env iPXE chain can
+    # fetch them. Mounted UNCONDITIONALLY with ``check_dir=False``: on a
+    # fresh deploy the dir doesn't exist at startup (the operator stages
+    # it later via "Fetch live env"), and StaticFiles resolves each
+    # request against the directory live -- so a post-startup fetch is
+    # served without a pixie restart. Guarding the mount on ``is_dir()``
+    # at startup was a bug: the renderer would emit a plan pointing at
+    # ``/boot/pixie-live-env/vmlinuz`` that then 404'd until a restart.
+    if app.state.live_env_dir is not None:
+        # Create the dir so StaticFiles serves a clean 404 for a
+        # not-yet-staged file (an empty/absent dir would otherwise raise
+        # at request time) and picks up a later "Fetch live env" with no
+        # restart. ``check_dir=False`` keeps app startup resilient if the
+        # mkdir is somehow refused.
+        with contextlib_suppress(OSError):
+            app.state.live_env_dir.mkdir(parents=True, exist_ok=True)
         app.mount(
             "/boot/pixie-live-env",
-            StaticFiles(directory=str(app.state.live_env_dir)),
+            StaticFiles(directory=str(app.state.live_env_dir), check_dir=False),
             name="live-env",
         )
 
