@@ -23,7 +23,7 @@ endif
 
 .PHONY: help \
         deps test lint format format-check typecheck ci wheel \
-        media-deps build ipxe test-pxe \
+        media-deps build ipxe test-pxe test-usb-ventoy \
         clean
 
 help:
@@ -56,6 +56,8 @@ help:
 	@echo "                  (same deps as test-pxe-flash; asserts no /done flip)"
 	@echo "  test-pxe-tui  end-to-end PXE pixie-tui chain test"
 	@echo "                  (same deps as test-pxe-flash; asserts wizard entry)"
+	@echo "  test-usb-ventoy  structural + Ventoy-boot verify of the usbboot .iso"
+	@echo "                  (needs a prior VARIANT=usbboot-pc bake + qemu/KVM/OVMF + ventoy deps)"
 	@echo ""
 	@echo "Variant: $(VARIANT)  (override with VARIANT=netboot-pc, ...)"
 	@echo "  usbboot-pc    - bootable USB live ISO via live-build (.iso, x86_64)"
@@ -165,6 +167,13 @@ test-pxe-flash-always:
 # test-pxe-flash.
 test-pxe-tui:
 	cd cijoe && cijoe tasks/test-pxe-tui.yaml --monitor -c configs/test-pxe-tui.toml
+
+# Structural + Ventoy-boot verification of the usbboot .iso. Needs a
+# prior VARIANT=usbboot-pc bake staged under ~/system_imaging/disk/ (or
+# a downloaded pixie-usbboot-pc-x86_64 CI artifact) + qemu/KVM/OVMF +
+# ventoy tooling deps (losetup, exfat-fuse, passwordless sudo).
+test-usb-ventoy:
+	cd cijoe && cijoe tasks/test-usb-ventoy.yaml --monitor -c configs/test-usb-ventoy.toml
 
 # ---------- Cleanup ------------------------------------------------------
 

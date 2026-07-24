@@ -1,0 +1,119 @@
+doc: |
+  pixie + Ventoy end-to-end test
+  ==============================
+
+  Verifies the pixie usbboot .iso is (a) structurally a valid,
+  dual-firmware hybrid ISO and (b) actually boots when an operator does
+  what operators do with Ventoy: install Ventoy on a stick, drop the
+  pixie .iso onto it alongside their own image files + a catalog.toml,
+  boot.
+
+  The Ventoy boot path differs from the dd'd-USB path:
+
+  - The .iso is loop-mounted by Ventoy, not flashed onto a disk -- the
+    kernel sees no ``PIXIE_IMGS`` partition, so
+    ``pixie-usb-grow.service`` MUST skip gracefully (not fail).
+  - The operator's image files + catalog live on the Ventoy *data*
+    partition (a separate block device), so
+    ``pixie-images-discover.service`` MUST find them and bind-mount
+    the ``pixie-images/`` subdir at ``/var/lib/pixie/images``.
+  - ``pixie-on-tty1.service`` MUST render the pixie CLI wizard against
+    that discovered image root.
+
+  Structural checks run first (fast fail on a broken bake); the boot
+  contracts are checked in-VM over the ``usb_ventoy_guest`` SSH
+  transport.
+
+steps:
+- name: verify_iso_structure
+  uses: usb_iso_verify
+
+- name: stage_ventoy_disk
+  uses: usb_ventoy_stage
+
+- name: guest_start
+  # Local variant of qemu.guest_start that skips the hardcoded 180s
+  # is_up wait; readiness is wait_for_transport's job below. Ventoy
+  # menu + chainload + pixie live env boot routinely exceeds 180s
+  # under nested KVM on GHA runners.
+  uses: usb_ventoy_guest_start
+  with:
+    guest_name: usb-ventoy
+
+- name: wait_for_guest_ssh
+  uses: core.wait_for_transport
+  with:
+    state: up
+    transport_name: usb_ventoy_guest
+    # 480s budget: GHA ubuntu-latest under nested KVM boots the pixie
+    # live env in ~90-120s; Ventoy adds ~30-60s of menu + chainload;
+    # sshd readiness lags login by ~10s. Anything past 480s is a real
+    # boot failure the serial log (cijoe/_build/test-usb-ventoy/)
+    # should explain.
+    timeout: 480
+
+- name: probe_boot_state
+  uses: core.cmdrunner
+  with:
+    transport: usb_ventoy_guest
+    commands:
+    # Wait for boot to settle before probing. ``pixie-images-discover``
+    # is ordered after the (never-appearing under Ventoy)
+    # ``var-lib-pixie-images.mount``, so systemd waits its device
+    # timeout before the chain proceeds. ``is-system-running --wait``
+    # blocks until every queued job resolves (the right primitive; a
+    # queued-but-inactive unit makes ``is-active --wait`` return early).
+    - "systemctl is-system-running --wait || true"
+    - "ls -la /dev/disk/by-label/ 2>&1 || true"
+    - "lsblk -f"
+    - "blkid"
+    - "mount | grep /var/lib/pixie/images || echo NO_BIND_MOUNT"
+    - "systemctl status pixie-usb-grow.service --no-pager --full || true"
+    - "systemctl status pixie-images-discover.service --no-pager --full || true"
+    - "journalctl -u pixie-images-discover.service --no-pager --no-hostname || true"
+    - "ls -la /var/lib/pixie/images/ || true"
+
+- name: assert_ventoy_contract
+  uses: core.cmdrunner
+  with:
+    transport: usb_ventoy_guest
+    commands:
+    - "systemctl is-system-running --wait || true"
+    # No PIXIE_IMGS on the booted device (Ventoy loop-boot contract).
+    - "test ! -e /dev/disk/by-label/PIXIE_IMGS"
+    # pixie-usb-grow skipped gracefully -- not in a failed state.
+    - "! systemctl is-failed --quiet pixie-usb-grow.service"
+    # pixie-images-discover finished + bind-mount happened.
+    - "systemctl is-active pixie-images-discover.service"
+    - "mountpoint -q /var/lib/pixie/images"
+
+- name: assert_wizard_rendered_on_tty1
+  uses: core.cmdrunner
+  with:
+    transport: usb_ventoy_guest
+    commands:
+    # ``pixie-on-tty1.service`` execs the pixie CLI; with no
+    # ``pixie.server=`` on the cmdline (USB-local path) it runs the
+    # interactive wizard against the discovered image root. The Rich
+    # panel renders ``image_root:`` on every wizard stage -- grep the
+    # kernel's tty1 framebuffer snapshot (/dev/vcs1) for it. The
+    # pre-Rich ``pixie is starting...`` banner does NOT contain
+    # ``image_root:``, so a CLI that prints the banner then crashes
+    # fails this. 60s budget for cold-cache import chains.
+    - "systemctl is-active pixie-on-tty1.service"
+    - "for i in $(seq 1 60); do grep -q 'image_root:' /dev/vcs1 && break; sleep 1; done"
+    - "tr -cd '[:print:]\\n' < /dev/vcs1 | head -15 || true"
+    - "grep -q 'image_root:' /dev/vcs1"
+
+- name: poweroff_guest
+  uses: core.cmdrunner
+  with:
+    transport: usb_ventoy_guest
+    commands:
+    - "systemctl poweroff -i || poweroff -f"
+
+- name: wait_for_termination
+  uses: qemu.guest_wait_for_termination
+  with:
+    guest_name: usb-ventoy
+    timeout: 60

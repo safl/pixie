@@ -1,0 +1,48 @@
+# pixie USB Ventoy-boot test - cijoe config
+#
+# Verifies an operator's realistic Ventoy workflow:
+#   1. Install Ventoy onto a USB stick.
+#   2. Drop pixie-usbboot-pc-x86_64-v*.iso + image files + a catalog.toml
+#      onto the Ventoy data partition (under pixie-images/).
+#   3. Boot the stick; Ventoy menu auto-selects the only ISO + chains
+#      into the pixie live env.
+#   4. ``pixie-usb-grow.service`` skips correctly (no PIXIE_IMGS
+#      partition on the booted device -- the .iso is loop-mounted, not
+#      dd'd).
+#   5. ``pixie-images-discover.service`` finds the operator's drop on the
+#      Ventoy data partition and bind-mounts ``pixie-images/`` at
+#      ``/var/lib/pixie/images``.
+#   6. ``pixie-on-tty1.service`` renders the pixie CLI wizard on tty1.
+
+[cijoe.task]
+fail_fast = true
+
+[qemu]
+img_bin = "qemu-img"
+
+[qemu.systems.x86_64]
+bin = "qemu-system-x86_64"
+
+[qemu.guests.usb-ventoy]
+path = "{{ local.env.HOME }}/system_imaging/usb-ventoy"
+system_label = "x86_64"
+system_args.kwa = { cpu = "host", smp = 2, m = "1G", accel = "kvm" }
+# IDE-hd: Ventoy's bootloader (a chainloaded GRUB) reads via BIOS
+# INT13 -- virtio-blk is invisible to it. Present the Ventoy stick as
+# an IDE hard disk so the BIOS sees a bootable disk. ``-no-reboot`` so
+# a failed boot exits instead of looping.
+system_args.raw = "-drive file={{ local.env.HOME }}/system_imaging/usb-ventoy/disk.img,format=raw,if=ide -no-reboot"
+system_args.tcp_forward = { host = 12223, guest = 22 }
+
+[cijoe.transport.usb_ventoy_guest]
+username = "root"
+password = "pixie"
+hostname = "localhost"
+port = 12223
+
+[test.usb_ventoy]
+iso_dir = "{{ local.env.HOME }}/system_imaging/disk"
+# Pinned Ventoy version so the test is reproducible. Bump deliberately
+# when validating a newer release; this is the Ventoy2Disk.sh version
+# the test installs with, not what an operator must use in production.
+ventoy_version = "1.1.05"
