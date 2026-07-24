@@ -11,6 +11,17 @@ operator-facing summary.
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-07-24
+
+### Fixed
+
+**The usbboot `.iso` is attached to the GitHub Release.** v0.3.0's
+release carried only the usbboot `.iso.sha256`, not the image itself:
+the bake publishes an uncompressed `pixie-usbboot-pc-x86_64-v<version>.iso`
+but the CI upload glob still matched `.iso.gz`, so only the checksum
+sidecar reached the release. The glob now matches `.iso`, so the
+bootable USB / ISO media auto-attaches like every other release asset.
+
 ## [0.3.0] - 2026-07-23
 
 Operator-facing surface + release plumbing. A fleet overlay-management
