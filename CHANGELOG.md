@@ -11,6 +11,19 @@ operator-facing summary.
 
 ## [Unreleased]
 
+### Added
+
+**Images: the materialised content behind Catalog sources.** A new
+**Images** page (`/ui/images`) separates the *source* (a Catalog entry,
+a URL you can fetch) from the *entity* it produces once fetched (an
+image, identity = the disk content sha). Machines, NBD exports, and
+overlays all key off that sha, so each image rolls up its on-disk
+footprint (raw disk + rootfs + boot bundle + overlays) and every live
+usage -- machines bound, the ephemeral nbdkit export, and per-machine
+qemu-nbd overlays -- with counts that link into the per-usage admin
+surfaces. Those counts are also the refcount that makes a blob safe to
+delete. First cut is the rollup list; Catalog is unchanged for now.
+
 ## [0.3.2] - 2026-07-24
 
 ### Added
