@@ -55,28 +55,33 @@ source blob. Multiple targets can nbdboot the same image
 simultaneously because they each get their own overlay.
 
 **Persistent overlays** flip a single target from ephemeral to dev
-mode without changing anything else about the bind. On the machine
-detail page, the `Overlay profile` field is blank by default
-(ephemeral, unchanged behaviour) or names a per-machine profile
-(e.g. `simon`, `karl`, `ci-with-nvme-tools`). A non-blank profile
-maps to a per-machine qcow2 file with the image's base blob as
-`backing_file`, served by `qemu-nbd` at a dedicated port. The target
-mounts the NBD device read-write; system-level changes (apt-installed
-packages, hardware-specific config, kernel modules) land on the qcow2
-and survive reboots.
+mode without changing anything else about the bind. An overlay is a
+named writable volume over one base image, not something a machine
+owns: its identity is a globally-unique `alias`, and the base image is
+implied by the alias. On the machine detail page, the `Overlay` field
+is blank by default (ephemeral, unchanged behaviour), or you pick a
+free alias, or create a new one (a name plus the base image). The
+overlay is a qcow2 with the image's base blob as `backing_file`,
+served by `qemu-nbd` at a dedicated port; the target mounts it
+read-write, so system-level changes (apt-installed packages,
+hardware-specific config, kernel modules) land on the qcow2 and
+survive reboots.
 
-Overlays are keyed by `(mac, image_content_sha256, profile)`:
-different machines have fully independent files even under the same
-profile name, and rebinding a machine to a different image leaves the
-old image's overlays on disk (a rebind back resumes them). Storage is
-`data/overlays/<mac>/<image_sha>/<profile>.qcow2`. The **Reset**
-button on the machine detail page tears down `qemu-nbd`, unlinks the
+An overlay is single-writer: at most one machine may hold an alias at
+a time. Binding a machine to an alias another machine already holds is
+rejected in the app ("held by `<mac>`; detach first"), with
+qemu-nbd's qcow2 image-lock as the backstop. Storage is a flat
+`data/overlays/<alias>.qcow2`. Manage overlays on the **Overlays**
+page: it keys on the alias, shows an `Attached to` column (a MAC or
+`free`), and classifies each as serving / held / free / orphaned /
+missing. The **Reset** button tears down `qemu-nbd`, unlinks the
 qcow2, and lets the next boot lazy-create a fresh overlay from the
-base.
+base; **Prune** reclaims only the orphaned (holder gone) + missing
+(file gone) ones, leaving a `free` alias (a deliberate keep) alone.
 
-Concurrency is by construction: a MAC boots one target at a time, so
-two machines can never contend for the same qcow2. There is no
-holder-tracking or force-reclaim.
+Because the alias is decoupled from the machine, an overlay can be
+handed to a different target: detach it from one machine, bind another
+to the same alias, and the volume moves with its accumulated writes.
 
 **Kexec into a locally-installed kernel.** The netboot bundle owns
 the kernel and initrd pixie serves. Installing `linux-image-*` on the

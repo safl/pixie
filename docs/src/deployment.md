@@ -137,8 +137,8 @@ workarounds; see [](hardware-quirks.md).
 
 **`PIXIE_DATA_DIR`** (default: `/var/lib/pixie`) - state root. Holds
 `state.db`, `blobs/` (fetched image bytes), `artifacts/` (extracted
-netboot bundles), `overlays/<mac>/<image_sha>/<profile>.qcow2`
-(per-machine writable overlays for nbdboot; see [](boot-modes.md)),
+netboot bundles), `overlays/<alias>.qcow2` (single-writer writable
+volumes for nbdboot; see [](concepts.md) and [](boot-modes.md)),
 `live-env/` (staged pixie live env).
 
 **`PIXIE_LIVE_ENV_DIR`** (default: `$PIXIE_DATA_DIR/live-env`) - the
