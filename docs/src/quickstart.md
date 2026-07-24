@@ -63,4 +63,29 @@ Click its MAC to open the machine detail page. Pick a boot mode from
 the card grid, pick an image, and Save. On the target's next PXE,
 pixie serves the plan you bound.
 
-See [](boot-modes.md) for what each mode does.
+See [](boot-modes.md) for what each mode does and how bindings pin a
+machine to an image and, for `nbdboot`, an overlay volume.
+
+## Tear it down
+
+`pixie-lab purge` is the inverse of the deploy. Run it from the deploy
+directory (or pass the path):
+
+```
+pixie-lab purge            # stop + remove the container only
+pixie-lab purge --data     # also DELETE data/ (state.db, blobs, artifacts, overlays, live-env)
+pixie-lab purge --images   # also remove the pixie container image
+pixie-lab purge --all      # container + image + data/ + the deploy directory itself
+```
+
+Purge prints its plan and gates every variant behind a `y/N`
+confirmation; pass `--yes` to skip the prompt for scripted teardown.
+Even the plain stop is impactful: it drops every nbdkit / qemu-nbd
+export, so any target currently booted `nbdboot` off pixie loses its
+NBD root at that moment. The `--data` and `--all` deletions are
+irreversible, so the confirmation is deliberate.
+
+The single-shot `pixie-lab deploy` is the mirror image of purge: it
+runs `init`, auto-fills `envvars`, brings the stack up, and waits on
+`/healthz` in one command, for when you don't need to hand-edit the
+generated files first.
