@@ -1,0 +1,108 @@
+{% extends "layout.html" %}
+{% from "_partials/page_description.html" import page_description %}
+{% block title %}{{ image.primary_name }} - Images - pixie{% endblock %}
+
+{% block content %}
+<div class="d-flex align-items-center gap-2 mb-3">
+    <a href="/ui/images" class="btn btn-sm btn-outline-secondary"><i class="bi bi-arrow-left"></i></a>
+    <h1 class="h4 mb-0"><i class="bi bi-hdd-fill me-2"></i>{{ image.primary_name }}</h1>
+    {% if image.orphan %}<span class="badge text-bg-warning">orphan blob</span>
+    {% elif not image.in_use %}<span class="badge text-bg-light border text-muted">unused</span>
+    {% else %}<span class="badge text-bg-success">in use ({{ image.usage_count }})</span>{% endif %}
+</div>
+{{ page_description('hdd-fill', 'One materialised image (identity = the disk content sha) with its derived artifacts and every live usage. The usage count is the refcount: delete is allowed only when it reaches zero.') }}
+
+{# ---- Artifacts / footprint ------------------------------------- #}
+<div class="card shadow-sm mb-4">
+    <div class="card-header bg-light fw-semibold"><i class="bi bi-diagram-3 me-1"></i>Artifacts</div>
+    <div class="card-body">
+        <dl class="row small mb-0">
+            <dt class="col-sm-3 text-muted">Content sha</dt>
+            <dd class="col-sm-9"><code>{{ image.sha }}</code></dd>
+            {% if image.names %}
+            <dt class="col-sm-3 text-muted">Catalog name(s)</dt>
+            <dd class="col-sm-9">
+                {% for n in image.names %}
+                <a href="/ui/catalog/{{ n }}" class="text-decoration-none"><code>{{ n }}</code></a>{% if not loop.last %}, {% endif %}
+                {% endfor %}
+            </dd>
+            {% endif %}
+            <dt class="col-sm-3 text-muted">Disk (raw + rootfs)</dt>
+            <dd class="col-sm-9">{{ image.disk_bytes | humanize_bytes }} <span class="text-muted">&middot; <code>{{ blob_path }}</code></span></dd>
+            <dt class="col-sm-3 text-muted">Boot (netboot bundle)</dt>
+            <dd class="col-sm-9">
+                {% if image.boot_present %}
+                <span class="text-success"><i class="bi bi-check-circle me-1"></i>{{ image.boot_bytes | humanize_bytes }}</span>
+                <span class="text-muted">&middot; {{ image.boot_bundle_name }}</span>
+                {% else %}
+                <span class="text-muted">not fetched &mdash; flash only, no nbdboot</span>
+                {% endif %}
+            </dd>
+            <dt class="col-sm-3 text-muted">Overlays</dt>
+            <dd class="col-sm-9">{{ image.overlays_bytes | humanize_bytes }}</dd>
+            <dt class="col-sm-3 text-muted fw-semibold">Total on disk</dt>
+            <dd class="col-sm-9 fw-semibold">{{ image.footprint_bytes | humanize_bytes }}</dd>
+        </dl>
+    </div>
+</div>
+
+{# ---- Usages ---------------------------------------------------- #}
+<div class="card shadow-sm mb-4">
+    <div class="card-header bg-light fw-semibold"><i class="bi bi-link-45deg me-1"></i>Usage ({{ image.usage_count }})</div>
+    <div class="card-body">
+        <h3 class="h6">Machines bound <span class="badge text-bg-{% if image.machines_count %}primary{% else %}light border text-muted{% endif %}">{{ image.machines_count }}</span></h3>
+        {% if image.machines %}
+        <div class="table-responsive mb-3">
+            <table class="table table-sm table-hover align-middle mb-0">
+                <thead><tr><th>MAC</th><th>Boot mode</th><th>Overlay profile</th></tr></thead>
+                <tbody>
+                    {% for mu in image.machines %}
+                    <tr>
+                        <td><a href="/ui/machines/{{ mu.mac }}" class="text-decoration-none"><code>{{ mu.mac }}</code></a></td>
+                        <td><code>{{ mu.boot_mode }}</code></td>
+                        <td>{% if mu.overlay_profile %}<code>{{ mu.overlay_profile }}</code>{% else %}<span class="text-muted small">ephemeral</span>{% endif %}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}<p class="small text-muted">No machine is bound to this image.</p>{% endif %}
+
+        <h3 class="h6">NBD export (ephemeral, nbdkit)</h3>
+        {% if image.export_running %}
+        <p class="small mb-3">Serving on {% for p in image.export_ports %}<span class="badge text-bg-success">:{{ p }}</span> {% endfor %} &mdash; see <a href="/ui/catalog">Catalog</a>.</p>
+        {% else %}<p class="small text-muted mb-3">No ephemeral export running.</p>{% endif %}
+
+        <h3 class="h6">Overlays (persistent, qemu-nbd) <span class="badge text-bg-{% if image.overlays_total %}info{% else %}light border text-muted{% endif %}">{{ image.overlays_total }}</span></h3>
+        {% if image.overlays_total %}
+        <p class="small mb-0">{{ image.overlays_running }} of {{ image.overlays_total }} serving &mdash; manage on <a href="/ui/overlays">Overlays</a>.</p>
+        {% else %}<p class="small text-muted mb-0">No overlays.</p>{% endif %}
+    </div>
+</div>
+
+{# ---- Danger zone: guarded GC ----------------------------------- #}
+<div class="card shadow-sm border-danger-subtle mb-4">
+    <div class="card-header bg-light fw-semibold text-danger"><i class="bi bi-trash3 me-1"></i>Delete image (reclaim disk)</div>
+    <div class="card-body">
+        {% if image.in_use %}
+        <p class="small mb-0 text-muted">
+            <i class="bi bi-lock me-1"></i>Blocked: {{ image.usage_count }} live dependenc{{ 'y' if image.usage_count == 1 else 'ies' }}
+            ({{ image.machines_count }} machine(s), {{ image.export_ports | length }} export(s), {{ image.overlays_total }} overlay(s)).
+            Rebind those machines and reset the overlays first, then this frees {{ image.footprint_bytes | humanize_bytes }}.
+        </p>
+        {% else %}
+        <p class="small">
+            Deletes the on-disk bytes (<code>blobs/{{ image.sha[:12] }}/</code> &mdash; raw disk + rootfs), freeing
+            <span class="fw-semibold">{{ image.footprint_bytes | humanize_bytes }}</span>, and clears the sha off
+            {% if image.names %}its catalog entr{{ 'y' if image.names|length == 1 else 'ies' }} (Fetch re-materialises it){% else %}nothing (orphan blob){% endif %}.
+        </p>
+        <form method="post" action="/ui/images/{{ image.sha }}/delete"
+              onsubmit="return confirm('Delete image {{ image.primary_name }} and free {{ image.footprint_bytes | humanize_bytes }}? {% if image.names %}The catalog entr{{ 'y' if image.names|length == 1 else 'ies' }} stay; only the fetched bytes are removed.{% else %}This orphan blob has no catalog entry.{% endif %}');">
+            <button type="submit" class="btn btn-outline-danger">
+                <i class="bi bi-trash3 me-1"></i>Delete + reclaim {{ image.footprint_bytes | humanize_bytes }}
+            </button>
+        </form>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}

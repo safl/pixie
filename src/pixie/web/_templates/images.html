@@ -63,13 +63,14 @@
                 <tr>
                     <td>
                         <div class="fw-semibold">
-                            <a href="/ui/catalog/{{ im.primary_name }}" class="text-decoration-none">{{ im.primary_name }}</a>
+                            <a href="/ui/images/{{ im.sha }}" class="text-decoration-none">{{ im.primary_name }}</a>
                         </div>
                         <div class="text-muted small"><code title="{{ im.sha }}">{{ im.sha[:12] }}</code>
                             {% if im.names | length > 1 %}
                             <span class="badge text-bg-light border ms-1" title="{{ im.names | join(', ') }}">+{{ im.names | length - 1 }} more name(s)</span>
                             {% endif %}
-                            {% if not im.in_use %}<span class="badge text-bg-light border text-muted ms-1">unused</span>{% endif %}
+                            {% if im.orphan %}<span class="badge text-bg-warning ms-1">orphan</span>
+                            {% elif not im.in_use %}<span class="badge text-bg-light border text-muted ms-1">unused</span>{% endif %}
                         </div>
                     </td>
                     <td class="text-end text-nowrap">

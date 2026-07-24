@@ -21,8 +21,15 @@ overlays all key off that sha, so each image rolls up its on-disk
 footprint (raw disk + rootfs + boot bundle + overlays) and every live
 usage -- machines bound, the ephemeral nbdkit export, and per-machine
 qemu-nbd overlays -- with counts that link into the per-usage admin
-surfaces. Those counts are also the refcount that makes a blob safe to
-delete. First cut is the rollup list; Catalog is unchanged for now.
+surfaces. An **image detail hub** (`/ui/images/<sha>`) lays out the
+artifacts + every usage inline and offers a **guarded delete / blob GC**:
+allowed only when the usage count (the refcount) is zero, it removes the
+whole `blobs/<sha>/` dir (raw disk **and** the `rootfs.raw` the old
+per-entry delete leaked) and clears the sha off every entry that
+resolved to it. The list also surfaces **orphan blobs** -- sha dirs on
+disk with no catalog entry -- which is where the un-GC'd disk pressure
+actually hides; they delete straight through. Catalog is unchanged for
+now.
 
 ## [0.3.2] - 2026-07-24
 
