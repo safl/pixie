@@ -1,10 +1,11 @@
 """Overlay management surface: view-model classification + the
 ``/ui/overlays`` page, live-refresh JSON, single Reset, and bulk Prune.
 
-The view-model unit tests drive :func:`build_overlay_views` directly
-against real stores (with tiny catalog/NBD stubs) so the state
-classification is pinned without the full app. The route tests exercise
-the wiring through the authed TestClient.
+An overlay is a globally-unique named writable volume over ONE base
+image (alias is the identity, not a machine). The view-model unit tests
+drive :func:`build_overlay_views` directly against real stores (with tiny
+catalog/NBD stubs) so the state classification is pinned without the full
+app. The route tests exercise the wiring through the authed TestClient.
 """
 
 from __future__ import annotations
@@ -16,10 +17,11 @@ from fastapi.testclient import TestClient
 from pixie.exports._store import ExportsStore, Overlay, OverlaysStore
 from pixie.machines._store import MachinesStore
 from pixie.web._overlays import (
-    STATE_ACTIVE,
-    STATE_IDLE,
+    STATE_FREE,
+    STATE_HELD,
     STATE_MISSING,
     STATE_ORPHANED,
+    STATE_SERVING,
     build_overlay_views,
     overlay_totals,
 )
@@ -67,56 +69,67 @@ def _touch_qcow2(path: Path) -> None:
     path.write_bytes(b"\x00" * 8192)
 
 
-def test_classifies_active_idle_orphaned_missing(tmp_path: Path) -> None:
+def test_classifies_serving_held_free_orphaned_missing(tmp_path: Path) -> None:
     overlays, machines = _stores(tmp_path)
     ov_dir = tmp_path / "overlays"
 
-    # active: machine bound to nbdboot on this (image, profile) + file present
-    active_path = ov_dir / "active.qcow2"
-    _touch_qcow2(active_path)
+    # serving: attached to a live machine bound to it + a running nbd port.
+    serving_path = ov_dir / "serving.qcow2"
+    _touch_qcow2(serving_path)
     machines.upsert_binding(
         "aa:aa:aa:aa:aa:aa",
         boot_mode="nbdboot",
         image_content_sha256=_SHA,
-        overlay_profile="prod",
+        overlay_alias="prod",
     )
-    overlays.upsert(Overlay("aa:aa:aa:aa:aa:aa", _SHA, "prod", str(active_path)))
+    serving = Overlay("prod", _SHA, str(serving_path), attached_mac="aa:aa:aa:aa:aa:aa")
+    overlays.upsert(serving)
 
-    # idle: machine exists but its current binding is a different profile
-    idle_path = ov_dir / "idle.qcow2"
-    _touch_qcow2(idle_path)
-    overlays.upsert(Overlay("aa:aa:aa:aa:aa:aa", _SHA, "scratch", str(idle_path)))
+    # held: attached to a live machine, file present, but nothing serving.
+    held_path = ov_dir / "held.qcow2"
+    _touch_qcow2(held_path)
+    overlays.upsert(Overlay("scratch", _SHA, str(held_path), attached_mac="aa:aa:aa:aa:aa:aa"))
 
-    # orphaned: no machine row for this MAC, file present
+    # free: unattached, file present.
+    free_path = ov_dir / "free.qcow2"
+    _touch_qcow2(free_path)
+    overlays.upsert(Overlay("spare", _SHA, str(free_path)))
+
+    # orphaned: attached to a MAC with no machine row, file present.
     orphan_path = ov_dir / "orphan.qcow2"
     _touch_qcow2(orphan_path)
-    overlays.upsert(Overlay("cc:cc:cc:cc:cc:cc", _SHA, "prod", str(orphan_path)))
+    overlays.upsert(Overlay("ghost", _SHA, str(orphan_path), attached_mac="cc:cc:cc:cc:cc:cc"))
 
-    # missing: row points at a qcow2 that is gone
-    overlays.upsert(Overlay("dd:dd:dd:dd:dd:dd", _SHA, "prod", str(ov_dir / "gone.qcow2")))
-
-    catalog = _StubCatalog([_StubEntry("ubuntu", _SHA, 4_000_000_000)])
-    views = build_overlay_views(
-        overlays=overlays, machines=machines, catalog=catalog, nbd=_StubNbd()
+    # missing: row points at a qcow2 that is gone.
+    overlays.upsert(
+        Overlay("lost", _SHA, str(ov_dir / "gone.qcow2"), attached_mac="dd:dd:dd:dd:dd:dd")
     )
-    by_state = {(v.mac, v.profile): v.state for v in views}
-    assert by_state[("aa:aa:aa:aa:aa:aa", "prod")] == STATE_ACTIVE
-    assert by_state[("aa:aa:aa:aa:aa:aa", "scratch")] == STATE_IDLE
-    assert by_state[("cc:cc:cc:cc:cc:cc", "prod")] == STATE_ORPHANED
-    assert by_state[("dd:dd:dd:dd:dd:dd", "prod")] == STATE_MISSING
 
-    # base-image join: name + virtual size resolved from the catalog
-    active = next(v for v in views if v.state == STATE_ACTIVE)
-    assert active.image_name == "ubuntu"
-    assert active.base_bytes == 4_000_000_000
-    assert active.used_bytes > 0  # allocated blocks for the 8 KiB file
+    from pixie.pxe._renderer import _overlay_export_name
+
+    nbd = _StubNbd({_overlay_export_name(serving): 10809})
+    catalog = _StubCatalog([_StubEntry("ubuntu", _SHA, 4_000_000_000)])
+    views = build_overlay_views(overlays=overlays, machines=machines, catalog=catalog, nbd=nbd)
+    by_state = {v.alias: v.state for v in views}
+    assert by_state["prod"] == STATE_SERVING
+    assert by_state["scratch"] == STATE_HELD
+    assert by_state["spare"] == STATE_FREE
+    assert by_state["ghost"] == STATE_ORPHANED
+    assert by_state["lost"] == STATE_MISSING
+
+    # base-image join: name + virtual size resolved from the catalog.
+    prod = next(v for v in views if v.alias == "prod")
+    assert prod.image_name == "ubuntu"
+    assert prod.base_bytes == 4_000_000_000
+    assert prod.used_bytes > 0  # allocated blocks for the 8 KiB file
+    assert prod.is_active is True  # backs the machine's current binding
 
 
 def test_running_flag_from_nbd_supervisor(tmp_path: Path) -> None:
     overlays, machines = _stores(tmp_path)
     path = tmp_path / "ov.qcow2"
     _touch_qcow2(path)
-    ov = Overlay("aa:aa:aa:aa:aa:aa", _SHA, "prod", str(path))
+    ov = Overlay("prod", _SHA, str(path))
     overlays.upsert(ov)
     from pixie.pxe._renderer import _overlay_export_name
 
@@ -133,15 +146,32 @@ def test_totals_and_reclaimable(tmp_path: Path) -> None:
     ov_dir = tmp_path / "overlays"
     p = ov_dir / "present.qcow2"
     _touch_qcow2(p)
-    # orphaned (no machine row) + missing (file gone) -> both reclaimable
-    overlays.upsert(Overlay("aa:aa:aa:aa:aa:aa", _SHA, "prod", str(p)))
-    overlays.upsert(Overlay("bb:bb:bb:bb:bb:bb", _SHA, "prod", str(ov_dir / "gone.qcow2")))
+    # orphaned (attached to a dead MAC) + missing (file gone) -> reclaimable.
+    overlays.upsert(Overlay("ghost", _SHA, str(p), attached_mac="cc:cc:cc:cc:cc:cc"))
+    overlays.upsert(
+        Overlay("lost", _SHA, str(ov_dir / "gone.qcow2"), attached_mac="dd:dd:dd:dd:dd:dd")
+    )
     views = build_overlay_views(
         overlays=overlays, machines=machines, catalog=_StubCatalog([]), nbd=_StubNbd()
     )
     totals = overlay_totals(views)
     assert totals.count == 2
     assert totals.reclaimable == 2  # orphaned + missing are both reclaimable
+
+
+def test_free_overlay_is_not_reclaimable(tmp_path: Path) -> None:
+    """A free (unattached) overlay is a deliberate keep for a future
+    bind -- Prune must leave it alone."""
+    overlays, machines = _stores(tmp_path)
+    p = tmp_path / "spare.qcow2"
+    _touch_qcow2(p)
+    overlays.upsert(Overlay("spare", _SHA, str(p)))
+    views = build_overlay_views(
+        overlays=overlays, machines=machines, catalog=_StubCatalog([]), nbd=_StubNbd()
+    )
+    assert views[0].state == STATE_FREE
+    assert views[0].reclaimable is False
+    assert overlay_totals(views).reclaimable == 0
 
 
 # ---------- route tests ---------------------------------------------
@@ -163,51 +193,50 @@ def test_ui_overlays_requires_auth(client: TestClient) -> None:
 def test_ui_overlays_shows_row_and_live_json(client: TestClient) -> None:
     c = authed(client)
     state = client.app.state
-    path = Path(state.overlays_dir) / "aa" / "ov.qcow2"
+    path = Path(state.overlays_dir) / "prod.qcow2"
     _touch_qcow2(path)
     state.machines_store.upsert_binding(
         "aa:aa:aa:aa:aa:aa",
         boot_mode="nbdboot",
         image_content_sha256=_SHA,
-        overlay_profile="prod",
+        overlay_alias="prod",
     )
-    state.overlays_store.upsert(Overlay("aa:aa:aa:aa:aa:aa", _SHA, "prod", str(path)))
+    state.overlays_store.upsert(Overlay("prod", _SHA, str(path), attached_mac="aa:aa:aa:aa:aa:aa"))
 
     r = c.get("/ui/overlays")
     assert r.status_code == 200
     assert "aa:aa:aa:aa:aa:aa" in r.text
     assert "prod" in r.text
-    assert "Active" in r.text  # active-state badge
+    assert "Held" in r.text  # attached but nothing serving
 
     j = c.get("/ui/overlays-live.json").json()
-    key = "aa:aa:aa:aa:aa:aa|" + _SHA + "|prod"
-    assert key in j["rows"]
-    assert j["rows"][key]["state"] == STATE_ACTIVE
+    assert "prod" in j["rows"]
+    assert j["rows"]["prod"]["state"] == STATE_HELD
     assert j["totals"]["count"] == 1
 
 
 def test_ui_overlays_reset_deletes_file_and_row(client: TestClient) -> None:
     c = authed(client)
     state = client.app.state
-    path = Path(state.overlays_dir) / "aa" / "ov.qcow2"
+    path = Path(state.overlays_dir) / "prod.qcow2"
     _touch_qcow2(path)
-    state.overlays_store.upsert(Overlay("aa:aa:aa:aa:aa:aa", _SHA, "prod", str(path)))
+    state.overlays_store.upsert(Overlay("prod", _SHA, str(path)))
 
     r = c.post(
         "/ui/overlays/reset",
-        data={"mac": "aa:aa:aa:aa:aa:aa", "image_sha": _SHA, "profile": "prod"},
+        data={"alias": "prod"},
         follow_redirects=False,
     )
     assert r.status_code == 303
     assert r.headers["location"] == "/ui/overlays"
     assert not path.exists()
-    assert state.overlays_store.get("aa:aa:aa:aa:aa:aa", _SHA, "prod") is None
+    assert state.overlays_store.get("prod") is None
 
 
 def test_ui_overlays_reset_requires_auth(client: TestClient) -> None:
     r = client.post(
         "/ui/overlays/reset",
-        data={"mac": "aa:aa:aa:aa:aa:aa", "image_sha": _SHA, "profile": "prod"},
+        data={"alias": "prod"},
         follow_redirects=False,
     )
     assert r.status_code == 303
@@ -219,37 +248,41 @@ def test_ui_overlays_prune_reclaims_only_junk(client: TestClient) -> None:
     state = client.app.state
     ov_dir = Path(state.overlays_dir)
 
-    # active: bound machine + file -> KEEP
-    active_path = ov_dir / "active.qcow2"
-    _touch_qcow2(active_path)
+    # held: bound machine + file -> KEEP
+    held_path = ov_dir / "prod.qcow2"
+    _touch_qcow2(held_path)
     state.machines_store.upsert_binding(
         "aa:aa:aa:aa:aa:aa",
         boot_mode="nbdboot",
         image_content_sha256=_SHA,
-        overlay_profile="prod",
+        overlay_alias="prod",
     )
-    state.overlays_store.upsert(Overlay("aa:aa:aa:aa:aa:aa", _SHA, "prod", str(active_path)))
+    state.overlays_store.upsert(
+        Overlay("prod", _SHA, str(held_path), attached_mac="aa:aa:aa:aa:aa:aa")
+    )
 
-    # idle: machine exists, non-current profile + file -> KEEP
-    idle_path = ov_dir / "idle.qcow2"
-    _touch_qcow2(idle_path)
-    state.overlays_store.upsert(Overlay("aa:aa:aa:aa:aa:aa", _SHA, "scratch", str(idle_path)))
+    # free: unattached + file -> KEEP
+    free_path = ov_dir / "spare.qcow2"
+    _touch_qcow2(free_path)
+    state.overlays_store.upsert(Overlay("spare", _SHA, str(free_path)))
 
-    # orphaned: no machine, file present -> PRUNE
-    orphan_path = ov_dir / "orphan.qcow2"
+    # orphaned: attached to a dead MAC, file present -> PRUNE
+    orphan_path = ov_dir / "ghost.qcow2"
     _touch_qcow2(orphan_path)
-    state.overlays_store.upsert(Overlay("cc:cc:cc:cc:cc:cc", _SHA, "prod", str(orphan_path)))
+    state.overlays_store.upsert(
+        Overlay("ghost", _SHA, str(orphan_path), attached_mac="cc:cc:cc:cc:cc:cc")
+    )
 
     # missing: file gone -> PRUNE
     gone = str(ov_dir / "gone.qcow2")
-    state.overlays_store.upsert(Overlay("dd:dd:dd:dd:dd:dd", _SHA, "prod", gone))
+    state.overlays_store.upsert(Overlay("lost", _SHA, gone, attached_mac="dd:dd:dd:dd:dd:dd"))
 
     r = c.post("/ui/overlays/prune", follow_redirects=False)
     assert r.status_code == 303
     assert r.headers["location"] == "/ui/overlays"
 
-    remaining = {(o.mac, o.profile) for o in state.overlays_store.list_all()}
-    assert remaining == {("aa:aa:aa:aa:aa:aa", "prod"), ("aa:aa:aa:aa:aa:aa", "scratch")}
-    assert active_path.exists()
-    assert idle_path.exists()
+    remaining = {o.alias for o in state.overlays_store.list_all()}
+    assert remaining == {"prod", "spare"}
+    assert held_path.exists()
+    assert free_path.exists()
     assert not orphan_path.exists()

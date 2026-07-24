@@ -58,7 +58,7 @@ class ImageMachineUse:
 
     mac: str
     boot_mode: str
-    overlay_profile: str = ""
+    overlay_alias: str = ""
     labels: list[str] = field(default_factory=list)
 
 
@@ -160,7 +160,7 @@ def build_image_views(
                 break
 
         mach = [
-            ImageMachineUse(m.mac, m.boot_mode, m.overlay_profile, list(m.labels))
+            ImageMachineUse(m.mac, m.boot_mode, m.overlay_alias, list(m.labels))
             for m in all_machines
             if m.image_content_sha256 == sha
         ]

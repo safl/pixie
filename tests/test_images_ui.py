@@ -71,7 +71,7 @@ def _seed(tmp: Path):
 def test_build_image_views_groups_and_rolls_up(tmp_path: Path) -> None:
     catalog, exports, overlays, machines = _seed(tmp_path)
     machines.upsert_binding("aa:aa:aa:aa:aa:aa", boot_mode="nbdboot", image_content_sha256=_SHA)
-    ov = Overlay("aa:aa:aa:aa:aa:aa", _SHA, "prod", str(tmp_path / "ov.qcow2"))
+    ov = Overlay("prod", _SHA, str(tmp_path / "ov.qcow2"), attached_mac="aa:aa:aa:aa:aa:aa")
     (tmp_path / "ov.qcow2").write_bytes(b"\x00" * 2048)
     overlays.upsert(ov)
     exports.upsert(Export(name="exp1", content_sha256=_SHA))

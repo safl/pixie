@@ -28,7 +28,8 @@ from tests.conftest import TEST_ADMIN_PASSWORD
 
 def test_overlays_store_round_trip(tmp_path: Path) -> None:
     """OverlaysStore CRUD: create -> get -> list -> update runtime ->
-    delete. Doesn't touch qemu-nbd; purely the SQL layer."""
+    attach/detach -> delete. Doesn't touch qemu-nbd; purely the SQL
+    layer. Identity is the globally-unique ``alias``."""
     from pixie.exports._store import ExportsStore, Overlay, OverlaysStore
 
     db_path = tmp_path / "state.db"
@@ -38,49 +39,103 @@ def test_overlays_store_round_trip(tmp_path: Path) -> None:
     store = OverlaysStore(db_path)
 
     assert store.list_all() == []
-    assert store.get("aa:bb:cc:dd:ee:00", "a" * 64, "simon") is None
+    assert store.get("simon") is None
 
-    ov = Overlay(
-        mac="aa:bb:cc:dd:ee:00",
-        image_sha="a" * 64,
-        profile="simon",
-        qcow2_path="/tmp/simon.qcow2",
-    )
+    ov = Overlay(alias="simon", image_sha="a" * 64, qcow2_path="/tmp/simon.qcow2")
     store.upsert(ov)
 
-    fetched = store.get("aa:bb:cc:dd:ee:00", "a" * 64, "simon")
+    fetched = store.get("simon")
     assert fetched is not None
-    assert fetched.profile == "simon"
+    assert fetched.alias == "simon"
+    assert fetched.attached_mac == ""  # free until attached
     assert fetched.status == "idle"
 
-    store.update_runtime(
-        "aa:bb:cc:dd:ee:00",
-        "a" * 64,
-        "simon",
-        nbd_port=10809,
-        status="running",
-        error="",
-    )
-    row = store.get("aa:bb:cc:dd:ee:00", "a" * 64, "simon")
+    store.update_runtime("simon", nbd_port=10809, status="running", error="")
+    row = store.get("simon")
     assert row is not None
     assert row.nbd_port == 10809
 
-    # Second profile on the same (mac, image) coexists.
-    store.upsert(
-        Overlay(
-            mac="aa:bb:cc:dd:ee:00",
-            image_sha="a" * 64,
-            profile="karl",
-            qcow2_path="/tmp/karl.qcow2",
-        )
-    )
-    profiles = [o.profile for o in store.list_for_machine_and_image("aa:bb:cc:dd:ee:00", "a" * 64)]
-    assert profiles == ["karl", "simon"]  # alphabetical by profile
+    # A second alias over the same base image coexists.
+    store.upsert(Overlay(alias="karl", image_sha="a" * 64, qcow2_path="/tmp/karl.qcow2"))
+    aliases = [o.alias for o in store.list_for_image("a" * 64)]
+    assert aliases == ["karl", "simon"]  # alphabetical by alias
+
+    # Single-writer bookkeeping: attach records the holder, detach frees
+    # it, and detach_mac releases every alias a machine held bar one.
+    store.attach("simon", "aa:bb:cc:dd:ee:00")
+    store.attach("karl", "aa:bb:cc:dd:ee:00")
+    assert store.get("simon").attached_mac == "aa:bb:cc:dd:ee:00"  # type: ignore[union-attr]
+    store.detach_mac("aa:bb:cc:dd:ee:00", keep="simon")
+    assert store.get("simon").attached_mac == "aa:bb:cc:dd:ee:00"  # type: ignore[union-attr]
+    assert store.get("karl").attached_mac == ""  # type: ignore[union-attr]
+    store.detach("simon")
+    assert store.get("simon").attached_mac == ""  # type: ignore[union-attr]
 
     # Delete lands.
-    assert store.delete("aa:bb:cc:dd:ee:00", "a" * 64, "simon") is True
-    assert store.get("aa:bb:cc:dd:ee:00", "a" * 64, "simon") is None
-    assert store.delete("aa:bb:cc:dd:ee:00", "a" * 64, "simon") is False
+    assert store.delete("simon") is True
+    assert store.get("simon") is None
+    assert store.delete("simon") is False
+
+
+def test_overlays_schema_migrates_pre_alias_rows(tmp_path: Path) -> None:
+    """A pre-alias overlays table (PK ``(mac, image_sha, profile)``) is
+    re-keyed to the alias shape on first :class:`ExportsStore` open: each
+    old row mints ``alias = <profile>-<mac_slug>``, seeds ``attached_mac``
+    with its old MAC, and keeps its qcow2 path. Collisions get a ``-N``
+    suffix so the alias stays globally unique."""
+    import sqlite3
+
+    from pixie.exports._store import ExportsStore, OverlaysStore
+
+    db_path = tmp_path / "state.db"
+    # Hand-build the OLD table shape + rows, exactly as a pre-re-model
+    # deploy would have them on disk.
+    conn = sqlite3.connect(str(db_path))
+    conn.executescript(
+        """
+        CREATE TABLE overlays (
+            mac          TEXT NOT NULL,
+            image_sha    TEXT NOT NULL,
+            profile      TEXT NOT NULL,
+            qcow2_path   TEXT NOT NULL,
+            nbd_port     INTEGER NOT NULL DEFAULT 0,
+            status       TEXT NOT NULL DEFAULT 'idle',
+            error        TEXT NOT NULL DEFAULT '',
+            created_at   TEXT NOT NULL,
+            last_boot_at TEXT NOT NULL DEFAULT '',
+            PRIMARY KEY (mac, image_sha, profile)
+        );
+        """
+    )
+    rows = [
+        ("aa:bb:cc:dd:ee:00", "a" * 64, "safl", "/data/overlays/aa/safl.qcow2"),
+        ("aa:bb:cc:dd:ee:01", "a" * 64, "safl", "/data/overlays/bb/safl.qcow2"),
+        ("aa:bb:cc:dd:ee:02", "b" * 64, "scratch", "/data/overlays/cc/scratch.qcow2"),
+    ]
+    for mac, sha, profile, path in rows:
+        conn.execute(
+            "INSERT INTO overlays (mac, image_sha, profile, qcow2_path, created_at) "
+            "VALUES (?, ?, ?, ?, '2026-01-01T00:00:00Z')",
+            (mac, sha, profile, path),
+        )
+    conn.commit()
+    conn.close()
+
+    # First open runs the migration.
+    ExportsStore(db_path)
+    store = OverlaysStore(db_path)
+    overlays = {o.alias: o for o in store.list_all()}
+
+    # Two machines shared profile "safl": mac_slug keeps the aliases
+    # distinct, no ``-N`` needed (the slugs already differ).
+    assert overlays["safl-aa-bb-cc-dd-ee-00"].attached_mac == "aa:bb:cc:dd:ee:00"
+    assert overlays["safl-aa-bb-cc-dd-ee-01"].attached_mac == "aa:bb:cc:dd:ee:01"
+    assert overlays["scratch-aa-bb-cc-dd-ee-02"].image_sha == "b" * 64
+    # qcow2 path is carried through untouched (no large-file move).
+    assert overlays["safl-aa-bb-cc-dd-ee-00"].qcow2_path == "/data/overlays/aa/safl.qcow2"
+    # Migration is idempotent: a second open leaves the alias table alone.
+    ExportsStore(db_path)
+    assert {o.alias for o in OverlaysStore(db_path).list_all()} == set(overlays)
 
 
 def test_partition_sig_matches_boot_sector(tmp_path: Path) -> None:

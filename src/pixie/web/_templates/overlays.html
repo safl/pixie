@@ -6,8 +6,9 @@
 {# State -> badge. Kept as a macro so the server render + the live-
    refresh JS below agree on colour + label for every state. #}
 {% macro state_badge(state) %}
-{% if state == 'active' %}<span class="badge text-bg-success"><i class="bi bi-check-circle me-1"></i>Active</span>
-{% elif state == 'idle' %}<span class="badge text-bg-secondary"><i class="bi bi-pause-circle me-1"></i>Idle</span>
+{% if state == 'serving' %}<span class="badge text-bg-success"><i class="bi bi-broadcast me-1"></i>Serving</span>
+{% elif state == 'held' %}<span class="badge text-bg-primary"><i class="bi bi-lock me-1"></i>Held</span>
+{% elif state == 'free' %}<span class="badge text-bg-secondary"><i class="bi bi-unlock me-1"></i>Free</span>
 {% elif state == 'orphaned' %}<span class="badge text-bg-warning"><i class="bi bi-question-circle me-1"></i>Orphaned</span>
 {% else %}<span class="badge text-bg-danger"><i class="bi bi-exclamation-triangle me-1"></i>File missing</span>{% endif %}
 {% endmacro %}
@@ -24,7 +25,7 @@
 {% endblock %}
 
 {% block content %}
-{{ page_description('layers', 'Persistent per-machine qcow2 overlays for nbdboot. Each is one machine\'s writable disk layered over a catalog base image; the disk-used + last-modified columns refresh every 5 s while the page is open. Reset wipes one back to the base image; Prune reclaims overlays whose file is gone or whose machine pixie no longer tracks.') }}
+{{ page_description('layers', 'Persistent named qcow2 overlays for nbdboot. Each overlay is a globally-unique writable volume over one catalog base image, single-writer: at most one machine holds it at a time. The disk-used + last-modified columns refresh every 5 s while the page is open. Reset wipes one back to the base image; Prune reclaims overlays whose file is gone or whose holder pixie no longer tracks.') }}
 
 {# ---- Summary strip -------------------------------------------------
    Fleet-wide roll-up. The numbers poll live alongside the table so an
@@ -58,11 +59,11 @@
                 <span class="fs-6 text-muted">(<span data-total="reclaimable-used">{{ totals.reclaimable_bytes | humanize_bytes }}</span>)</span>
             </div>
             <form method="post" action="/ui/overlays/prune" class="mt-auto"
-                  onsubmit="return confirm('Prune all reclaimable overlays? This deletes the qcow2 for every overlay whose file is already gone or whose machine is no longer registered. Idle overlays for live machines are kept.');">
+                  onsubmit="return confirm('Prune all reclaimable overlays? This deletes the qcow2 for every overlay whose file is already gone or whose holder is no longer registered. Free overlays kept for a future bind are left alone.');">
                 <button type="submit" class="btn btn-sm btn-outline-danger mt-2"
                         {% if not totals.reclaimable %}disabled{% endif %}
                         data-prune-btn
-                        title="Delete every file-missing or machine-orphaned overlay.">
+                        title="Delete every file-missing or orphaned overlay.">
                     <i class="bi bi-trash3 me-1"></i>Prune reclaimable
                 </button>
             </form>
@@ -80,9 +81,9 @@
             <thead class="table-light">
                 <tr>
                     <th scope="col">State</th>
-                    <th scope="col">Machine</th>
-                    <th scope="col">Profile</th>
+                    <th scope="col">Alias</th>
                     <th scope="col">Base image</th>
+                    <th scope="col">Attached to</th>
                     <th scope="col" class="text-end">Disk used</th>
                     <th scope="col">Last modified</th>
                     <th scope="col">Created</th>
@@ -95,9 +96,21 @@
                 {% for ov in overlays %}
                 <tr data-ov-row="{{ ov.key }}">
                     <td data-cell="state">{{ state_badge(ov.state) }}</td>
+                    <td><code>{{ ov.alias }}</code></td>
                     <td>
-                        <a href="/ui/machines/{{ ov.mac }}" class="text-decoration-none">
-                            <code>{{ ov.mac }}</code>
+                        {% if ov.image_name %}
+                        <a href="/ui/catalog/{{ ov.image_name }}" class="text-decoration-none">{{ ov.image_name }}</a>
+                        {% else %}
+                        <code class="small" title="{{ ov.image_sha }}">{{ ov.image_sha[:12] }}</code>
+                        {% endif %}
+                        {% if ov.base_bytes %}
+                        <div class="text-muted small">over {{ ov.base_bytes | humanize_bytes }} base</div>
+                        {% endif %}
+                    </td>
+                    <td>
+                        {% if ov.attached_mac %}
+                        <a href="/ui/machines/{{ ov.attached_mac }}" class="text-decoration-none">
+                            <code>{{ ov.attached_mac }}</code>
                         </a>
                         {% if not ov.machine_exists %}
                         <span class="badge text-bg-light border text-muted ms-1" title="pixie no longer has a row for this MAC">unregistered</span>
@@ -109,16 +122,8 @@
                             {% endfor %}
                         </div>
                         {% endif %}
-                    </td>
-                    <td><code>{{ ov.profile }}</code></td>
-                    <td>
-                        {% if ov.image_name %}
-                        <a href="/ui/catalog/{{ ov.image_name }}" class="text-decoration-none">{{ ov.image_name }}</a>
                         {% else %}
-                        <code class="small" title="{{ ov.image_sha }}">{{ ov.image_sha[:12] }}</code>
-                        {% endif %}
-                        {% if ov.base_bytes %}
-                        <div class="text-muted small">over {{ ov.base_bytes | humanize_bytes }} base</div>
+                        <span class="text-muted small">free</span>
                         {% endif %}
                     </td>
                     <td class="text-end text-nowrap" data-cell="used">
@@ -142,10 +147,8 @@
                     </td>
                     <td class="text-end">
                         <form method="post" action="/ui/overlays/reset" class="d-inline"
-                              onsubmit="return confirm('Reset overlay {{ ov.profile }} for {{ ov.mac }}? The qcow2 is deleted; the next nbdboot lazy-creates a fresh overlay from the base image. Any state in the current overlay is lost.');">
-                            <input type="hidden" name="mac" value="{{ ov.mac }}">
-                            <input type="hidden" name="image_sha" value="{{ ov.image_sha }}">
-                            <input type="hidden" name="profile" value="{{ ov.profile }}">
+                              onsubmit="return confirm('Reset overlay {{ ov.alias }}? The qcow2 is deleted; the next nbdboot that references this alias lazy-creates a fresh overlay from the base image. Any state in the current overlay is lost.');">
+                            <input type="hidden" name="alias" value="{{ ov.alias }}">
                             <button type="submit" class="btn btn-sm btn-outline-danger text-nowrap"
                                     title="Delete this overlay's qcow2; next boot starts fresh from the base image.">
                                 <i class="bi bi-arrow-counterclockwise me-1"></i>Reset
@@ -161,9 +164,10 @@
     <div class="card-body">
         <p class="text-muted mb-0">
             <i class="bi bi-inbox me-1"></i>
-            No overlays yet. An overlay is created the first time a machine
-            bound to <code>nbdboot</code> with a persistent profile PXE-boots.
-            Bind one on a <a href="/ui/machines">machine</a>'s detail page.
+            No overlays yet. An overlay is created when a machine bound to
+            <code>nbdboot</code> with a named alias PXE-boots (or when you
+            name a new alias on a <a href="/ui/machines">machine</a>'s
+            detail page).
         </p>
     </div>
     {% endif %}
@@ -193,8 +197,9 @@
 
     function stateBadge(state) {
         switch (state) {
-            case "active":  return `<span class="badge text-bg-success"><i class="bi bi-check-circle me-1"></i>Active</span>`;
-            case "idle":    return `<span class="badge text-bg-secondary"><i class="bi bi-pause-circle me-1"></i>Idle</span>`;
+            case "serving": return `<span class="badge text-bg-success"><i class="bi bi-broadcast me-1"></i>Serving</span>`;
+            case "held":    return `<span class="badge text-bg-primary"><i class="bi bi-lock me-1"></i>Held</span>`;
+            case "free":    return `<span class="badge text-bg-secondary"><i class="bi bi-unlock me-1"></i>Free</span>`;
             case "orphaned":return `<span class="badge text-bg-warning"><i class="bi bi-question-circle me-1"></i>Orphaned</span>`;
             default:        return `<span class="badge text-bg-danger"><i class="bi bi-exclamation-triangle me-1"></i>File missing</span>`;
         }

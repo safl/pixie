@@ -19,7 +19,7 @@ def _call(**kwargs: str) -> str:
         "boot_mode": "",
         "image_name": "",
         "disk_label": "",
-        "overlay_profile": "",
+        "overlay_alias": "",
     }
     defaults.update(kwargs)
     return bind_preview_text(**defaults)
@@ -68,20 +68,24 @@ def test_nbdboot_ephemeral_says_overlay_on_tmpfs() -> None:
     assert "overlay-on-tmpfs" in text
 
 
-def test_nbdboot_persist_names_the_profile() -> None:
+def test_nbdboot_persist_names_the_alias() -> None:
     text = _call(
         boot_mode="nbdboot",
         image_name="nosi ubuntu-2604-headless",
-        overlay_profile="simon",
+        overlay_alias="simon",
     )
     assert "simon" in text
-    assert "qcow2 overlay" in text
+    assert "qcow2 layer" in text
+    assert "single-writer" in text
     assert "overlay-on-tmpfs" not in text
 
 
-def test_nbdboot_without_image_prompts_for_pick_even_persist() -> None:
-    text = _call(boot_mode="nbdboot", overlay_profile="simon")
-    assert "Pick an image above" in text
+def test_nbdboot_persist_needs_no_image_alias_implies_it() -> None:
+    """An attached alias implies its own base image, so the persist
+    sentence renders even with no image picked in the dropdown."""
+    text = _call(boot_mode="nbdboot", overlay_alias="simon")
+    assert "Pick an image above" not in text
+    assert "simon" in text
 
 
 def test_unknown_mode_falls_back_to_the_mode_string() -> None:

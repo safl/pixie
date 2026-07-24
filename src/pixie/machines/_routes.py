@@ -66,13 +66,15 @@ class BindBody(BaseModel):
             "the global PIXIE_LIVE_ENV_EXTRA_CMDLINE. Single line."
         ),
     )
-    overlay_profile: str = Field(
+    overlay_alias: str = Field(
         default="",
         description=(
-            "Persistent-overlay profile name for nbdboot. Blank means "
-            "ephemeral tmpfs (writes vanish on reboot); non-blank names a "
-            "qcow2 overlay that persists on pixie's data volume. "
-            "Alphanumeric-leading; a-z / A-Z / 0-9 / . _ - (max 64 chars)."
+            "Globally-unique persistent-overlay alias for nbdboot. Blank "
+            "means ephemeral tmpfs (writes vanish on reboot); non-blank "
+            "attaches a named writable volume (qcow2 over a base image) "
+            "that persists on pixie's data volume. Single-writer: one "
+            "machine per alias. Alphanumeric-leading; a-z / A-Z / 0-9 / "
+            ". _ - (max 64 chars)."
         ),
     )
 
@@ -133,14 +135,28 @@ def upsert_machine(
         # not supply any new ones -- honours a partial-update PUT
         # without needing PATCH.
         labels_arg = labels if labels else (list(previous.labels) if previous else [])
+        # Single-writer + alias-implies-image resolution is shared with
+        # the UI bind route (see pixie.web._overlay_bind): attaching an
+        # alias held by another machine raises ValueError -> 422 here.
+        from pixie.web._overlay_bind import overlay_state, resolve_overlay_bind
+
+        overlays, overlays_dir = overlay_state(request.app.state)
+        image_sha, resolved_alias = resolve_overlay_bind(
+            overlays=overlays,
+            overlays_dir=overlays_dir,
+            mac=canon,
+            boot_mode=body.boot_mode,
+            image_sha=body.image_content_sha256.strip().lower(),
+            alias=body.overlay_alias,
+        )
         row = _get_machines(request).upsert_binding(
             canon,
             boot_mode=body.boot_mode,
-            image_content_sha256=body.image_content_sha256.strip().lower(),
+            image_content_sha256=image_sha,
             labels=labels_arg,
             target_disk_serial=body.target_disk_serial,
             extra_cmdline=body.extra_cmdline,
-            overlay_profile=body.overlay_profile,
+            overlay_alias=resolved_alias,
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc

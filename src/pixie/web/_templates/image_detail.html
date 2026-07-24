@@ -60,7 +60,7 @@
                     <tr>
                         <td><a href="/ui/machines/{{ mu.mac }}" class="text-decoration-none"><code>{{ mu.mac }}</code></a></td>
                         <td><code>{{ mu.boot_mode }}</code></td>
-                        <td>{% if mu.overlay_profile %}<code>{{ mu.overlay_profile }}</code>{% else %}<span class="text-muted small">ephemeral</span>{% endif %}</td>
+                        <td>{% if mu.overlay_alias %}<code>{{ mu.overlay_alias }}</code>{% else %}<span class="text-muted small">ephemeral</span>{% endif %}</td>
                     </tr>
                     {% endfor %}
                 </tbody>

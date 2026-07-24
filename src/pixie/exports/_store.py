@@ -33,31 +33,78 @@ CREATE TABLE IF NOT EXISTS exports (
 
 CREATE INDEX IF NOT EXISTS idx_exports_content_sha
     ON exports(content_sha256);
+"""
 
--- One row per (mac, image_sha, profile) triple; the qcow2 file at
--- ``qcow2_path`` has ``backing_file`` pointing at the catalog blob
--- for ``image_sha`` and holds every write the machine has made under
--- that profile. Separate from the ``exports`` table above because the
--- ephemeral (nbdkit) and persistent (qemu-nbd) paths have different
--- identity (per-content vs per-triple) and lifecycle (respawn on
--- restart vs create-on-first-bind).
+# An overlay is a globally-named writable volume over ONE base image.
+# Identity is its ``alias`` (globally unique), NOT the machine: the
+# qcow2 at ``qcow2_path`` has ``backing_file`` pointing at the catalog
+# blob for ``image_sha`` and holds every write made through it. Exactly
+# one machine may hold exclusive write at a time -- ``attached_mac``
+# (empty = free) records which; qemu-nbd's qcow2 image-lock is the
+# backstop. Separate table from ``exports`` because the ephemeral
+# (nbdkit, per-content) and persistent (qemu-nbd, per-alias) paths have
+# different identity + lifecycle.
+_OVERLAYS_SCHEMA = """
 CREATE TABLE IF NOT EXISTS overlays (
-    mac           TEXT NOT NULL,
+    alias         TEXT PRIMARY KEY,
     image_sha     TEXT NOT NULL,
-    profile       TEXT NOT NULL,
     qcow2_path    TEXT NOT NULL,
+    attached_mac  TEXT NOT NULL DEFAULT '',
     nbd_port      INTEGER NOT NULL DEFAULT 0,
     status        TEXT NOT NULL DEFAULT 'idle',
     error         TEXT NOT NULL DEFAULT '',
     created_at    TEXT NOT NULL,
-    last_boot_at  TEXT NOT NULL DEFAULT '',
-    PRIMARY KEY (mac, image_sha, profile)
+    last_boot_at  TEXT NOT NULL DEFAULT ''
 );
-CREATE INDEX IF NOT EXISTS idx_overlays_mac
-    ON overlays(mac);
 CREATE INDEX IF NOT EXISTS idx_overlays_image_sha
     ON overlays(image_sha);
+CREATE INDEX IF NOT EXISTS idx_overlays_attached_mac
+    ON overlays(attached_mac);
 """
+
+
+def _migrate_overlays_schema(conn: sqlite3.Connection) -> None:
+    """Re-key the pre-alias ``overlays`` table (PK
+    ``(mac, image_sha, profile)``) to the alias-keyed shape. For each
+    old row a globally-unique ``alias = <profile>-<mac_slug>`` is minted
+    (dedup on the rare collision) and ``attached_mac`` is seeded with the
+    row's old ``mac`` so the machine that owned it keeps its exclusive
+    hold. The qcow2 ``qcow2_path`` is left untouched -- no large files
+    move during migration. Idempotent: a table that already has an
+    ``alias`` column, or no overlays table at all, is left alone."""
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(overlays)").fetchall()}
+    if not cols or "alias" in cols:
+        return
+    old_rows = conn.execute("SELECT * FROM overlays").fetchall()
+    conn.execute("ALTER TABLE overlays RENAME TO overlays_pre_alias")
+    conn.executescript(_OVERLAYS_SCHEMA)
+    seen: set[str] = set()
+    for r in old_rows:
+        mac_slug = str(r["mac"]).replace(":", "-")
+        base = f"{r['profile']}-{mac_slug}"
+        alias = base
+        n = 1
+        while alias in seen:
+            n += 1
+            alias = f"{base}-{n}"
+        seen.add(alias)
+        conn.execute(
+            """
+            INSERT INTO overlays (
+                alias, image_sha, qcow2_path, attached_mac,
+                nbd_port, status, error, created_at, last_boot_at
+            ) VALUES (?, ?, ?, ?, 0, 'idle', '', ?, ?)
+            """,
+            (
+                alias,
+                r["image_sha"],
+                r["qcow2_path"],
+                r["mac"],
+                r["created_at"],
+                r["last_boot_at"],
+            ),
+        )
+    conn.execute("DROP TABLE overlays_pre_alias")
 
 
 @dataclass
@@ -99,6 +146,8 @@ class ExportsStore:
     def _ensure_schema(self) -> None:
         with self._conn() as conn:
             conn.executescript(_SCHEMA)
+            _migrate_overlays_schema(conn)
+            conn.executescript(_OVERLAYS_SCHEMA)
 
     @contextlib.contextmanager
     def _conn(self) -> Generator[sqlite3.Connection]:
@@ -182,18 +231,20 @@ def _row_to_export(row: sqlite3.Row) -> Export:
 
 @dataclass
 class Overlay:
-    """One persistent per-machine qcow2 overlay for ``boot_mode=nbdboot``.
+    """A globally-named writable volume over one base image.
 
-    Identity is the ``(mac, image_sha, profile)`` triple. The qcow2 at
-    ``qcow2_path`` has ``backing_file`` pointing at the catalog blob
-    for ``image_sha``; a qemu-nbd subprocess serves it while the row's
-    ``status == 'running'``. Deleting the row is the operator's
-    "Reset overlay" action -- the caller unlinks the qcow2 too."""
+    Identity is the ``alias`` (globally unique), not a machine: the
+    qcow2 at ``qcow2_path`` has ``backing_file`` pointing at the catalog
+    blob for ``image_sha`` and holds every write made through it.
+    ``attached_mac`` records the single machine currently holding
+    exclusive write ("" = free); a qemu-nbd subprocess serves it while
+    ``status == 'running'``. Deleting the row is the operator's "Reset"
+    action -- the caller unlinks the qcow2 too."""
 
-    mac: str
+    alias: str
     image_sha: str
-    profile: str
     qcow2_path: str
+    attached_mac: str = ""
     nbd_port: int = 0
     status: str = "idle"  # "idle" | "running" | "error"
     error: str = ""
@@ -202,10 +253,10 @@ class Overlay:
 
     def to_dict(self) -> dict[str, Any]:
         out: dict[str, Any] = {
-            "mac": self.mac,
+            "alias": self.alias,
             "image_sha": self.image_sha,
-            "profile": self.profile,
             "qcow2_path": self.qcow2_path,
+            "attached_mac": self.attached_mac,
             "status": self.status,
             "created_at": self.created_at,
         }
@@ -219,12 +270,12 @@ class Overlay:
 
 
 class OverlaysStore:
-    """Repository over the ``overlays`` table on the shared state.db.
+    """Repository over the alias-keyed ``overlays`` table.
 
-    Same DB path as :class:`ExportsStore` + :class:`CatalogStore`.
-    Kept as a sibling class rather than a method-set on ExportsStore
-    so the ephemeral vs persistent lifecycles read as distinct
-    concerns at the call site."""
+    Same DB path as :class:`ExportsStore` + :class:`CatalogStore`. The
+    table is created + migrated by :meth:`ExportsStore._ensure_schema`
+    (constructed first at startup), so this is a thin data-access
+    sibling."""
 
     def __init__(self, db_path: Path) -> None:
         self.db_path = Path(db_path)
@@ -240,31 +291,21 @@ class OverlaysStore:
             conn.close()
 
     def list_all(self) -> list[Overlay]:
-        """Every overlay row across every (mac, image, profile) triple.
-        Named ``list_all`` (not ``list``) so ``list[Overlay]`` in
-        sibling method signatures below resolves to the built-in
-        rather than the shadowed method."""
         with self._conn() as conn:
-            rows = conn.execute(
-                "SELECT * FROM overlays ORDER BY mac, image_sha, profile"
-            ).fetchall()
+            rows = conn.execute("SELECT * FROM overlays ORDER BY alias").fetchall()
         return [_row_to_overlay(r) for r in rows]
 
-    def get(self, mac: str, image_sha: str, profile: str) -> Overlay | None:
+    def get(self, alias: str) -> Overlay | None:
         with self._conn() as conn:
-            row = conn.execute(
-                "SELECT * FROM overlays WHERE mac = ? AND image_sha = ? AND profile = ?",
-                (mac, image_sha, profile),
-            ).fetchone()
+            row = conn.execute("SELECT * FROM overlays WHERE alias = ?", (alias,)).fetchone()
         return _row_to_overlay(row) if row else None
 
-    def list_for_machine_and_image(self, mac: str, image_sha: str) -> list[Overlay]:
-        """Every profile this ``(mac, image_sha)`` combo has ever created.
-        Drives the bind-form overlay picker."""
+    def list_for_image(self, image_sha: str) -> list[Overlay]:
+        """Every overlay over this base image. Drives the bind-form
+        picker (which aliases a machine could attach for this image)."""
         with self._conn() as conn:
             rows = conn.execute(
-                "SELECT * FROM overlays WHERE mac = ? AND image_sha = ? ORDER BY profile",
-                (mac, image_sha),
+                "SELECT * FROM overlays WHERE image_sha = ? ORDER BY alias", (image_sha,)
             ).fetchall()
         return [_row_to_overlay(r) for r in rows]
 
@@ -273,15 +314,15 @@ class OverlaysStore:
             conn.execute(
                 """
                 INSERT OR REPLACE INTO overlays (
-                    mac, image_sha, profile, qcow2_path,
+                    alias, image_sha, qcow2_path, attached_mac,
                     nbd_port, status, error, created_at, last_boot_at
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
-                    ov.mac,
+                    ov.alias,
                     ov.image_sha,
-                    ov.profile,
                     ov.qcow2_path,
+                    ov.attached_mac,
                     ov.nbd_port,
                     ov.status,
                     ov.error,
@@ -290,55 +331,52 @@ class OverlaysStore:
                 ),
             )
 
-    def delete(self, mac: str, image_sha: str, profile: str) -> bool:
+    def delete(self, alias: str) -> bool:
         with _DB_WRITE_LOCK, self._conn() as conn:
-            cur = conn.execute(
-                "DELETE FROM overlays WHERE mac = ? AND image_sha = ? AND profile = ?",
-                (mac, image_sha, profile),
-            )
+            cur = conn.execute("DELETE FROM overlays WHERE alias = ?", (alias,))
             return cur.rowcount > 0
 
-    def update_runtime(
-        self,
-        mac: str,
-        image_sha: str,
-        profile: str,
-        *,
-        nbd_port: int,
-        status: str,
-        error: str = "",
-    ) -> None:
+    def update_runtime(self, alias: str, *, nbd_port: int, status: str, error: str = "") -> None:
         """Refresh transient port + status after a qemu-nbd spawn."""
         with _DB_WRITE_LOCK, self._conn() as conn:
             conn.execute(
-                """
-                UPDATE overlays
-                SET nbd_port = ?, status = ?, error = ?
-                WHERE mac = ? AND image_sha = ? AND profile = ?
-                """,
-                (nbd_port, status, error, mac, image_sha, profile),
+                "UPDATE overlays SET nbd_port = ?, status = ?, error = ? WHERE alias = ?",
+                (nbd_port, status, error, alias),
             )
 
-    def touch_last_boot(self, mac: str, image_sha: str, profile: str) -> None:
-        """Record the timestamp of the most recent plan render for this
-        overlay. Used by the UI's "last used" column + future auto-GC."""
+    def touch_last_boot(self, alias: str) -> None:
+        with _DB_WRITE_LOCK, self._conn() as conn:
+            conn.execute("UPDATE overlays SET last_boot_at = ? WHERE alias = ?", (now_iso(), alias))
+
+    def attach(self, alias: str, mac: str) -> None:
+        """Record ``mac`` as the exclusive writer of ``alias``.
+        Single-writer is enforced at the call site (bind route + renderer
+        refuse a hand-off to a different mac); this just records it."""
+        with _DB_WRITE_LOCK, self._conn() as conn:
+            conn.execute("UPDATE overlays SET attached_mac = ? WHERE alias = ?", (mac, alias))
+
+    def detach(self, alias: str) -> None:
+        """Release the writer hold on ``alias`` (attached_mac -> '')."""
+        with _DB_WRITE_LOCK, self._conn() as conn:
+            conn.execute("UPDATE overlays SET attached_mac = '' WHERE alias = ?", (alias,))
+
+    def detach_mac(self, mac: str, *, keep: str = "") -> None:
+        """Release every alias ``mac`` holds except ``keep`` -- called
+        when a machine rebinds away so a stale hold can't block another
+        machine from attaching."""
         with _DB_WRITE_LOCK, self._conn() as conn:
             conn.execute(
-                """
-                UPDATE overlays
-                SET last_boot_at = ?
-                WHERE mac = ? AND image_sha = ? AND profile = ?
-                """,
-                (now_iso(), mac, image_sha, profile),
+                "UPDATE overlays SET attached_mac = '' WHERE attached_mac = ? AND alias != ?",
+                (mac, keep),
             )
 
 
 def _row_to_overlay(row: sqlite3.Row) -> Overlay:
     return Overlay(
-        mac=row["mac"],
+        alias=row["alias"],
         image_sha=row["image_sha"],
-        profile=row["profile"],
         qcow2_path=row["qcow2_path"],
+        attached_mac=row["attached_mac"],
         nbd_port=row["nbd_port"] or 0,
         status=row["status"],
         error=row["error"],

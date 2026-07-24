@@ -13,6 +13,26 @@ operator-facing summary.
 
 ### Changed
 
+**Overlays are now globally-named single-writer volumes.** A persistent
+nbdboot overlay is no longer a per-`(machine, image, profile)` triple; it
+is a globally-unique named writable volume (`alias`) over ONE base image,
+and the base image is implied by the alias. At most one machine may hold
+an alias at a time: attaching one already held by a different machine is
+rejected in the app ("held by <mac>; detach first"), with qemu-nbd's
+qcow2 image-lock as the backstop. On a machine's detail page the picker
+now offers the aliases that are free (or already held here) plus a
+create-new flow; attaching an existing alias binds the machine to that
+alias's base image. The Overlays page keys on the alias, shows an
+**Attached to** column (a MAC or "free"), and classifies each row as
+serving / held / free / orphaned / missing; Prune still reclaims only the
+orphaned + file-missing rows and leaves a free alias (a deliberate keep)
+alone. On-disk overlays move from
+`overlays/<mac>/<image_sha>/<profile>.qcow2` to a flat
+`overlays/<alias>.qcow2`. Existing state.db rows migrate in place on
+first start: each old overlay becomes `alias = <profile>-<mac_slug>`
+holding its original MAC, its qcow2 path is kept as-is (no large-file
+move), and each machine's binding is rewritten to the same derived alias.
+
 **Dashboard speaks the new model.** The tiles now mirror the
 storage/lifecycle vocabulary + the nav: **Machines**, **Catalog**
 (sources you can fetch, with a not-yet-fetched count), **Images** (the

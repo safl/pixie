@@ -7,11 +7,55 @@ tests cover surface that never touches a subprocess.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 from fastapi.testclient import TestClient
 
-from pixie.machines._store import BOOT_MODES, BadMac, normalise_mac
+from pixie.machines._store import BOOT_MODES, BadMac, MachinesStore, normalise_mac
 from tests.conftest import authed as _authed
+
+
+def test_machines_migration_derives_overlay_alias_from_profile(tmp_path: Path) -> None:
+    """A pre-re-model machines row (``overlay_profile`` set,
+    ``overlay_alias`` empty) has its alias derived on the next store
+    open, using the SAME ``<profile>-<mac_slug>`` rule the overlays-table
+    migration mints, so the machine keeps pointing at its qcow2."""
+    import sqlite3
+
+    db = tmp_path / "state.db"
+    # Hand-build a pre-re-model machines table: it has ``overlay_profile``
+    # but NOT ``overlay_alias`` (the column the migration adds).
+    conn = sqlite3.connect(str(db))
+    conn.executescript(
+        """
+        CREATE TABLE machines (
+            mac                    TEXT PRIMARY KEY,
+            boot_mode              TEXT NOT NULL DEFAULT 'ipxe-exit',
+            image_content_sha256   TEXT NOT NULL DEFAULT '',
+            labels                 TEXT NOT NULL DEFAULT '',
+            target_disk_serial     TEXT NOT NULL DEFAULT '',
+            extra_cmdline          TEXT NOT NULL DEFAULT '',
+            overlay_profile        TEXT NOT NULL DEFAULT '',
+            inventory_json         TEXT NOT NULL DEFAULT '',
+            inventory_at           TEXT NOT NULL DEFAULT '',
+            discovered_at          TEXT NOT NULL,
+            last_seen_at           TEXT NOT NULL,
+            last_seen_ip           TEXT NOT NULL DEFAULT '',
+            updated_at             TEXT NOT NULL
+        );
+        INSERT INTO machines (mac, boot_mode, image_content_sha256, overlay_profile,
+            discovered_at, last_seen_at, updated_at)
+        VALUES ('aa:bb:cc:dd:ee:00', 'nbdboot', 'a', 'safl', 'x', 'x', 'x');
+        """
+    )
+    conn.commit()
+    conn.close()
+
+    # Open: the additive migration adds overlay_alias + backfills it.
+    row = MachinesStore(db).get("aa:bb:cc:dd:ee:00")
+    assert row is not None
+    assert row.overlay_alias == "safl-aa-bb-cc-dd-ee-00"
 
 
 def test_normalise_mac_accepts_all_common_shapes() -> None:
@@ -247,61 +291,123 @@ def test_ui_machines_bind_form_persists_boot_mode(client: TestClient) -> None:
     assert "labels" not in row
 
 
-def test_bind_overlay_profile_round_trips(client: TestClient) -> None:
-    """PUT /machines/{mac} with overlay_profile persists it; the row
-    reads it back; the ephemeral (blank profile) case is the default."""
+def test_bind_overlay_alias_round_trips(client: TestClient) -> None:
+    """PUT /machines/{mac} with overlay_alias creates the overlay over
+    the selected base image, persists the alias on the row, and holds
+    the single-writer lock; the ephemeral (blank alias) case is the
+    default and releases the hold."""
     c = _authed(client)
+    state = client.app.state
     mac = "aa:bb:cc:dd:ee:2a"
     r = c.put(
         f"/machines/{mac}",
         json={
             "boot_mode": "nbdboot",
             "image_content_sha256": "a" * 64,
-            "overlay_profile": "simon",
+            "overlay_alias": "simon",
         },
     )
     assert r.status_code == 200
     row = c.get(f"/machines/{mac}").json()
-    assert row["overlay_profile"] == "simon"
+    assert row["overlay_alias"] == "simon"
+    # The overlay row exists over the selected image and this MAC holds it.
+    ov = state.overlays_store.get("simon")
+    assert ov is not None
+    assert ov.image_sha == "a" * 64
+    assert ov.attached_mac == mac
 
-    # Blank overlay_profile clears the field (round-trip absent).
+    # Blank overlay_alias clears the field (round-trip absent) + frees it.
     r = c.put(
         f"/machines/{mac}",
         json={
             "boot_mode": "nbdboot",
             "image_content_sha256": "a" * 64,
-            "overlay_profile": "",
+            "overlay_alias": "",
         },
     )
     assert r.status_code == 200
     row2 = c.get(f"/machines/{mac}").json()
-    assert "overlay_profile" not in row2
+    assert "overlay_alias" not in row2
+    assert state.overlays_store.get("simon").attached_mac == ""  # type: ignore[union-attr]
 
 
-def test_bind_overlay_profile_rejects_bad_chars(client: TestClient) -> None:
-    """Overlay profile lands on disk as
-    ``data/overlays/<mac>/<image>/<profile>.qcow2``, so a name with
-    ``..`` or a slash could escape the tree. Reject at the store."""
+def test_bind_overlay_alias_implies_base_image(client: TestClient) -> None:
+    """Attaching an EXISTING alias overrides the image dropdown: the
+    machine binds the overlay's base image, not whatever sha was sent."""
     c = _authed(client)
+    state = client.app.state
+    from pixie.exports._store import Overlay
+
+    state.overlays_store.upsert(Overlay("shared", "b" * 64, "/tmp/shared.qcow2"))
+    mac = "aa:bb:cc:dd:ee:2d"
+    r = c.put(
+        f"/machines/{mac}",
+        json={
+            # A different (even blank-ish) sha is sent; the alias wins.
+            "boot_mode": "nbdboot",
+            "image_content_sha256": "c" * 64,
+            "overlay_alias": "shared",
+        },
+    )
+    assert r.status_code == 200
+    row = c.get(f"/machines/{mac}").json()
+    assert row["overlay_alias"] == "shared"
+    assert row["image_content_sha256"] == "b" * 64  # implied by the alias
+
+
+def test_bind_overlay_alias_single_writer_rejected(client: TestClient) -> None:
+    """An alias already held by a DIFFERENT machine is single-writer-
+    locked: a second machine attaching it is rejected (422) and no bind
+    lands."""
+    c = _authed(client)
+    state = client.app.state
+    from pixie.exports._store import Overlay
+
+    state.overlays_store.upsert(
+        Overlay("held", "a" * 64, "/tmp/held.qcow2", attached_mac="aa:bb:cc:dd:ee:01")
+    )
+    other = "aa:bb:cc:dd:ee:02"
+    r = c.put(
+        f"/machines/{other}",
+        json={
+            "boot_mode": "nbdboot",
+            "image_content_sha256": "a" * 64,
+            "overlay_alias": "held",
+        },
+    )
+    assert r.status_code == 422
+    assert "held by" in r.json()["detail"]
+    # The hold did not move.
+    assert state.overlays_store.get("held").attached_mac == "aa:bb:cc:dd:ee:01"  # type: ignore[union-attr]
+
+
+def test_bind_overlay_alias_rejects_bad_chars(client: TestClient) -> None:
+    """A new alias lands on disk as ``data/overlays/<alias>.qcow2``, so a
+    name with ``..`` or a slash could escape the tree. Reject before any
+    row or path is written."""
+    c = _authed(client)
+    state = client.app.state
     r = c.put(
         "/machines/aa:bb:cc:dd:ee:2b",
         json={
             "boot_mode": "nbdboot",
             "image_content_sha256": "a" * 64,
-            "overlay_profile": "../etc/passwd",
+            "overlay_alias": "../etc/passwd",
         },
     )
     assert r.status_code == 422
+    # No bogus overlay row was created.
+    assert state.overlays_store.list_all() == []
 
 
-def test_ui_bind_form_maps_overlay_profile_new_to_new_name(
+def test_ui_bind_form_maps_overlay_alias_new_to_new_name(
     client: TestClient,
 ) -> None:
-    """The bind form select carries a magic ``__new`` value that
-    tells the handler to pull the profile name from the sibling
-    ``overlay_profile_new`` text field. Exercise the merge so an
-    operator using the picker's create-new flow lands the fresh
-    profile without a JSON round-trip."""
+    """The bind form select carries a magic ``__new`` value that tells
+    the handler to pull the alias name from the sibling
+    ``overlay_alias_new`` text field. Exercise the merge so an operator
+    using the picker's create-new flow lands the fresh alias without a
+    JSON round-trip."""
     c = _authed(client)
     mac = "aa:bb:cc:dd:ee:2c"
     r = c.post(
@@ -310,14 +416,14 @@ def test_ui_bind_form_maps_overlay_profile_new_to_new_name(
             "mac": mac,
             "boot_mode": "nbdboot",
             "image_content_sha256": "a" * 64,
-            "overlay_profile": "__new",
-            "overlay_profile_new": "karl",
+            "overlay_alias": "__new",
+            "overlay_alias_new": "karl",
         },
         follow_redirects=False,
     )
     assert r.status_code == 303
     row = c.get(f"/machines/{mac}").json()
-    assert row["overlay_profile"] == "karl"
+    assert row["overlay_alias"] == "karl"
 
 
 def test_ui_labels_edit_form_persists_and_independent_of_bind(
