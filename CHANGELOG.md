@@ -13,6 +13,22 @@ operator-facing summary.
 
 ### Changed
 
+**Machines list Image column reads like the new model.** The bound
+image now shows the catalog name linked to its Images page (short sha
+for an orphan blob whose entry was deleted), instead of a bare hash,
+and is blank for boot modes that don't consume an image (ipxe-exit /
+inventory / tui) rather than showing a stale sha.
+
+**Catalog table is leaner.** The sources listing drops the inline
+content sha + byte size (image facts that live on the linked Image
+page); the fetched/error/in-flight readiness state stays.
+
+**Default timestamp format drops the timezone suffix.** Operator-facing
+timestamps now default to `%Y-%m-%d %H:%M:%S` (24-hour, no ` %Z`); the
+display timezone is still an operator setting, just not repeated on
+every row. Set `PIXIE_DATETIME_FORMAT` or the Settings override to add
+it back.
+
 **Overlays are now globally-named single-writer volumes.** A persistent
 nbdboot overlay is no longer a per-`(machine, image, profile)` triple; it
 is a globally-unique named writable volume (`alias`) over ONE base image,

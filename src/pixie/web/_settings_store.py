@@ -46,13 +46,15 @@ ENV_DISPLAY_TZ = "PIXIE_DISPLAY_TZ"
 DEFAULT_DISPLAY_TZ = "UTC"
 
 # strftime pattern applied to every timestamp after the timezone
-# normalisation. Default matches bty's operator-facing "human ISO"
-# shape. The form accepts any strftime-parseable string; validation
-# runs the pattern through :func:`datetime.strftime` at set time so
-# a bogus ``%Q`` doesn't wait until the next page-render to blow up.
+# normalisation. Default is a plain ISO-ish ``YYYY-MM-DD HH:MM:SS`` in
+# 24-hour time, no timezone suffix (the tz is an operator setting, not
+# something every row needs to repeat). The form accepts any
+# strftime-parseable string; validation runs the pattern through
+# :func:`datetime.strftime` at set time so a bogus ``%Q`` doesn't wait
+# until the next page-render to blow up.
 KEY_DATETIME_FORMAT = "display.datetime_format"
 ENV_DATETIME_FORMAT = "PIXIE_DATETIME_FORMAT"
-DEFAULT_DATETIME_FORMAT = "%Y-%m-%d %H:%M:%S %Z"
+DEFAULT_DATETIME_FORMAT = "%Y-%m-%d %H:%M:%S"
 
 # Extra tokens appended verbatim to the pixie-live-env kernel
 # cmdline (see pixie.pxe._routes._render_context + the

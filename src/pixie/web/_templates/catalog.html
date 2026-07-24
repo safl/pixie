@@ -153,21 +153,13 @@
                         <span class="badge text-bg-info" title="the on-disk bytes match the currently-recorded sha; nothing to fetch">
                             <i class="bi bi-check2-all me-1"></i>already at latest
                         </span>
-                        {% if e.content_sha256 %}
-                        <div class="text-muted small font-monospace">
-                            {{ e.content_sha256[:12] }}
-                        </div>
-                        {% endif %}
                         {% elif e.content_sha256 %}
+                        {# Readiness only: the content sha + byte footprint are
+                           image facts, surfaced on the linked Image page rather
+                           than duplicated on this sources table. #}
                         <span class="badge text-bg-success">
                             <i class="bi bi-check-circle me-1"></i>fetched
                         </span>
-                        <div class="text-muted small font-monospace">
-                            {{ e.content_sha256[:12] }}
-                        </div>
-                        {% if e.size_bytes %}
-                        <div class="text-muted small">{{ e.size_bytes }} bytes</div>
-                        {% endif %}
                         {% else %}
                         <span class="badge text-bg-secondary">
                             <i class="bi bi-dash-circle me-1"></i>not fetched

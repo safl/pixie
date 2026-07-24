@@ -3,30 +3,36 @@
 This walks through a first pixie deploy: install, bring the container
 up, point DHCP at it, and boot a first target.
 
-## Install the CLI
+## Run the deploy generator (no install)
+
+The `pixie-lab` commands (`init` / `deploy` / `purge`) are one-off
+admin tasks, so run them ephemerally with `uv` instead of installing
+anything:
 
 ```
-pipx install pixie-lab
+uv tool run pixie-lab init
 ```
 
-`pipx` is preferred so pixie's runtime deps stay isolated from the
-system Python. `uv tool install pixie-lab` works too.
+`uv tool run pixie-lab` fetches the distribution into a temporary
+isolated environment, runs the command, and leaves nothing behind: no
+system Python pollution, nothing to uninstall. Every command below is
+invoked the same way. (If you would rather keep it around, `uv tool
+install pixie-lab` installs the `pixie-lab` command persistently.)
 
-The `pixie-lab` distribution ships two console-scripts: `pixie-lab`
-generates the container deployment bundle, and `pixie` is the
-operator TUI baked into the pixie live env (targets run it after
-booting the live env; operators don't call it directly on their
-workstation).
+The distribution ships two console-scripts: `pixie-lab` (the deploy
+generator you run here) and `pixie` (the operator TUI baked into the
+pixie live env; targets run it after booting the live env, operators
+don't call it on their workstation).
 
 ## Generate the deploy bundle
 
 ```
 mkdir /opt/pixie && cd /opt/pixie
-pixie-lab init
+uv tool run pixie-lab init
 ${EDITOR:-vi} envvars     # set PIXIE_HOST_ADDR + PIXIE_ADMIN_PASSWORD
 ```
 
-`pixie-lab init` writes `compose.yml`, `envvars` (with placeholder
+`uv tool run pixie-lab init` writes `compose.yml`, `envvars` (with placeholder
 values), and `envvars.example` into the current directory. Edit
 `envvars` to point pixie at your LAN address and set a real admin
 password.
@@ -68,14 +74,14 @@ machine to an image and, for `nbdboot`, an overlay volume.
 
 ## Tear it down
 
-`pixie-lab purge` is the inverse of the deploy. Run it from the deploy
-directory (or pass the path):
+`uv tool run pixie-lab purge` is the inverse of the deploy. Run it from
+the deploy directory (or pass the path):
 
 ```
-pixie-lab purge            # stop + remove the container only
-pixie-lab purge --data     # also DELETE data/ (state.db, blobs, artifacts, overlays, live-env)
-pixie-lab purge --images   # also remove the pixie container image
-pixie-lab purge --all      # container + image + data/ + the deploy directory itself
+uv tool run pixie-lab purge            # stop + remove the container only
+uv tool run pixie-lab purge --data     # also DELETE data/ (state.db, blobs, artifacts, overlays, live-env)
+uv tool run pixie-lab purge --images   # also remove the pixie container image
+uv tool run pixie-lab purge --all      # container + image + data/ + the deploy directory itself
 ```
 
 Purge prints its plan and gates every variant behind a `y/N`
@@ -85,7 +91,7 @@ export, so any target currently booted `nbdboot` off pixie loses its
 NBD root at that moment. The `--data` and `--all` deletions are
 irreversible, so the confirmation is deliberate.
 
-The single-shot `pixie-lab deploy` is the mirror image of purge: it
+The single-shot `uv tool run pixie-lab deploy` is the mirror image of purge: it
 runs `init`, auto-fills `envvars`, brings the stack up, and waits on
 `/healthz` in one command, for when you don't need to hand-edit the
 generated files first.
