@@ -69,7 +69,7 @@ unattended). Flags choose how far the wipe goes:
 
 - `--data` - also delete `data/`: `state.db` (catalog, machines,
   events, exports, overlays, settings), every fetched blob and unpacked
-  artifact, all per-machine overlays, and the staged `live-env/`.
+  artifact, all overlay volumes, and the staged `live-env/`.
   `data/` is a bind mount (`./data:/var/lib/pixie`), not a named
   volume, so purge unlinks it directly - `podman compose down -v`
   alone would not touch it.
@@ -137,8 +137,9 @@ workarounds; see [](hardware-quirks.md).
 
 **`PIXIE_DATA_DIR`** (default: `/var/lib/pixie`) - state root. Holds
 `state.db`, `blobs/` (fetched image bytes), `artifacts/` (extracted
-netboot bundles), `overlays/<mac>/<image_sha>/<profile>.qcow2`
-(per-machine writable overlays for nbdboot; see [](boot-modes.md)),
+netboot bundles), `overlays/<alias>.qcow2`
+(globally-named single-writer overlay volumes for nbdboot; see
+[](boot-modes.md)),
 `live-env/` (staged pixie live env).
 
 **`PIXIE_LIVE_ENV_DIR`** (default: `$PIXIE_DATA_DIR/live-env`) - the
