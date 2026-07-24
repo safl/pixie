@@ -11,6 +11,8 @@ operator-facing summary.
 
 ## [Unreleased]
 
+## [0.3.2] - 2026-07-24
+
 ### Added
 
 **CI verifies the usbboot `.iso` boots via Ventoy.** A new
