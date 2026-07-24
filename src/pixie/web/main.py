@@ -943,7 +943,6 @@ def create_app() -> FastAPI:
         netboot bundles just show their fetch state -- they are served
         as HTTP artifacts from ``/artifacts/<sha>/{vmlinuz,initrd}``
         rather than over NBD, so no port is meaningful for them."""
-        from pixie.exports._routes import _refresh_row
         from pixie.web._table_state import (
             filter_rows,
             parse_pagination,
@@ -952,13 +951,7 @@ def create_app() -> FastAPI:
         )
 
         catalog = request.app.state.catalog_store
-        exports_store = request.app.state.exports_store
-        nbd_server = request.app.state.nbd_server
         events_log = request.app.state.events_log
-        exports_by_sha: dict[str, Any] = {}
-        for row in exports_store.list():
-            refreshed = _refresh_row(row, nbd_server, exports_store, events_log)
-            exports_by_sha[refreshed.content_sha256] = refreshed
         all_entries = catalog.list_entries()
         filtered = filter_rows(
             all_entries,
@@ -1004,7 +997,6 @@ def create_app() -> FastAPI:
                 "version": pixie.__version__,
                 "entries": page_entries,
                 "fetch_states": request.app.state.fetch_states,
-                "exports_by_sha": exports_by_sha,
                 "q": q,
                 "sort": sort_state,
                 "page_state": page_state,
