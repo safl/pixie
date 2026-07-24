@@ -13,6 +13,16 @@ operator-facing summary.
 
 ### Changed
 
+**Dashboard speaks the new model.** The tiles now mirror the
+storage/lifecycle vocabulary + the nav: **Machines**, **Catalog**
+(sources you can fetch, with a not-yet-fetched count), **Images** (the
+materialised entities, with on-disk footprint + how many are
+reclaimable), **Overlays** (per-machine writable, with disk-used +
+serving), and **Events** -- instead of the old catalog-images /
+NBD-exports framing. The Acknowledge button was removed from the
+dashboard (it's an action; the dashboard is output-only -- ack lives on
+the Events page).
+
 **Catalog is sources-only now.** With Images owning the materialised
 view, the Catalog page drops the NBD-serving column and the
 Stop-export / blob-delete actions (those live on Images). It keeps
