@@ -282,6 +282,32 @@ def test_ipxe_plan_pixie_inventory_with_staged_artifacts_renders_live_env(
             (live_env / name).unlink(missing_ok=True)
 
 
+def test_live_env_artifacts_served_when_staged_after_startup(client: TestClient) -> None:
+    """Regression: ``/boot/pixie-live-env`` must serve files staged AFTER
+    app startup (a fresh deploy fetches the live-env into a running
+    container), with no restart. The mount is created unconditionally
+    with ``check_dir=False``; guarding it on ``is_dir()`` at startup made
+    these URLs 404 even though the rendered plan pointed the target at
+    them -- so pixie-inventory / -tui / -flash boots died at kernel
+    fetch."""
+    live_env = Path(client.app.state.live_env_dir)  # type: ignore[attr-defined]
+    kernel = live_env / "vmlinuz"
+    kernel.unlink(missing_ok=True)  # ensure nothing staged yet
+    # Mount exists but the file isn't there -> 404 (not a 500, not a
+    # missing route).
+    assert client.get("/boot/pixie-live-env/vmlinuz").status_code == 404
+    # Stage it now, mid-run, exactly like an operator hitting "Fetch
+    # live env" on a running fresh container.
+    live_env.mkdir(parents=True, exist_ok=True)
+    kernel.write_bytes(b"KERNEL")
+    try:
+        r = client.get("/boot/pixie-live-env/vmlinuz")
+        assert r.status_code == 200
+        assert r.content == b"KERNEL"
+    finally:
+        kernel.unlink(missing_ok=True)
+
+
 def test_ipxe_plan_live_env_appends_extra_cmdline(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
