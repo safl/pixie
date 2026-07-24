@@ -31,13 +31,13 @@ def test_login_page_has_no_nav(client: TestClient) -> None:
     assert 'href="/ui/machines"' not in body
 
 
-def test_ui_exports_redirects_to_catalog(client: TestClient) -> None:
-    """Exports merged into the Catalog view; the /ui/exports URL is
+def test_ui_exports_redirects_to_images(client: TestClient) -> None:
+    """Exports surfaced on the Images view; the /ui/exports URL is
     kept as a 308 redirect so any operator bookmark still lands."""
     c = _authed(client)
     r = c.get("/ui/exports", follow_redirects=False)
     assert r.status_code == 308
-    assert r.headers["location"] == "/ui/catalog"
+    assert r.headers["location"] == "/ui/images"
 
 
 def test_ui_machines_empty(client: TestClient) -> None:
@@ -530,8 +530,8 @@ def test_ui_machine_detail_renders_inventory_sections(client: TestClient) -> Non
 
 
 def test_ui_exports_delete_removes_missing_export_silently(client: TestClient) -> None:
-    """A DELETE for an unknown export is 303 (not 500). The catalog
-    tab does the same for missing entries; consistent shape."""
+    """A DELETE for an unknown export is 303 (not 500), landing on the
+    Images view where export usage now lives; consistent shape."""
     c = _authed(client)
     r = c.post(
         "/ui/exports/delete",
@@ -539,7 +539,7 @@ def test_ui_exports_delete_removes_missing_export_silently(client: TestClient) -
         follow_redirects=False,
     )
     assert r.status_code == 303
-    assert r.headers["location"] == "/ui/catalog"
+    assert r.headers["location"] == "/ui/images"
 
 
 def test_ui_dashboard_live_returns_stats(client: TestClient) -> None:

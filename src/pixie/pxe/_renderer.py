@@ -27,6 +27,7 @@ from jinja2 import Environment, FileSystemLoader, select_autoescape
 
 from pixie.catalog._schema import CatalogEntry
 from pixie.catalog._store import CatalogStore
+from pixie.events._kinds import OVERLAY_CREATED
 from pixie.exports._store import Export, ExportsStore, Overlay, OverlaysStore
 from pixie.exports._supervisor import NbdServer, preferred_serve_path
 from pixie.machines._store import LIVE_ENV_MODES, Machine
@@ -266,7 +267,7 @@ class PlanRenderer:
                     )
                 if self._events is not None:
                     self._events.emit(
-                        "overlay.created",
+                        OVERLAY_CREATED,
                         subject_kind="overlay",
                         subject_id=alias,
                         summary=f"overlay {alias!r} qcow2 created (image {image_sha[:12]})",

@@ -916,11 +916,12 @@ def create_app() -> FastAPI:
         dir: str = "",
         _auth: None = Depends(_require_ui_auth),
     ) -> HTMLResponse:
-        """Catalog + exports in one view. Each disk-image entry
-        carries its NBD-serving state (port + status + nbdkit error);
-        netboot bundles just show their fetch state -- they are served
-        as HTTP artifacts from ``/artifacts/<sha>/{vmlinuz,initrd}``
-        rather than over NBD, so no port is meaningful for them."""
+        """Sources-only catalog listing: the URLs pixie can fetch, with
+        their fetch state. NBD-serving state and overlay usage moved to
+        the Images view (each fetched disk-image source materialises an
+        image; usages key off the disk content sha, not the catalog
+        row). Netboot bundles are served as HTTP artifacts from
+        ``/artifacts/<sha>/{vmlinuz,initrd}``, never over NBD."""
         from pixie.web._table_state import (
             filter_rows,
             parse_pagination,
@@ -1061,10 +1062,10 @@ def create_app() -> FastAPI:
 
     @app.get("/ui/exports")
     def ui_exports_redirect() -> RedirectResponse:
-        """Exports merged into the Catalog view. Keep the URL alive
-        as a permanent redirect so any operator bookmarks and any
-        older docs still land on the right place."""
-        return RedirectResponse(url="/ui/catalog", status_code=status.HTTP_308_PERMANENT_REDIRECT)
+        """Exports surfaced on the Images view (per disk content sha).
+        Keep the URL alive as a permanent redirect so any operator
+        bookmarks and any older docs still land on the right place."""
+        return RedirectResponse(url="/ui/images", status_code=status.HTTP_308_PERMANENT_REDIRECT)
 
     @app.post("/ui/exports/delete")
     def ui_exports_delete(
@@ -1074,7 +1075,7 @@ def create_app() -> FastAPI:
     ) -> RedirectResponse:
         request.app.state.nbd_server.terminate(name)
         request.app.state.exports_store.delete(name)
-        return RedirectResponse(url="/ui/catalog", status_code=status.HTTP_303_SEE_OTHER)
+        return RedirectResponse(url="/ui/images", status_code=status.HTTP_303_SEE_OTHER)
 
     @app.get("/ui/machines", response_class=HTMLResponse)
     def ui_machines(
@@ -1333,9 +1334,10 @@ def create_app() -> FastAPI:
 
     # ---------- ui: overlays management -----------------------------
     #
-    # Persistent per-machine qcow2 overlays get their own page. The
-    # bind form only shows one machine's profiles, so fleet-wide disk
-    # pressure + reclaimable junk have no home there. Rows join the
+    # Persistent alias-keyed qcow2 overlay volumes get their own page.
+    # The bind form only shows one machine's overlay aliases, so
+    # fleet-wide disk pressure + reclaimable junk have no home there.
+    # Rows join the
     # overlays table against the machine registry, catalog, NBD
     # supervisor + the qcow2 on disk (see web/_overlays.py). Reset
     # tears one down; Prune reclaims every file-missing / machine-
@@ -1413,8 +1415,9 @@ def create_app() -> FastAPI:
         _auth: None = Depends(_require_ui_auth),
     ) -> RedirectResponse:
         """Reclaim every overlay whose qcow2 is gone from disk or whose
-        machine pixie no longer tracks. Deliberate ``idle`` keeps (a
-        profile a live machine could rebind to) are left untouched."""
+        holder MAC pixie no longer tracks. Deliberate ``free`` volumes
+        (unattached, a machine could still rebind to them) are left
+        untouched."""
         pruned = 0
         for v in _overlay_views_now(request):
             if v.reclaimable and _reset_overlay_row(request.app.state, v.alias):

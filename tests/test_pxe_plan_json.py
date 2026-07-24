@@ -321,3 +321,21 @@ def test_ipxe_plan_live_env_appends_extra_cmdline(
     finally:
         for name in ("vmlinuz", "initrd", "live.squashfs"):
             (live_env / name).unlink(missing_ok=True)
+
+
+def test_pxe_first_contact_emits_machine_discovered_once(client: TestClient) -> None:
+    """First GET /pxe/<mac> for an unknown MAC auto-registers it and
+    emits ``machine.discovered`` exactly once; subsequent hits update
+    ``last_seen`` but do NOT re-emit discovery."""
+    mac = "aa:bb:cc:dd:ee:d1"
+    log = client.app.state.events_log  # type: ignore[attr-defined]
+
+    client.get(f"/pxe/{mac}")
+    discovered = [e for e in log.list(limit=500) if e.kind == "machine.discovered"]
+    assert len(discovered) == 1
+    assert discovered[0].subject_id == mac
+    assert discovered[0].details.get("boot_mode") == "ipxe-exit"
+
+    client.get(f"/pxe/{mac}")  # second contact for the now-known MAC
+    still = [e for e in log.list(limit=500) if e.kind == "machine.discovered"]
+    assert len(still) == 1  # not re-emitted
