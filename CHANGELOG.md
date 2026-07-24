@@ -11,6 +11,15 @@ operator-facing summary.
 
 ## [Unreleased]
 
+### Changed
+
+**Catalog is sources-only now.** With Images owning the materialised
+view, the Catalog page drops the NBD-serving column and the
+Stop-export / blob-delete actions (those live on Images). It keeps
+source management -- add, import, Fetch, delete-entry -- and a fetched
+disk-image row now links to its **Image** for footprint, live NBD /
+overlay usage, and GC.
+
 ### Added
 
 **Images: the materialised content behind Catalog sources.** A new

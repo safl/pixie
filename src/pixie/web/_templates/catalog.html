@@ -33,7 +33,7 @@
 </nav>
 {% endblock %}
 {% block content %}
-{{ page_description('journal-code', 'Images pixie can flash or netboot. Add an entry with a source URL, then fetch it to pull the bytes onto pixie. An entry is bindable once fetched; deletion is safe only after every machine pointing at it is rebound.') }}
+{{ page_description('journal-code', 'Sources: the URLs pixie can fetch. Add an entry with a source URL, then Fetch to pull the bytes; a fetched disk-image source materialises an Image (follow the Image link for its footprint, live NBD/overlay usage, and delete/GC). Deleting a source here leaves any fetched bytes on disk - reclaim those from Images.') }}
 <div class="card" id="entries">
     {# Card header: title/label on the left, filter form inline in
        the middle, pagination + per-page on the right -- same
@@ -52,14 +52,13 @@
                     {{ sort_header('Entry', 'name', sort, preserved) }}
                     {{ sort_header('Type', 'format', sort, preserved) }}
                     <th scope="col">Fetch state</th>
-                    <th scope="col">NBD</th>
+                    <th scope="col">Image</th>
                     <th scope="col" class="text-end">Actions</th>
                 </tr>
             </thead>
             <tbody>
                 {% for e in entries %}
                 {% set st = fetch_states.get(e.name) or {} %}
-                {% set exp = exports_by_sha.get(e.content_sha256) if e.content_sha256 else none %}
                 <tr>
                     <td>
                         <div class="fw-semibold">
@@ -176,43 +175,26 @@
                         {% endif %}
                     </td>
                     <td>
-                        {% if not e.bindable %}
-                        <span class="text-muted small">
-                            <i class="bi bi-dash"></i> (HTTP artifact)
-                        </span>
-                        {% elif exp is none %}
-                        <span class="text-muted small">
-                            <i class="bi bi-dash"></i> not serving
-                        </span>
-                        {% elif exp.status == 'running' %}
-                        <span class="badge text-bg-success">
-                            <i class="bi bi-broadcast me-1"></i>running
-                        </span>
-                        <div class="text-muted small font-monospace">port {{ exp.nbd_port }}</div>
-                        {% elif exp.status == 'error' %}
-                        <span class="badge text-bg-danger">
-                            <i class="bi bi-exclamation-circle me-1"></i>error
-                        </span>
-                        {% if exp.error %}
-                        <div class="text-danger small">{{ exp.error }}</div>
-                        {% endif %}
+                        {# Catalog is sources only; once a disk-image source
+                           is fetched it materialises an Image (identity = the
+                           content sha). Link there for the footprint + live
+                           usages (NBD exports, overlays) + GC. #}
+                        {% if e.bindable and e.content_sha256 %}
+                        <a href="/ui/images/{{ e.content_sha256 }}" class="text-decoration-none">
+                            <i class="bi bi-hdd-fill me-1"></i>Image
+                        </a>
                         {% else %}
-                        <span class="badge text-bg-secondary">{{ exp.status }}</span>
+                        <span class="text-muted small">-</span>
                         {% endif %}
                     </td>
                     <td class="text-end text-nowrap">
-                        {# All three action buttons are ALWAYS rendered so an
-                           operator's eye finds them at the same X position in
-                           every row. Verb + enabled state track the row's
-                           current state: no bytes on disk -> Fetch; a prior
-                           fetch failed -> Retry; already have bytes -> Update
-                           (re-runs the fetch pipeline; picks up a moved
-                           oras:// tag's new manifest); in-flight fetch ->
-                           Fetching (disabled). Update is enabled because
-                           labelling a fetched entry as "Fetch" makes an
-                           operator instinctively hit it thinking bytes are
-                           missing. Stop is disabled when there is no NBD
-                           export to stop; Delete is always enabled. #}
+                        {# Source actions only (NBD-serving + blob GC moved to
+                           Images). Fetch verb tracks state: no bytes -> Fetch;
+                           a prior fetch failed -> Retry; already fetched ->
+                           Update (re-runs the pipeline; picks up a moved
+                           oras:// tag); in-flight -> Fetching (disabled).
+                           Delete removes the source row (fetched bytes stay on
+                           disk -- reclaim from Images). #}
                         {% set fetching = st.state == 'fetching' %}
                         {% set fetch_errored = st.state == 'error' %}
                         {% set already_fetched = e.content_sha256 and not fetch_errored %}
@@ -230,16 +212,6 @@
                                 {% else %}
                                 <i class="bi bi-arrow-down-circle me-1"></i>Fetch
                                 {% endif %}
-                            </button>
-                        </form>
-                        <form method="post" action="/ui/exports/delete" class="d-inline"
-                              title="{% if exp is none %}no NBD export to stop{% else %}stop the NBD export ({{ exp.name }}); the catalog entry stays{% endif %}">
-                            <input type="hidden" name="name" value="{{ exp.name if exp is not none else '' }}">
-                            <button type="submit"
-                                    class="btn btn-sm btn-outline-warning"
-                                    aria-label="{% if exp is none %}No NBD export for {{ e.name }}{% else %}Stop NBD export {{ exp.name }}{% endif %}"
-                                    {% if exp is none %}disabled{% endif %}>
-                                <i class="bi bi-stop-circle" aria-hidden="true"></i>
                             </button>
                         </form>
                         <form method="post" action="/ui/catalog/delete" class="d-inline"
