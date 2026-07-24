@@ -150,3 +150,74 @@ def test_ui_images_renders_image_row(client: TestClient) -> None:
     assert "ubuntu" in body
     assert _SHA[:12] in body
     assert "bound" in body  # the machine usage
+
+
+def test_orphan_blob_is_surfaced(tmp_path: Path) -> None:
+    catalog = CatalogStore(tmp_path)
+    ExportsStore(catalog.db_path)
+    # a blob on disk with NO catalog entry
+    orphan = "c" * 64
+    ob = catalog.blob_path(orphan)
+    ob.parent.mkdir(parents=True, exist_ok=True)
+    ob.write_bytes(b"\x00" * 8192)
+    views = build_image_views(
+        catalog=catalog,
+        exports=ExportsStore(catalog.db_path),
+        overlays=OverlaysStore(catalog.db_path),
+        machines=MachinesStore(catalog.db_path),
+        nbd=_StubNbd(),
+    )
+    assert len(views) == 1
+    assert views[0].sha == orphan
+    assert views[0].orphan is True
+    assert views[0].usage_count == 0
+    assert views[0].disk_bytes > 0
+
+
+def test_ui_image_detail_renders(client: TestClient) -> None:
+    c = authed(client)
+    state = client.app.state
+    state.catalog_store.upsert(
+        CatalogEntry(name="ubuntu", src="oras://x/y:latest", format="img.gz", content_sha256=_SHA)
+    )
+    blob = state.catalog_store.blob_path(_SHA)
+    blob.parent.mkdir(parents=True, exist_ok=True)
+    blob.write_bytes(b"\x00" * 4096)
+    body = c.get(f"/ui/images/{_SHA}").text
+    assert _SHA in body
+    assert "Delete image" in body  # the GC danger zone
+
+
+def test_ui_image_delete_gc_unused(client: TestClient) -> None:
+    c = authed(client)
+    state = client.app.state
+    state.catalog_store.upsert(
+        CatalogEntry(name="ubuntu", src="oras://x/y:latest", format="img.gz", content_sha256=_SHA)
+    )
+    blob = state.catalog_store.blob_path(_SHA)
+    blob.parent.mkdir(parents=True, exist_ok=True)
+    blob.write_bytes(b"\x00" * 4096)
+    (blob.parent / "rootfs.raw").write_bytes(b"\x00" * 2048)  # the file per-entry delete leaks
+
+    r = c.post(f"/ui/images/{_SHA}/delete", follow_redirects=False)
+    assert r.status_code == 303
+    assert r.headers["location"] == "/ui/images"
+    assert not blob.parent.exists()  # whole sha dir gone (blob + rootfs.raw)
+    assert state.catalog_store.get_entry("ubuntu").content_sha256 == ""  # sha cleared
+
+
+def test_ui_image_delete_refuses_while_in_use(client: TestClient) -> None:
+    c = authed(client)
+    state = client.app.state
+    state.catalog_store.upsert(
+        CatalogEntry(name="ubuntu", src="oras://x/y:latest", format="img.gz", content_sha256=_SHA)
+    )
+    blob = state.catalog_store.blob_path(_SHA)
+    blob.parent.mkdir(parents=True, exist_ok=True)
+    blob.write_bytes(b"\x00" * 4096)
+    state.machines_store.upsert_binding(
+        "aa:aa:aa:aa:aa:aa", boot_mode="nbdboot", image_content_sha256=_SHA
+    )
+    c.post(f"/ui/images/{_SHA}/delete", follow_redirects=False)
+    assert blob.exists()  # refused: a machine still depends on it
+    assert state.catalog_store.get_entry("ubuntu").content_sha256 == _SHA

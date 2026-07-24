@@ -1472,6 +1472,87 @@ def create_app() -> FastAPI:
             },
         )
 
+    def _image_view_for(request: Request, sha: str) -> Any:
+        from pixie.web._images import build_image_views
+
+        state = request.app.state
+        views = build_image_views(
+            catalog=state.catalog_store,
+            exports=state.exports_store,
+            overlays=state.overlays_store,
+            machines=state.machines_store,
+            nbd=state.nbd_server,
+        )
+        return next((v for v in views if v.sha == sha), None)
+
+    @app.get("/ui/images/{sha}", response_model=None)
+    def ui_image_detail(
+        request: Request,
+        sha: str,
+        _auth: None = Depends(_require_ui_auth),
+    ) -> HTMLResponse | RedirectResponse:
+        image = _image_view_for(request, sha)
+        if image is None:
+            return RedirectResponse(url="/ui/images", status_code=status.HTTP_303_SEE_OTHER)
+        store = request.app.state.catalog_store
+        return templates.TemplateResponse(
+            request,
+            "image_detail.html",
+            {
+                "version": pixie.__version__,
+                "image": image,
+                "blob_path": str(store.blob_path(sha)),
+                "authed": True,
+                "page": "images",
+            },
+        )
+
+    @app.post("/ui/images/{sha}/delete")
+    def ui_image_delete(
+        request: Request,
+        sha: str,
+        _auth: None = Depends(_require_ui_auth),
+    ) -> RedirectResponse:
+        """GC an image: delete its on-disk bytes (the whole ``blobs/<sha>/``
+        dir -- raw disk AND the ``rootfs.raw`` the per-entry delete leaks)
+        and clear the sha off every catalog entry that resolved to it.
+        Refuses while anything still depends on it (machines / running
+        export / overlays); the usage count IS the refcount. Orphan blobs
+        (no catalog entry) delete straight through."""
+        import shutil
+
+        state = request.app.state
+        image = _image_view_for(request, sha)
+        if image is None or image.usage_count > 0:
+            # Still in use (or already gone): bounce back, no-op.
+            return RedirectResponse(url="/ui/images", status_code=status.HTTP_303_SEE_OTHER)
+
+        store = state.catalog_store
+        # Defensive: drop any (idle) export bound to the blob first.
+        for exp in state.exports_store.list():
+            if exp.content_sha256 == sha:
+                state.nbd_server.terminate(exp.name)
+                state.exports_store.delete(exp.name)
+        # Remove the whole sha dir (blob + rootfs.raw), not just ``blob``.
+        with contextlib_suppress(FileNotFoundError, OSError):
+            shutil.rmtree(store.blob_path(sha).parent)
+        # Clear the sha off every entry that pointed at it.
+        cleared = 0
+        for e in store.list_entries():
+            if e.content_sha256 == sha:
+                store.mark_unfetched(e.name)
+                cleared += 1
+        events = getattr(state, "events_log", None)
+        if events is not None:
+            events.emit(
+                CATALOG_BLOB_DELETED,
+                subject_kind="entry",
+                subject_id=image.primary_name,
+                summary=f"image GC: freed {image.footprint_bytes} bytes (sha {sha[:12]})",
+                details={"sha": sha, "entries_cleared": cleared, "orphan": image.orphan},
+            )
+        return RedirectResponse(url="/ui/images", status_code=status.HTTP_303_SEE_OTHER)
+
     @app.post("/ui/machines/{mac}/labels/edit")
     def ui_machines_labels_edit(
         request: Request,

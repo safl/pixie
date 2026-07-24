@@ -16,6 +16,7 @@ safe "delete image / GC blob" possible.
 
 from __future__ import annotations
 
+from contextlib import suppress
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -67,7 +68,7 @@ class ImageView:
     every live usage rolled up."""
 
     sha: str
-    names: list[str]  # catalog-entry names that resolve to this sha
+    names: list[str]  # catalog-entry names that resolve to this sha (empty == orphan blob)
     disk_bytes: int  # blobs/<sha>/ (raw disk + rootfs.raw)
     boot_present: bool  # the netboot bundle (vmlinuz+initrd) is fetched
     boot_bundle_name: str
@@ -79,8 +80,14 @@ class ImageView:
     overlays_bytes: int
 
     @property
+    def orphan(self) -> bool:
+        """A blob on disk with no catalog entry pointing at it -- pure
+        reclaimable junk (the shape behind the 80 GiB of un-GC'd blobs)."""
+        return not self.names
+
+    @property
     def primary_name(self) -> str:
-        return self.names[0] if self.names else self.sha[:12]
+        return self.names[0] if self.names else f"(orphan {self.sha[:12]})"
 
     @property
     def machines_count(self) -> int:
@@ -178,6 +185,31 @@ def build_image_views(
                 overlays_running=ov_running,
                 overlays_bytes=ov_bytes,
             )
+        )
+
+    # Orphan blobs: sha-named dirs on disk with NO catalog entry -- the
+    # un-GC'd junk left when an entry was deleted/re-pointed. Surface
+    # them here (usage 0, no name) so they can be reclaimed; this is the
+    # other half of the disk-pressure story the catalog can't see.
+    blobs_root = catalog.blob_path("_ref_").parent.parent
+    known = set(groups)
+    with suppress(OSError):
+        views.extend(
+            ImageView(
+                sha=sub.name,
+                names=[],
+                disk_bytes=_dir_allocated_bytes(sub),
+                boot_present=False,
+                boot_bundle_name="",
+                boot_bytes=0,
+                machines=[],
+                export_ports=[],
+                overlays_total=0,
+                overlays_running=0,
+                overlays_bytes=0,
+            )
+            for sub in sorted(blobs_root.iterdir())
+            if sub.is_dir() and sub.name not in known and len(sub.name) == 64
         )
 
     # Heaviest first, so the disk-pressure + most-used images lead.
