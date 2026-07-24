@@ -1,0 +1,138 @@
+{% extends "layout.html" %}
+{% from "_partials/page_description.html" import page_description %}
+{% block title %}Images - pixie{% endblock %}
+
+{% block subnav %}
+<nav class="navbar subnav-strip" aria-label="Section sub-navigation">
+    <div class="container">
+        <span class="subnav-jumps d-flex align-items-center flex-wrap">
+            <a href="#images">Images</a>
+        </span>
+    </div>
+</nav>
+{% endblock %}
+
+{% block content %}
+{{ page_description('hdd-fill', 'Fetched images - the materialised content behind Catalog sources. Identity is the disk content sha; each image rolls up its on-disk footprint (raw disk + rootfs + boot bundle + overlays) and every live usage: machines bound to it, its ephemeral NBD export (nbdkit), and per-machine persistent overlays (qemu-nbd). The usage counts are the refcount that makes a blob safe to delete.') }}
+
+{% set ns = namespace(footprint=0, inuse=0) %}
+{% for im in images %}{% set ns.footprint = ns.footprint + im.footprint_bytes %}{% if im.in_use %}{% set ns.inuse = ns.inuse + 1 %}{% endif %}{% endfor %}
+
+<div class="row g-3 mb-4">
+    <div class="col-6 col-lg-4">
+        <div class="card h-100"><div class="card-body py-3">
+            <div class="text-muted small text-uppercase">Fetched images</div>
+            <div class="fs-4 fw-semibold">{{ images | length }}</div>
+        </div></div>
+    </div>
+    <div class="col-6 col-lg-4">
+        <div class="card h-100"><div class="card-body py-3">
+            <div class="text-muted small text-uppercase">On disk</div>
+            <div class="fs-4 fw-semibold">{{ ns.footprint | humanize_bytes }}</div>
+            <div class="text-muted small">raw disk + rootfs + boot + overlays</div>
+        </div></div>
+    </div>
+    <div class="col-6 col-lg-4">
+        <div class="card h-100"><div class="card-body py-3">
+            <div class="text-muted small text-uppercase">In use</div>
+            <div class="fs-4 fw-semibold">{{ ns.inuse }} <span class="fs-6 text-muted">/ {{ images | length }}</span></div>
+            <div class="text-muted small">others are safe to reclaim</div>
+        </div></div>
+    </div>
+</div>
+
+<div class="card mb-4" id="images">
+    <div class="card-header bg-light fw-semibold">
+        <i class="bi bi-hdd-fill me-1"></i>Images
+    </div>
+    {% if images %}
+    <div class="table-responsive">
+        <table class="table table-hover align-middle mb-0">
+            <thead class="table-light">
+                <tr>
+                    <th scope="col">Image</th>
+                    <th scope="col" class="text-end">On disk</th>
+                    <th scope="col">Boot</th>
+                    <th scope="col">Machines</th>
+                    <th scope="col">NBD export</th>
+                    <th scope="col">Overlays</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for im in images %}
+                <tr>
+                    <td>
+                        <div class="fw-semibold">
+                            <a href="/ui/catalog/{{ im.primary_name }}" class="text-decoration-none">{{ im.primary_name }}</a>
+                        </div>
+                        <div class="text-muted small"><code title="{{ im.sha }}">{{ im.sha[:12] }}</code>
+                            {% if im.names | length > 1 %}
+                            <span class="badge text-bg-light border ms-1" title="{{ im.names | join(', ') }}">+{{ im.names | length - 1 }} more name(s)</span>
+                            {% endif %}
+                            {% if not im.in_use %}<span class="badge text-bg-light border text-muted ms-1">unused</span>{% endif %}
+                        </div>
+                    </td>
+                    <td class="text-end text-nowrap">
+                        <span class="fw-semibold">{{ im.footprint_bytes | humanize_bytes }}</span>
+                        <div class="text-muted small">
+                            disk {{ im.disk_bytes | humanize_bytes }}{% if im.boot_bytes %} &middot; boot {{ im.boot_bytes | humanize_bytes }}{% endif %}{% if im.overlays_bytes %} &middot; ovl {{ im.overlays_bytes | humanize_bytes }}{% endif %}
+                        </div>
+                    </td>
+                    <td>
+                        {% if im.nbdboot_capable %}
+                        <span class="badge text-bg-success" title="{{ im.boot_bundle_name }}"><i class="bi bi-hdd-network me-1"></i>nbdboot</span>
+                        {% else %}
+                        <span class="badge text-bg-secondary" title="no fetched netboot bundle">flash only</span>
+                        {% endif %}
+                    </td>
+                    <td>
+                        {% if im.machines_count %}
+                        <a href="/ui/machines" class="text-decoration-none">
+                            <span class="badge text-bg-primary">{{ im.machines_count }}</span> bound
+                        </a>
+                        <div class="mt-1">
+                            {% for mu in im.machines[:4] %}
+                            <a href="/ui/machines/{{ mu.mac }}" class="text-decoration-none"><code class="small">{{ mu.mac }}</code></a><span class="text-muted small">{% if not loop.last %},{% endif %}</span>
+                            {% endfor %}
+                            {% if im.machines_count > 4 %}<span class="text-muted small">+{{ im.machines_count - 4 }}</span>{% endif %}
+                        </div>
+                        {% else %}
+                        <span class="text-muted small">-</span>
+                        {% endif %}
+                    </td>
+                    <td>
+                        {% if im.export_running %}
+                        <a href="/ui/catalog" class="text-decoration-none">
+                            <span class="badge text-bg-success">{% for p in im.export_ports %}:{{ p }}{% if not loop.last %} {% endif %}{% endfor %}</span>
+                        </a>
+                        <div class="text-muted small">nbdkit (ephemeral)</div>
+                        {% else %}
+                        <span class="text-muted small">idle</span>
+                        {% endif %}
+                    </td>
+                    <td>
+                        {% if im.overlays_total %}
+                        <a href="/ui/overlays" class="text-decoration-none">
+                            <span class="badge text-bg-info">{{ im.overlays_total }}</span>
+                        </a>
+                        <div class="text-muted small">{{ im.overlays_running }} serving (qemu-nbd)</div>
+                        {% else %}
+                        <span class="text-muted small">-</span>
+                        {% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% else %}
+    <div class="card-body">
+        <p class="text-muted mb-0">
+            <i class="bi bi-inbox me-1"></i>
+            No fetched images yet. Add a source on <a href="/ui/catalog">Catalog</a> and Fetch it;
+            the materialised image shows up here with its footprint + usages.
+        </p>
+    </div>
+    {% endif %}
+</div>
+{% endblock %}

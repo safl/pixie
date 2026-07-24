@@ -1438,6 +1438,40 @@ def create_app() -> FastAPI:
             )
         return RedirectResponse(url="/ui/overlays", status_code=status.HTTP_303_SEE_OTHER)
 
+    # ---------- ui: images (materialised catalog content) -----------
+    #
+    # Catalog = sources (what you can fetch). An Image = the fetched
+    # content, identity = the disk content sha; machines, exports, and
+    # overlays all key off that sha, so this page is a group-by-sha
+    # rollup: per image, its on-disk footprint + every live usage +
+    # links into the per-usage admin surfaces.
+
+    @app.get("/ui/images", response_class=HTMLResponse)
+    def ui_images(
+        request: Request,
+        _auth: None = Depends(_require_ui_auth),
+    ) -> HTMLResponse:
+        from pixie.web._images import build_image_views
+
+        state = request.app.state
+        views = build_image_views(
+            catalog=state.catalog_store,
+            exports=state.exports_store,
+            overlays=state.overlays_store,
+            machines=state.machines_store,
+            nbd=state.nbd_server,
+        )
+        return templates.TemplateResponse(
+            request,
+            "images.html",
+            {
+                "version": pixie.__version__,
+                "images": views,
+                "authed": True,
+                "page": "images",
+            },
+        )
+
     @app.post("/ui/machines/{mac}/labels/edit")
     def ui_machines_labels_edit(
         request: Request,
