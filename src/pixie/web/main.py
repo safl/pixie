@@ -1237,21 +1237,18 @@ def create_app() -> FastAPI:
             for e in request.app.state.catalog_store.list_entries()
             if getattr(e, "bindable", False)
         ]
-        # Overlay aliases the operator may attach for THIS machine's
-        # currently-bound base image: every alias over that image that is
-        # free (attached_mac == "") or already held by this machine. An
-        # alias held by a DIFFERENT machine is single-writer-locked and
-        # deliberately not offered. Empty until the machine's been bound
-        # to a real image + at least one overlay over it exists.
+        # Overlay aliases over THIS machine's currently-bound base image.
+        # ALL of them are surfaced -- free, held here, and held by another
+        # machine -- so the operator sees an alias exists even when it is
+        # single-writer-locked elsewhere (the template renders those
+        # disabled with the holder MAC) rather than assuming the name is
+        # free and hitting a rejected bind. Empty until the machine's been
+        # bound to a real image + at least one overlay over it exists.
         overlay_aliases: list[Any] = []
         if machine.image_content_sha256:
-            overlay_aliases = [
-                o
-                for o in request.app.state.overlays_store.list_for_image(
-                    machine.image_content_sha256
-                )
-                if o.attached_mac in ("", machine.mac)
-            ]
+            overlay_aliases = list(
+                request.app.state.overlays_store.list_for_image(machine.image_content_sha256)
+            )
         # Plain-English narration of what the next PXE will do given
         # the current bind. Rendered into the preview panel so an
         # operator sees a real description on page load, not a bare

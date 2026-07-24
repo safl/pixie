@@ -10,6 +10,7 @@ app. The route tests exercise the wiring through the authed TestClient.
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -21,6 +22,7 @@ from pixie.web._overlays import (
     STATE_HELD,
     STATE_MISSING,
     STATE_ORPHANED,
+    STATE_PENDING,
     STATE_SERVING,
     build_overlay_views,
     overlay_totals,
@@ -100,10 +102,21 @@ def test_classifies_serving_held_free_orphaned_missing(tmp_path: Path) -> None:
     _touch_qcow2(orphan_path)
     overlays.upsert(Overlay("ghost", _SHA, str(orphan_path), attached_mac="cc:cc:cc:cc:cc:cc"))
 
-    # missing: row points at a qcow2 that is gone.
+    # missing: row points at a qcow2 that is gone AFTER a prior boot
+    # (last_boot_at set -> genuine data loss, reclaimable).
     overlays.upsert(
-        Overlay("lost", _SHA, str(ov_dir / "gone.qcow2"), attached_mac="dd:dd:dd:dd:dd:dd")
+        Overlay(
+            "lost",
+            _SHA,
+            str(ov_dir / "gone.qcow2"),
+            attached_mac="dd:dd:dd:dd:dd:dd",
+            last_boot_at="2026-07-01T00:00:00Z",
+        )
     )
+
+    # pending: reserved alias, no qcow2 yet, never booted -- the file is
+    # lazy-created on the first nbdboot, so this is benign (NOT missing).
+    overlays.upsert(Overlay("newborn", _SHA, str(ov_dir / "newborn.qcow2")))
 
     from pixie.pxe._renderer import _overlay_export_name
 
@@ -116,6 +129,7 @@ def test_classifies_serving_held_free_orphaned_missing(tmp_path: Path) -> None:
     assert by_state["spare"] == STATE_FREE
     assert by_state["ghost"] == STATE_ORPHANED
     assert by_state["lost"] == STATE_MISSING
+    assert by_state["newborn"] == STATE_PENDING
 
     # base-image join: name + virtual size resolved from the catalog.
     prod = next(v for v in views if v.alias == "prod")
@@ -146,10 +160,17 @@ def test_totals_and_reclaimable(tmp_path: Path) -> None:
     ov_dir = tmp_path / "overlays"
     p = ov_dir / "present.qcow2"
     _touch_qcow2(p)
-    # orphaned (attached to a dead MAC) + missing (file gone) -> reclaimable.
+    # orphaned (attached to a dead MAC) + missing (file gone after a
+    # prior boot) -> reclaimable.
     overlays.upsert(Overlay("ghost", _SHA, str(p), attached_mac="cc:cc:cc:cc:cc:cc"))
     overlays.upsert(
-        Overlay("lost", _SHA, str(ov_dir / "gone.qcow2"), attached_mac="dd:dd:dd:dd:dd:dd")
+        Overlay(
+            "lost",
+            _SHA,
+            str(ov_dir / "gone.qcow2"),
+            attached_mac="dd:dd:dd:dd:dd:dd",
+            last_boot_at="2026-07-01T00:00:00Z",
+        )
     )
     views = build_overlay_views(
         overlays=overlays, machines=machines, catalog=_StubCatalog([]), nbd=_StubNbd()
@@ -170,6 +191,21 @@ def test_free_overlay_is_not_reclaimable(tmp_path: Path) -> None:
         overlays=overlays, machines=machines, catalog=_StubCatalog([]), nbd=_StubNbd()
     )
     assert views[0].state == STATE_FREE
+    assert views[0].reclaimable is False
+    assert overlay_totals(views).reclaimable == 0
+
+
+def test_pending_overlay_is_not_reclaimable(tmp_path: Path) -> None:
+    """A reserved alias with no qcow2 yet + never booted is PENDING, not
+    missing -- its file is lazy-created on first nbdboot, so Prune must
+    leave it alone (unlike a booted-then-lost 'missing' overlay)."""
+    overlays, machines = _stores(tmp_path)
+    # No file on disk, no attached machine, last_boot_at defaults to "".
+    overlays.upsert(Overlay("newborn", _SHA, str(tmp_path / "overlays" / "newborn.qcow2")))
+    views = build_overlay_views(
+        overlays=overlays, machines=machines, catalog=_StubCatalog([]), nbd=_StubNbd()
+    )
+    assert views[0].state == STATE_PENDING
     assert views[0].reclaimable is False
     assert overlay_totals(views).reclaimable == 0
 
@@ -273,9 +309,17 @@ def test_ui_overlays_prune_reclaims_only_junk(client: TestClient) -> None:
         Overlay("ghost", _SHA, str(orphan_path), attached_mac="cc:cc:cc:cc:cc:cc")
     )
 
-    # missing: file gone -> PRUNE
+    # missing: file gone after a prior boot (last_boot_at set) -> PRUNE
     gone = str(ov_dir / "gone.qcow2")
-    state.overlays_store.upsert(Overlay("lost", _SHA, gone, attached_mac="dd:dd:dd:dd:dd:dd"))
+    state.overlays_store.upsert(
+        Overlay(
+            "lost",
+            _SHA,
+            gone,
+            attached_mac="dd:dd:dd:dd:dd:dd",
+            last_boot_at="2026-07-01T00:00:00Z",
+        )
+    )
 
     r = c.post("/ui/overlays/prune", follow_redirects=False)
     assert r.status_code == 303
@@ -286,3 +330,32 @@ def test_ui_overlays_prune_reclaims_only_junk(client: TestClient) -> None:
     assert held_path.exists()
     assert free_path.exists()
     assert not orphan_path.exists()
+
+
+def test_machine_detail_shows_held_elsewhere_alias_disabled(client: TestClient) -> None:
+    """The overlay picker surfaces an alias held by ANOTHER machine as a
+    disabled option (with the holder MAC), so the operator sees it exists
+    but is single-writer-locked -- rather than it being hidden and the
+    operator trying to create a duplicate that gets rejected."""
+    from pixie.catalog._schema import CatalogEntry
+
+    c = authed(client)
+    state = client.app.state
+    state.catalog_store.upsert(
+        CatalogEntry(name="ubuntu", src="https://x/u.img.gz", format="img.gz")
+    )
+    state.catalog_store.mark_fetched("ubuntu", content_sha256=_SHA, size_bytes=42)
+    # Machine A (no row needed) holds alias "prod" over that image.
+    path = Path(state.overlays_dir) / "prod.qcow2"
+    _touch_qcow2(path)
+    state.overlays_store.upsert(Overlay("prod", _SHA, str(path), attached_mac="aa:aa:aa:aa:aa:aa"))
+    # Machine B binds nbdboot + the same image, so its picker lists the
+    # overlays over that image.
+    state.machines_store.upsert_binding(
+        "bb:bb:bb:bb:bb:bb", boot_mode="nbdboot", image_content_sha256=_SHA
+    )
+
+    body = c.get("/ui/machines/bb:bb:bb:bb:bb:bb").text
+    opt = re.search(r'<option[^>]*value="prod"[^>]*>', body)
+    assert opt is not None and "disabled" in opt.group(0)
+    assert "held by aa:aa:aa:aa:aa:aa" in body

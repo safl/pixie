@@ -10,7 +10,8 @@
 {% elif state == 'held' %}<span class="badge text-bg-primary"><i class="bi bi-lock me-1"></i>Held</span>
 {% elif state == 'free' %}<span class="badge text-bg-secondary"><i class="bi bi-unlock me-1"></i>Free</span>
 {% elif state == 'orphaned' %}<span class="badge text-bg-warning"><i class="bi bi-question-circle me-1"></i>Orphaned</span>
-{% else %}<span class="badge text-bg-danger"><i class="bi bi-exclamation-triangle me-1"></i>File missing</span>{% endif %}
+{% elif state == 'pending' %}<span class="badge text-bg-info" title="Reserved alias; the qcow2 is lazy-created on its first nbdboot"><i class="bi bi-hourglass-split me-1"></i>Pending</span>
+{% else %}<span class="badge text-bg-danger" title="The qcow2 existed after a prior boot but is now gone from disk"><i class="bi bi-exclamation-triangle me-1"></i>File missing</span>{% endif %}
 {% endmacro %}
 
 {% block subnav %}
@@ -201,7 +202,8 @@
             case "held":    return `<span class="badge text-bg-primary"><i class="bi bi-lock me-1"></i>Held</span>`;
             case "free":    return `<span class="badge text-bg-secondary"><i class="bi bi-unlock me-1"></i>Free</span>`;
             case "orphaned":return `<span class="badge text-bg-warning"><i class="bi bi-question-circle me-1"></i>Orphaned</span>`;
-            default:        return `<span class="badge text-bg-danger"><i class="bi bi-exclamation-triangle me-1"></i>File missing</span>`;
+            case "pending": return `<span class="badge text-bg-info" title="Reserved alias; the qcow2 is lazy-created on its first nbdboot"><i class="bi bi-hourglass-split me-1"></i>Pending</span>`;
+            default:        return `<span class="badge text-bg-danger" title="The qcow2 existed after a prior boot but is now gone from disk"><i class="bi bi-exclamation-triangle me-1"></i>File missing</span>`;
         }
     }
 
