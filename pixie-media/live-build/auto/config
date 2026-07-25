@@ -69,14 +69,22 @@ case "${PIXIE_VARIANT}" in
         ARCH=amd64
         BINARY_IMAGES=netboot
         BOOTLOADERS_OPTS=""
-        # Build the live-env initrd with dracut (dmsquash-live + livenet
-        # + network) instead of Debian live-boot. Motivation: live-boot's
-        # ``fetch=`` initramfs NIC bring-up hung on some hardware (a
-        # dual-NIC Intel igb box never fetched its squashfs; the SAME box
-        # nbdboots fine under dracut in ~24s). Only the netboot path
-        # drives a NIC from INSIDE the initramfs, so only netboot needs
-        # this; usbboot stays on live-boot (see that case).
-        INITRAMFS_OPTS="--initramfs dracut-live"
+        # NOTE: we deliberately do NOT pass ``--initramfs dracut-live``
+        # here, even though the netboot live env boots a DRACUT initrd.
+        # live-build's stock ``5050-dracut.hook.chroot`` (auto-added by
+        # that flag) is broken on Debian trixie: it force-swaps the
+        # signed kernel for ``linux-image-*-unsigned`` and purges
+        # ``initramfs-tools`` mid-transaction, at which instant
+        # ``linux-initramfs-tool`` resolves to ``tiny-initramfs`` (dracut
+        # isn't a configured provider yet), leaving dracut "broken or not
+        # fully installed" and failing ``lb build``. So we let live-build
+        # build normally with live-boot (keeps the SIGNED kernel + the
+        # squashfs) and REGENERATE the netboot initrd with dracut
+        # ourselves, after ``lb build``, in ``cijoe/scripts/live_build.py``
+        # (dracut runs inside the finished chroot, reads
+        # ``/etc/dracut.conf.d/10-pixie-live-env.conf``, and its output
+        # overwrites the published initrd). See that script + the dracut
+        # packages added to the netboot package list below.
         # netboot clients NEVER boot from this baked appendix: the
         # server's ``ipxe/pixie-live-env.j2`` template renders the FULL
         # kernel cmdline per-client, carrying the dracut live-fetch
@@ -95,23 +103,17 @@ case "${PIXIE_VARIANT}" in
         ARCH=amd64
         BINARY_IMAGES=iso-hybrid
         BOOTLOADERS_OPTS="--bootloaders syslinux,grub-efi"
-        # usbboot STAYS on Debian live-boot (live-build's default
-        # initramfs), NOT dracut. Two reasons:
-        #   1. live-build refuses the combination outright:
-        #      ``E: Currently unsupported/untested: syslinux and dracut
-        #      without netboot`` -- the iso-hybrid + syslinux bootloader
-        #      this variant needs is incompatible with --initramfs
-        #      dracut-live.
-        #   2. There is nothing to gain: the dracut migration exists to
-        #      fix live-boot's ``fetch=`` initramfs NIC bring-up hanging
-        #      on some hardware, but usbboot never fetches over the
-        #      network -- it boots the squashfs from the LOCAL USB medium
-        #      (live-boot's local-label scan), and the NIC only comes up
-        #      post-pivot in the full OS where igb works fine.
-        # So INITRAMFS_OPTS is empty (default = live-boot) and the
-        # BOOTAPPEND keeps the original live-boot ``boot=live components``
-        # shape.
-        INITRAMFS_OPTS=""
+        # usbboot STAYS on Debian live-boot end to end (initrd AND the
+        # runtime rootfs). It never fetches over the network -- it boots
+        # the squashfs from the LOCAL USB medium (live-boot's local-label
+        # scan), and the NIC only comes up post-pivot in the full OS where
+        # igb works fine -- so it has none of the initramfs NIC-bring-up
+        # problem the netboot dracut initrd exists to fix. (And live-build
+        # would refuse ``--initramfs dracut-live`` here anyway: ``E:
+        # Currently unsupported/untested: syslinux and dracut without
+        # netboot``.) So the BOOTAPPEND keeps the original live-boot
+        # ``boot=live components`` shape and no dracut regeneration
+        # touches this variant.
         # ``console=tty0 console=ttyS0,115200``: kernel + systemd boot
         # messages go to BOTH the framebuffer (tty0, for real hardware
         # operators) and the serial port (ttyS0, for QEMU/IP-KVM/anything
@@ -167,37 +169,30 @@ PKGS
         ;;
 esac
 
-# Live-env initramfs framework, VARIANT-conditional (appended to the
-# arch list above). The two frameworks must not coexist in one chroot:
-# installing dracut alongside live-boot would let dracut hijack the
-# initrd generator and clash with live-boot on the usbboot path, and
-# ``live-boot`` on the netboot path would drag ``initramfs-tools`` back
-# in against dracut.
+# Live-env framework packages, VARIANT-conditional (appended to the arch
+# list above). BOTH variants keep ``live-boot``: live-build's default
+# build uses it to produce the squashfs + a (live-boot) initrd, and we
+# must NOT purge it (purging initramfs-tools / live-boot mid-build is
+# exactly what triggers the tiny-initramfs cascade that broke the
+# ``--initramfs dracut-live`` path).
 #
-#   * netboot-pc -> dracut: the ``dracut`` META package is REQUIRED, not
-#     just the sub-packages. On Debian ``dracut`` is what
-#     ``Provides: linux-initramfs-tool`` and ships the kernel-postinst
-#     hooks; ``dracut-live`` + ``dracut-network`` are only the module
-#     sets (dmsquash-live + livenet, and the network module). live-build
-#     auto-runs its stock ``5050-dracut.hook.chroot`` (triggered by
-#     ``--initramfs dracut-live``) which PURGES ``initramfs-tools`` +
-#     ``linux-image-amd64`` and reinstalls the kernel against the
-#     initramfs-tool provider. Without the ``dracut`` meta installed,
-#     apt sees no ``linux-initramfs-tool`` provider at that moment,
-#     falls back to ``tiny-initramfs``, and the build dies with "dracut
-#     is broken or not fully installed" (E: unexpected failure). So we
-#     name all three: ``dracut`` (provider + hooks), ``dracut-live``
-#     (dmsquash-live + livenet), ``dracut-network`` (network module).
-#     ``live-boot`` is deliberately absent (dracut replaces it). The
-#     initrd is configured by
+#   * netboot-pc ALSO installs dracut so the post-build regeneration in
+#     ``cijoe/scripts/live_build.py`` has a dracut to run INSIDE the
+#     finished chroot (where the target kernel's modules -- incl. the
+#     r8125 DKMS driver -- live). ``dracut`` is the meta / initramfs-tool
+#     provider + kernel hooks; ``dracut-live`` ships the dmsquash-live +
+#     livenet modules (fetch + loop-mount the squashfs over HTTP);
+#     ``dracut-network`` the network module (initramfs NIC bring-up via
+#     DHCP). dracut here just COEXISTS with live-boot -- nothing forces
+#     it to become the generator during ``lb build`` (we don't pass
+#     ``--initramfs dracut-live``), so no cascade. It is used only by the
+#     explicit post-build ``dracut`` invocation, which reads
 #     ``config/includes.chroot/etc/dracut.conf.d/10-pixie-live-env.conf``.
-#   * usbboot-pc -> live-boot: live-build refuses ``--initramfs
-#     dracut-live`` with syslinux/iso-hybrid, and usbboot has no
-#     NIC-in-initramfs problem (it boots the squashfs off local USB), so
-#     it keeps live-boot. No dracut packages here.
+#   * usbboot-pc installs NO dracut: it stays live-boot end to end.
 case "${PIXIE_VARIANT}" in
     netboot-pc)
         cat >>config/package-lists/pixie-arch.list.chroot <<'PKGS'
+live-boot
 dracut
 dracut-live
 dracut-network
@@ -210,19 +205,17 @@ PKGS
         ;;
 esac
 
-# ``${INITRAMFS_OPTS}`` selects the initramfs framework per variant:
-# ``--initramfs dracut-live`` for netboot-pc (dracut: dmsquash-live +
-# livenet + network, fixing live-boot's hanging ``fetch=`` NIC bring-up)
-# and EMPTY for usbboot-pc (live-build's default = live-boot, because
-# live-build refuses dracut+syslinux and usbboot has no netboot NIC
-# problem). Word-split like BOOTLOADERS_OPTS so an empty value is simply
-# absent rather than an empty argument lb would choke on. The netboot
-# dracut initrd is configured by
-# ``config/includes.chroot/etc/dracut.conf.d/10-pixie-live-env.conf``
-# (hostonly=no + forced dmsquash-live/livenet/network); its
-# ``root=live:<url>`` source is rendered per-client by the server's
-# ``ipxe/pixie-live-env.j2`` template.
-# shellcheck disable=SC2086 # BOOTLOADERS_OPTS / INITRAMFS_OPTS are intentionally word-split
+# Both variants build with live-build's DEFAULT initramfs (live-boot):
+# no ``--initramfs dracut-live`` (its stock 5050 hook is broken on
+# trixie, see the netboot-pc case). For netboot-pc the live-boot initrd
+# live-build produces is then OVERWRITTEN by a dracut initrd generated
+# post-build in ``cijoe/scripts/live_build.py`` (dracut reads
+# ``config/includes.chroot/etc/dracut.conf.d/10-pixie-live-env.conf`` --
+# hostonly=no + forced dmsquash-live/livenet/network); the netboot
+# ``root=live:<url>`` cmdline is rendered per-client by the server's
+# ``ipxe/pixie-live-env.j2`` template. usbboot-pc keeps its live-boot
+# initrd untouched.
+# shellcheck disable=SC2086 # BOOTLOADERS_OPTS is intentionally word-split
 lb config noauto \
     --mode debian \
     --distribution trixie \
@@ -230,7 +223,6 @@ lb config noauto \
     --archive-areas "main non-free-firmware" \
     --firmware-chroot true \
     --binary-images "${BINARY_IMAGES}" \
-    ${INITRAMFS_OPTS} \
     --debian-installer none \
     --memtest none \
     --apt-recommends false \
