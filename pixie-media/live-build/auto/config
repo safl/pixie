@@ -69,7 +69,14 @@ case "${PIXIE_VARIANT}" in
         ARCH=amd64
         BINARY_IMAGES=netboot
         BOOTLOADERS_OPTS=""
-        ISOVOLUME_OPTS=""
+        # Build the live-env initrd with dracut (dmsquash-live + livenet
+        # + network) instead of Debian live-boot. Motivation: live-boot's
+        # ``fetch=`` initramfs NIC bring-up hung on some hardware (a
+        # dual-NIC Intel igb box never fetched its squashfs; the SAME box
+        # nbdboots fine under dracut in ~24s). Only the netboot path
+        # drives a NIC from INSIDE the initramfs, so only netboot needs
+        # this; usbboot stays on live-boot (see that case).
+        INITRAMFS_OPTS="--initramfs dracut-live"
         # netboot clients NEVER boot from this baked appendix: the
         # server's ``ipxe/pixie-live-env.j2`` template renders the FULL
         # kernel cmdline per-client, carrying the dracut live-fetch
@@ -88,30 +95,23 @@ case "${PIXIE_VARIANT}" in
         ARCH=amd64
         BINARY_IMAGES=iso-hybrid
         BOOTLOADERS_OPTS="--bootloaders syslinux,grub-efi"
-        # Pin the ISO9660 volume label so the dracut ``root=live:LABEL=``
-        # discriminator below has a deterministic target. Without this,
-        # live-build stamps its own default volume id, which we'd have to
-        # guess in the cmdline. ``PIXIE_LIVE`` is a valid ISO9660 d-name
-        # (A-Z0-9_, <=32 chars) and survives usb_iso_build.py's
-        # repartition untouched (that step keeps the ISO9660 partition's
-        # bytes -- and thus its PVD volume id -- verbatim; it only
-        # rewrites the MBR and appends the exFAT PIXIE_IMGS data
-        # partition, whose separate label blkid reports independently).
-        ISOVOLUME_OPTS="--iso-volume PIXIE_LIVE"
-        # dracut migration: the shared initrd is now dracut (see the
-        # ``--initramfs dracut-live`` note on the lb config call), so the
-        # old live-boot ``boot=live components`` shape no longer boots
-        # the USB squashfs. dracut's dmsquash-live finds the local
-        # squashfs via ``root=live:LABEL=<vol>``:
-        #   * ``LABEL=PIXIE_LIVE`` -- the ISO9660 volume pinned above,
-        #     NOT the exFAT PIXIE_IMGS data partition (that one holds
-        #     pre-built images, not the rootfs squashfs).
-        #   * ``rd.live.dir=live rd.live.squashimg=filesystem.squashfs``
-        #     -- live-build lays the rootfs down at
-        #     ``/live/filesystem.squashfs`` on the ISO; these two spell
-        #     that path out so dmsquash-live doesn't fall back to its
-        #     upstream Fedora default (``/LiveOS/squashfs.img``), which
-        #     would not exist here.
+        # usbboot STAYS on Debian live-boot (live-build's default
+        # initramfs), NOT dracut. Two reasons:
+        #   1. live-build refuses the combination outright:
+        #      ``E: Currently unsupported/untested: syslinux and dracut
+        #      without netboot`` -- the iso-hybrid + syslinux bootloader
+        #      this variant needs is incompatible with --initramfs
+        #      dracut-live.
+        #   2. There is nothing to gain: the dracut migration exists to
+        #      fix live-boot's ``fetch=`` initramfs NIC bring-up hanging
+        #      on some hardware, but usbboot never fetches over the
+        #      network -- it boots the squashfs from the LOCAL USB medium
+        #      (live-boot's local-label scan), and the NIC only comes up
+        #      post-pivot in the full OS where igb works fine.
+        # So INITRAMFS_OPTS is empty (default = live-boot) and the
+        # BOOTAPPEND keeps the original live-boot ``boot=live components``
+        # shape.
+        INITRAMFS_OPTS=""
         # ``console=tty0 console=ttyS0,115200``: kernel + systemd boot
         # messages go to BOTH the framebuffer (tty0, for real hardware
         # operators) and the serial port (ttyS0, for QEMU/IP-KVM/anything
@@ -123,8 +123,8 @@ case "${PIXIE_VARIANT}" in
         # ``modprobe.blacklist=nouveau,rndis_host`` keeps the USB-boot
         # path's behavior identical to the PXE chain: nouveau for iGPU
         # wedges, rndis_host so Supermicro / Aspeed BMC USB Virtual NICs
-        # don't get claimed and confuse NIC autoselect.
-        BOOTAPPEND="root=live:LABEL=PIXIE_LIVE rd.live.image rd.live.dir=live rd.live.squashimg=filesystem.squashfs noeject plymouth.enable=0 modprobe.blacklist=nouveau,rndis_host nouveau.modeset=0 systemd.gpt_auto=0 console=tty0 console=ttyS0,115200 pixie.version=__PIXIE_VERSION__"
+        # don't get claimed and confuse live-boot's NIC autoselect.
+        BOOTAPPEND="boot=live components noeject plymouth.enable=0 modprobe.blacklist=nouveau,rndis_host nouveau.modeset=0 systemd.gpt_auto=0 console=tty0 console=ttyS0,115200 pixie.version=__PIXIE_VERSION__"
         ;;
     *)
         echo "auto/config: unknown PIXIE_VARIANT=${PIXIE_VARIANT}" >&2
@@ -149,18 +149,9 @@ case "${ARCH}" in
         # ucode, and modern Ryzen + recent Intel cores ship factory
         # microcode missing Spectre/SRBDS/Reptar/Inception mitigations.
         # Pinned to trixie-backports via
-        # ``config/preferences/backports.pref.chroot``.
-        # ``dracut-live`` + ``dracut-network`` back the live-env's
-        # dracut initrd (``--initramfs dracut-live`` on the lb config
-        # call): dracut-live ships the dmsquash-live + livenet modules
-        # (fetch + loop-mount the squashfs), dracut-network the network
-        # module (initramfs NIC bring-up via DHCP). live-build installs
-        # dracut-live itself for ``--initramfs dracut-live``, but we name
-        # both explicitly so the network module can't be trimmed and the
-        # dependency is visible here. This is the migration off Debian
-        # live-boot, whose ``fetch=`` initramfs NIC bring-up hung on some
-        # hardware; ``live-boot`` is correspondingly dropped from
-        # ``pixie-base.list.chroot``.
+        # ``config/preferences/backports.pref.chroot``. The live-env
+        # initramfs framework (dracut vs live-boot) is variant-conditional
+        # and APPENDED below, not listed here.
         cat >config/package-lists/pixie-arch.list.chroot <<'PKGS'
 linux-image-amd64
 intel-microcode
@@ -168,8 +159,6 @@ amd64-microcode
 dkms
 build-essential
 linux-headers-amd64
-dracut-live
-dracut-network
 PKGS
         ;;
     *)
@@ -178,19 +167,52 @@ PKGS
         ;;
 esac
 
-# ``--initramfs dracut-live``: build the live-env initrd with dracut
-# (dmsquash-live + livenet + network) instead of Debian live-boot +
-# initramfs-tools. Motivation: live-boot's ``fetch=`` initramfs network
-# bring-up hung on some hardware (a dual-NIC Intel igb box never fetched
-# its squashfs; the same box nbdboots fine under dracut). dracut's
-# network stack works where live-boot's did not, and it's the path
-# nbdboot already uses. The initrd is configured by
+# Live-env initramfs framework, VARIANT-conditional (appended to the
+# arch list above). The two frameworks must not coexist in one chroot:
+# installing dracut alongside live-boot would let dracut hijack the
+# initrd generator and clash with live-boot on the usbboot path, and
+# ``live-boot`` on the netboot path would drag ``initramfs-tools`` back
+# in against dracut.
+#
+#   * netboot-pc -> dracut: ``dracut-live`` ships the dmsquash-live +
+#     livenet modules (fetch + loop-mount the squashfs over HTTP),
+#     ``dracut-network`` the network module (initramfs NIC bring-up via
+#     DHCP). Named explicitly so the network module can't be trimmed.
+#     ``live-boot`` is deliberately absent (dracut replaces it). This is
+#     the migration away from live-boot's hanging ``fetch=`` NIC
+#     bring-up; the initrd is configured by
+#     ``config/includes.chroot/etc/dracut.conf.d/10-pixie-live-env.conf``.
+#   * usbboot-pc -> live-boot: live-build refuses ``--initramfs
+#     dracut-live`` with syslinux/iso-hybrid, and usbboot has no
+#     NIC-in-initramfs problem (it boots the squashfs off local USB), so
+#     it keeps live-boot. No dracut packages here.
+case "${PIXIE_VARIANT}" in
+    netboot-pc)
+        cat >>config/package-lists/pixie-arch.list.chroot <<'PKGS'
+dracut-live
+dracut-network
+PKGS
+        ;;
+    usbboot-pc)
+        cat >>config/package-lists/pixie-arch.list.chroot <<'PKGS'
+live-boot
+PKGS
+        ;;
+esac
+
+# ``${INITRAMFS_OPTS}`` selects the initramfs framework per variant:
+# ``--initramfs dracut-live`` for netboot-pc (dracut: dmsquash-live +
+# livenet + network, fixing live-boot's hanging ``fetch=`` NIC bring-up)
+# and EMPTY for usbboot-pc (live-build's default = live-boot, because
+# live-build refuses dracut+syslinux and usbboot has no netboot NIC
+# problem). Word-split like BOOTLOADERS_OPTS so an empty value is simply
+# absent rather than an empty argument lb would choke on. The netboot
+# dracut initrd is configured by
 # ``config/includes.chroot/etc/dracut.conf.d/10-pixie-live-env.conf``
-# (hostonly=no + forced dmsquash-live/livenet/network modules); the
-# per-variant ``root=live:...`` source is on the BOOTAPPEND above
-# (usbboot, LABEL-based) or rendered by the server's
-# ``ipxe/pixie-live-env.j2`` (netboot, URL-based).
-# shellcheck disable=SC2086 # BOOTLOADERS_OPTS / ISOVOLUME_OPTS are intentionally word-split
+# (hostonly=no + forced dmsquash-live/livenet/network); its
+# ``root=live:<url>`` source is rendered per-client by the server's
+# ``ipxe/pixie-live-env.j2`` template.
+# shellcheck disable=SC2086 # BOOTLOADERS_OPTS / INITRAMFS_OPTS are intentionally word-split
 lb config noauto \
     --mode debian \
     --distribution trixie \
@@ -198,13 +220,12 @@ lb config noauto \
     --archive-areas "main non-free-firmware" \
     --firmware-chroot true \
     --binary-images "${BINARY_IMAGES}" \
-    --initramfs dracut-live \
+    ${INITRAMFS_OPTS} \
     --debian-installer none \
     --memtest none \
     --apt-recommends false \
     --security false \
     ${BOOTLOADERS_OPTS} \
-    ${ISOVOLUME_OPTS} \
     --bootappend-live "${BOOTAPPEND}" \
     "${@}"
 # ``--archive-areas "main non-free-firmware"`` unlocks the

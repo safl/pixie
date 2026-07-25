@@ -11,15 +11,15 @@
 # reliably on the trixie / Ubuntu lb shipping in our build
 # environment, so the package list lives in ``auto/config`` (which
 # always runs first).
-# ``live-boot`` was REMOVED in the dracut migration: the live-env initrd
-# is now built by dracut (``--initramfs dracut-live`` in ``auto/config``)
-# rather than live-boot + initramfs-tools, because live-boot's ``fetch=``
-# initramfs NIC bring-up hung on some hardware (a dual-NIC Intel igb box
-# never fetched its squashfs; the same box nbdboots fine under dracut).
-# live-build installs ``dracut-live`` for us; keeping ``live-boot`` here
-# would drag ``initramfs-tools`` back in and clash with dracut owning the
-# initrd. ``live-config`` (first-boot userspace config) + ``live-tools``
-# stay: they run post-pivot and are independent of the initrd generator.
+# ``live-boot`` moved to the VARIANT-conditional list in ``auto/config``:
+# the netboot-pc live-env now builds its initrd with dracut (which
+# replaces live-boot, fixing live-boot's ``fetch=`` initramfs NIC
+# bring-up hanging on some hardware), while usbboot-pc keeps live-boot
+# (live-build refuses dracut+syslinux, and usbboot boots the squashfs off
+# local USB with no netboot NIC problem). The two frameworks must not
+# coexist in one chroot, so ``live-boot`` can't live in this shared list.
+# ``live-config`` (first-boot userspace config) + ``live-tools`` stay
+# here: they run post-pivot and are independent of the initrd generator.
 live-config
 live-tools
 # Plymouth was retired in v0.22.1: plymouth-quit-wait wedged on

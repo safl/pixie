@@ -13,21 +13,26 @@ operator-facing summary.
 
 ### Changed
 
-**Live env now boots via dracut instead of Debian live-boot.** The
-netboot-pc bake builds its initrd with dracut (`dmsquash-live` +
-`livenet` + `network`) rather than live-boot + initramfs-tools, and the
-per-client kernel cmdline changes from live-boot's
-`boot=live components fetch=<squashfs URL>` to dracut's
+**Netboot-pc live env now boots via dracut instead of Debian
+live-boot.** The netboot-pc bake builds its initrd with dracut
+(`dmsquash-live` + `livenet` + `network`) rather than live-boot +
+initramfs-tools, and the per-client kernel cmdline changes from
+live-boot's `boot=live components fetch=<squashfs URL>` to dracut's
 `root=live:<squashfs URL> rd.live.image ip=dhcp rd.neednet=1`. Why:
 live-boot's `fetch=` initramfs network bring-up hung on some hardware --
 a dual-NIC Intel igb box never fetched its squashfs and sat at `initrd`
 forever, even though the SAME box nbdboots fine under dracut in ~24s.
 dracut's network stack works where live-boot's did not, and it is the
-exact path nbdboot already uses, so the live env now shares it. The
-usbboot-pc ISO moves to the same dracut initrd and finds its local
-squashfs via `root=live:LABEL=PIXIE_LIVE`. Operators see no behaviour
-change when it works; the fix is that it now works on hardware where the
-live env previously never came up.
+exact path nbdboot already uses, so the netboot live env now shares it.
+Operators see no behaviour change when it works; the fix is that it now
+works on hardware where the live env previously never came up.
+
+The **usbboot-pc** ISO deliberately stays on live-boot: live-build
+refuses `--initramfs dracut-live` together with the syslinux/iso-hybrid
+bootloader it needs, and usbboot has no NIC-in-initramfs problem anyway
+(it boots the squashfs off the local USB medium; the NIC comes up
+post-pivot in the full OS). The initramfs framework is therefore
+variant-conditional, not shared.
 
 This supersedes 0.4.1's `MODULES=most` change (see the correction on
 that entry below): the real cause of the "live env never fetches its

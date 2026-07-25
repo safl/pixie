@@ -36,11 +36,11 @@
 #
 # The ``root=live:http`` cmdline token is reliably present on netboot
 # (the server's ``ipxe/pixie-live-env.j2`` points dracut's dmsquash-live
-# at the squashfs over HTTP) and absent on USB, where the squashfs is
-# found on local media via ``root=live:LABEL=PIXIE_LIVE``. Clean
+# at the squashfs over HTTP) and absent on USB, which stays on live-boot
+# and finds its squashfs via the local ``boot=live`` label scan. Clean
 # netboot-vs-USB discriminator. This replaced the pre-dracut ``fetch=``
 # token (live-boot's HTTP-fetch handler), which no longer appears on the
-# cmdline now that the initrd is dracut.
+# netboot cmdline now that the netboot initrd is dracut.
 
 set -eu
 
