@@ -41,6 +41,16 @@ arbitrary lab machine's NIC (and storage) is alive before the fetch.
 Costs some initramfs size; worth it for an appliance whose job is
 booting unknown hardware.
 
+**No more `${PIXIE_LIVE_ENV_EXTRA_CMDLINE:-}` literal on the kernel
+cmdline.** On a deploy whose compose runner doesn't expand `${VAR:-}`
+(podman-compose passes the unset default through verbatim), the
+container env held the literal string `${PIXIE_LIVE_ENV_EXTRA_CMDLINE:-}`,
+which pixie then appended to every live-env / nbdboot kernel cmdline.
+Harmless (the kernel ignores the unknown token) but wrong. The
+extra-cmdline resolver now treats a value that is nothing but an
+unexpanded `${...}` placeholder as unset, so it can't leak -- fixed for
+any deploy without regenerating compose.
+
 ## [0.4.0] - 2026-07-24
 
 ### Changed
