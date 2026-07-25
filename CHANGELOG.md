@@ -11,6 +11,8 @@ operator-facing summary.
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-07-25
+
 ### Changed
 
 **New machines default to `pixie-inventory`, one-shot.** A
