@@ -8,15 +8,19 @@
 # module that matters.
 #
 # mkinitramfs' default is MODULES=dep: only the drivers the BUILD HOST
-# needs. So the netboot-pc initrd shipped drivers for the builder's NIC
-# (plus the r8125 DKMS hook) and nothing else -- a target with a
-# different NIC (e.g. matx / ASRock Rack) came up to `initrd` and then
-# stalled forever at the squashfs fetch, because its NIC had no driver.
+# needs. MODULES=most instead bakes the broad Debian-installer IN-TREE
+# driver set, so an arbitrary lab box's in-tree NIC (and storage) is
+# alive before the fetch -- e.g. the Intel NICs on warp / wave pull the
+# squashfs fine. Costs initramfs size (~2x); acceptable for a netboot
+# appliance whose whole job is booting unknown hardware.
 #
-# MODULES=most bakes the broad Debian-installer driver set, so an
-# arbitrary lab box's NIC (and storage) is alive before the fetch.
-# Costs initramfs size (~2x); acceptable for a netboot appliance whose
-# whole job is booting unknown hardware. Narrow to an explicit NIC list
-# in /etc/initramfs-tools/modules later if size becomes a problem and
-# the target NICs are known.
+# This does NOT, on its own, cover an OUT-OF-TREE NIC: `most` only pulls
+# in-tree modules. The RTL8125 2.5GbE on matx (ASRock Rack) needs the
+# out-of-tree DKMS r8125, which the in-tree r8169 cannot substitute for
+# in the initramfs (proven: r8169-only -> matx NIC never comes up, no
+# fetch, reboot-loop). That driver is force-added to the initramfs BY
+# NAME in the r8125 DKMS hook (hooks/normal/0600-pixie-r8125-dkms.hook
+# .chroot); `most` never pulls it. See that hook for the RTL8125 story.
+# Narrow `most` to an explicit NIC list here later if size becomes a
+# problem and the target NICs are known.
 MODULES=most

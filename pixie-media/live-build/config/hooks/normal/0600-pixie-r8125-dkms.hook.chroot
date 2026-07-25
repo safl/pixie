@@ -175,6 +175,22 @@ softdep r8169 pre: r8125
 options r8125 enable_eee=0 aspm=0
 EOF
 
+# Force the out-of-tree DKMS r8125 INTO the initramfs by name. This is
+# the load-bearing step for RTL8125 targets: ``update-initramfs`` --
+# even with ``MODULES=most`` -- only pulls IN-TREE drivers, and r8125
+# is out-of-tree (it installs under /lib/modules/*/updates/dkms/, which
+# ``most`` never scans). Without this the initrd carries only the
+# in-tree r8169, which does NOT bring an RTL8125 up in early userspace.
+# Proven on matx (ASRock Rack, RTL8125): with r8169 alone the NIC never
+# appears -- no DHCP, no ARP entry at the pixie box, not pingable, the
+# squashfs is never fetched, and the box reboot-loops. Intel-NIC boxes
+# (warp / wave) fetch the same live-env squashfs fine, isolating the
+# failure to the RTL8125-in-initramfs path. The ``softdep r8169 pre:
+# r8125`` above only takes effect if r8125 is actually present in the
+# initrd -- which is exactly what this line guarantees.
+grep -qxF r8125 /etc/initramfs-tools/modules 2>/dev/null \
+    || echo r8125 >>/etc/initramfs-tools/modules
+
 # Rebuild the initramfs so the r8125 module is available during
 # early boot (the live env's first action is to fetch the squashfs
 # over HTTP via the kernel cmdline ``fetch=`` param; the NIC must

@@ -11,6 +11,22 @@ operator-facing summary.
 
 ## [Unreleased]
 
+### Fixed
+
+**RTL8125 (2.5GbE) targets can now boot the live env.** The netboot-pc
+initramfs force-adds the out-of-tree DKMS `r8125` driver by name
+(`/etc/initramfs-tools/modules`). Previously the live-env initrd
+carried only the in-tree `r8169`; on an RTL8125 box (matx, ASRock Rack)
+that driver does not bring the NIC up in early userspace, so the live
+env booted the kernel then went dark before fetching its squashfs over
+HTTP -- no DHCP, not pingable -- and the box reboot-looped. Intel-NIC
+boxes were unaffected (`MODULES=most` covers their in-tree drivers),
+which masked this as a matx-specific stall. `MODULES=most` never pulled
+`r8125` because DKMS modules live outside the in-tree tree it scans; the
+`softdep r8169 pre: r8125` was inert without the module present in the
+initrd. The earlier 0.4.1 `MODULES=most` change was necessary for
+in-tree NICs but, on its own, a no-op for the RTL8125.
+
 ## [0.4.1] - 2026-07-25
 
 ### Changed
