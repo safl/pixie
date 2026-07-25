@@ -21,13 +21,14 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import PlainTextResponse
 
 from pixie.events._kinds import (
+    MACHINE_BINDING_CHANGED,
     MACHINE_DISCOVERED,
     MACHINE_INVENTORY_UPDATED,
     PXE_PLAN_RENDERED,
     PXE_PLAN_UNAVAILABLE,
     PXE_STATUS_RECEIVED,
 )
-from pixie.machines._store import BadMac, MachinesStore, normalise_mac
+from pixie.machines._store import DEFAULT_BOOT_MODE, BadMac, MachinesStore, normalise_mac
 from pixie.pxe._renderer import PlanRenderer, RenderContext
 
 _log = logging.getLogger(__name__)
@@ -132,6 +133,33 @@ async def pxe_inventory(request: Request, mac: str) -> PlainTextResponse:
             summary=f"{canon} posted inventory",
             details=details,
         )
+
+    # Inventory is one-shot: once a machine has reported, flip a
+    # pixie-inventory binding to ipxe-exit so a PXE-first machine does
+    # not re-inventory and boot-loop. Mirrors pixie-flash-once's
+    # self-terminating flip (see pxe_status). Preserve the row's other
+    # fields; the collected inventory stays. Rebinding to
+    # pixie-inventory buys exactly one more pass.
+    row = machines.get(canon)
+    if row is not None and row.boot_mode == "pixie-inventory":
+        with contextlib.suppress(ValueError):
+            machines.upsert_binding(
+                canon,
+                boot_mode="ipxe-exit",
+                image_content_sha256=row.image_content_sha256,
+                labels=list(row.labels),
+                target_disk_serial=row.target_disk_serial,
+                extra_cmdline=row.extra_cmdline,
+                overlay_alias=row.overlay_alias,
+            )
+        if log is not None:
+            log.emit(
+                MACHINE_BINDING_CHANGED,
+                subject_kind="machine",
+                subject_id=canon,
+                summary=f"{canon}: inventory collected, auto-exit (pixie-inventory is one-shot)",
+                details={"boot_mode": "ipxe-exit", "reason": "inventory-once"},
+            )
     return PlainTextResponse("", status_code=204)
 
 
@@ -168,7 +196,8 @@ def pxe_plan(request: Request, mac: str) -> PlainTextResponse:
     # event fires exactly once (touch_seen itself can't emit -- stores
     # hold no EventsLog by design).
     is_new = machines.get(canon) is None
-    row = machines.touch_seen(canon, ip=_client_ip(request))
+    default_mode = getattr(request.app.state, "default_boot_mode", DEFAULT_BOOT_MODE)
+    row = machines.touch_seen(canon, ip=_client_ip(request), default_boot_mode=default_mode)
 
     ctx = _render_context(request)
     body = _get_renderer(request).render(row, ctx)

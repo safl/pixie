@@ -360,7 +360,9 @@ def test_pxe_first_contact_emits_machine_discovered_once(client: TestClient) -> 
     discovered = [e for e in log.list(limit=500) if e.kind == "machine.discovered"]
     assert len(discovered) == 1
     assert discovered[0].subject_id == mac
-    assert discovered[0].details.get("boot_mode") == "ipxe-exit"
+    # A fresh MAC auto-registers with the default boot mode, now
+    # pixie-inventory (non-destructive + useful).
+    assert discovered[0].details.get("boot_mode") == "pixie-inventory"
 
     client.get(f"/pxe/{mac}")  # second contact for the now-known MAC
     still = [e for e in log.list(limit=500) if e.kind == "machine.discovered"]

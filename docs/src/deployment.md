@@ -135,6 +135,13 @@ if HTTP is proxied but NBD is direct.
 to every pixie-live-env chain. Common values are hardware-quirk
 workarounds; see [](hardware-quirks.md).
 
+**`PIXIE_DEFAULT_BOOT_MODE`** (default: `pixie-inventory`) - boot mode a
+freshly-discovered MAC auto-registers with. The default is
+non-destructive (collect + post inventory, then exit) and one-shot (the
+first inventory POST flips it to `ipxe-exit`, so a PXE-first box does
+not re-inventory). Set to `ipxe-exit` for the old exit-by-default
+behaviour. See [](boot-modes.md).
+
 **`PIXIE_DATA_DIR`** (default: `/var/lib/pixie`) - state root. Holds
 `state.db`, `blobs/` (fetched image bytes), `artifacts/` (extracted
 netboot bundles), `overlays/<alias>.qcow2`

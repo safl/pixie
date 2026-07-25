@@ -550,3 +550,61 @@ def test_ui_machines_live_requires_auth(client: TestClient) -> None:
     r = client.get("/ui/machines-live.json", follow_redirects=False)
     assert r.status_code == 303
     assert r.headers["location"] == "/ui/login"
+
+
+def test_touch_seen_defaults_to_pixie_inventory(tmp_path: Path) -> None:
+    """A freshly-discovered MAC auto-registers with the default boot
+    mode -- now pixie-inventory (non-destructive + useful), not the old
+    ipxe-exit no-op."""
+    store = MachinesStore(tmp_path / "state.db")
+    m = store.touch_seen("aa:bb:cc:dd:ee:01")
+    assert m.boot_mode == "pixie-inventory"
+
+
+def test_touch_seen_honours_default_and_rejects_unknown(tmp_path: Path) -> None:
+    store = MachinesStore(tmp_path / "state.db")
+    assert store.touch_seen("aa:bb:cc:dd:ee:02", default_boot_mode="ipxe-exit").boot_mode == (
+        "ipxe-exit"
+    )
+    # An unknown value can't seed an unrenderable mode on every new MAC.
+    assert store.touch_seen("aa:bb:cc:dd:ee:03", default_boot_mode="bogus").boot_mode == (
+        "pixie-inventory"
+    )
+
+
+def test_resolve_default_boot_mode_env_override(monkeypatch: pytest.MonkeyPatch) -> None:
+    from pixie.web.main import _resolve_default_boot_mode
+
+    monkeypatch.delenv("PIXIE_DEFAULT_BOOT_MODE", raising=False)
+    assert _resolve_default_boot_mode() == "pixie-inventory"
+    monkeypatch.setenv("PIXIE_DEFAULT_BOOT_MODE", "ipxe-exit")
+    assert _resolve_default_boot_mode() == "ipxe-exit"
+    monkeypatch.setenv("PIXIE_DEFAULT_BOOT_MODE", "bogus")
+    assert _resolve_default_boot_mode() == "pixie-inventory"
+
+
+def test_inventory_post_flips_pixie_inventory_to_ipxe_exit(client: TestClient) -> None:
+    """Inventory is one-shot: a machine sitting in pixie-inventory flips
+    to ipxe-exit on the first inventory POST (so a PXE-first box doesn't
+    re-inventory + boot-loop), and the collected inventory is kept."""
+    mac = "aa:bb:cc:dd:ee:f0"
+    client.get(f"/pxe/{mac}")  # discovery -> pixie-inventory default
+    assert client.get(f"/machines/{mac}").json()["boot_mode"] == "pixie-inventory"
+
+    r = client.post(
+        f"/pxe/{mac}/inventory", json={"lshw": {"x": 1}, "disks": [{"path": "/dev/sda"}]}
+    )
+    assert r.status_code == 204
+    assert client.get(f"/machines/{mac}").json()["boot_mode"] == "ipxe-exit"
+    # the inventory itself survives the flip
+    assert client.get(f"/machines/{mac}/inventory").json()["inventory"]["disks"]
+
+
+def test_inventory_post_does_not_flip_a_non_inventory_mode(client: TestClient) -> None:
+    """A machine an operator put on, say, nbdboot is left alone -- only
+    pixie-inventory is one-shot."""
+    c = _authed(client)
+    mac = "aa:bb:cc:dd:ee:f1"
+    c.put(f"/machines/{mac}", json={"boot_mode": "nbdboot"})
+    client.post(f"/pxe/{mac}/inventory", json={"lshw": {}, "disks": []})
+    assert client.get(f"/machines/{mac}").json()["boot_mode"] == "nbdboot"
