@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import contextlib
 import os
+import re
 import sqlite3
 from collections.abc import Generator
 from datetime import UTC, datetime
@@ -65,6 +66,13 @@ DEFAULT_DATETIME_FORMAT = "%Y-%m-%d %H:%M:%S"
 # because they'd break the single-line iPXE ``kernel`` directive.
 KEY_LIVE_ENV_EXTRA_CMDLINE = "live_env.extra_cmdline"
 ENV_LIVE_ENV_EXTRA_CMDLINE = "PIXIE_LIVE_ENV_EXTRA_CMDLINE"
+
+# A value that is nothing but an unexpanded shell placeholder --
+# ``${VAR}`` / ``${VAR:-default}`` / ``${VAR:+x}`` -- which is what a
+# compose runner that doesn't expand ``${VAR:-}`` (podman-compose)
+# leaks into the container env. Such a value is treated as "unset" so
+# it never reaches a kernel cmdline.
+_UNEXPANDED_ENV_PLACEHOLDER = re.compile(r"^\$\{[A-Za-z_][A-Za-z0-9_]*(:[-+?=]?[^}]*)?\}$")
 
 # Where the operator "Fetch live-env" action pulls the netboot-pc bake
 # from: a single tarball ``src`` (``https://`` or ``oras://``, the same
@@ -175,12 +183,21 @@ class SettingsStore:
           silently.
 
         Empty when both DB override + env are unset -- the template
-        expects a string and skips the append when it's empty."""
-        return (
-            self.get(KEY_LIVE_ENV_EXTRA_CMDLINE)
-            or (os.environ.get(ENV_LIVE_ENV_EXTRA_CMDLINE) or "").strip()
-            or ""
-        )
+        expects a string and skips the append when it's empty.
+
+        Defends against a compose runner that fails to expand
+        ``${VAR:-}``: podman-compose passes the unset default through
+        LITERALLY, so the container env holds the string
+        ``${PIXIE_LIVE_ENV_EXTRA_CMDLINE:-}``. A value that is nothing
+        but an unexpanded ``${...}`` placeholder is treated as empty so
+        it can't leak onto every live-env / nbdboot kernel cmdline."""
+        override = self.get(KEY_LIVE_ENV_EXTRA_CMDLINE)
+        if override:
+            return override
+        env = (os.environ.get(ENV_LIVE_ENV_EXTRA_CMDLINE) or "").strip()
+        if env and not _UNEXPANDED_ENV_PLACEHOLDER.match(env):
+            return env
+        return ""
 
     def resolve_live_env_src(self) -> str:
         """Effective live-env fetch src: DB override -> env -> default

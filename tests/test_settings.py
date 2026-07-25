@@ -258,3 +258,23 @@ def test_ui_settings_live_env_blank_clears(client: TestClient) -> None:
     store.set_value(KEY_LIVE_ENV_EXTRA_CMDLINE, "pci=realloc=on,nocrs")
     c.post("/ui/live-env/cmdline/edit", data={"extra_cmdline": ""})
     assert store.get(KEY_LIVE_ENV_EXTRA_CMDLINE) is None
+
+
+def test_resolve_extra_cmdline_ignores_unexpanded_placeholder(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A compose runner that doesn't expand ``${VAR:-}`` (podman-compose)
+    leaks the literal placeholder into the container env. It must not
+    reach the kernel cmdline; a real value still passes through."""
+    from pixie.web._settings_store import ENV_LIVE_ENV_EXTRA_CMDLINE, SettingsStore
+
+    store = SettingsStore(tmp_path / "state.db")
+    for leaked in ("${PIXIE_LIVE_ENV_EXTRA_CMDLINE:-}", "${FOO}", "${BAR:-x}"):
+        monkeypatch.setenv(ENV_LIVE_ENV_EXTRA_CMDLINE, leaked)
+        assert store.resolve_live_env_extra_cmdline() == ""
+    # A real value passes through untouched, including one that merely
+    # contains (but is not wholly) a ${...} token.
+    monkeypatch.setenv(ENV_LIVE_ENV_EXTRA_CMDLINE, "pci=nommconf amd_iommu=off")
+    assert store.resolve_live_env_extra_cmdline() == "pci=nommconf amd_iommu=off"
+    monkeypatch.setenv(ENV_LIVE_ENV_EXTRA_CMDLINE, "foo=${bar} baz")
+    assert store.resolve_live_env_extra_cmdline() == "foo=${bar} baz"
