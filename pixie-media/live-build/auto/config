@@ -174,13 +174,22 @@ esac
 # ``live-boot`` on the netboot path would drag ``initramfs-tools`` back
 # in against dracut.
 #
-#   * netboot-pc -> dracut: ``dracut-live`` ships the dmsquash-live +
-#     livenet modules (fetch + loop-mount the squashfs over HTTP),
-#     ``dracut-network`` the network module (initramfs NIC bring-up via
-#     DHCP). Named explicitly so the network module can't be trimmed.
-#     ``live-boot`` is deliberately absent (dracut replaces it). This is
-#     the migration away from live-boot's hanging ``fetch=`` NIC
-#     bring-up; the initrd is configured by
+#   * netboot-pc -> dracut: the ``dracut`` META package is REQUIRED, not
+#     just the sub-packages. On Debian ``dracut`` is what
+#     ``Provides: linux-initramfs-tool`` and ships the kernel-postinst
+#     hooks; ``dracut-live`` + ``dracut-network`` are only the module
+#     sets (dmsquash-live + livenet, and the network module). live-build
+#     auto-runs its stock ``5050-dracut.hook.chroot`` (triggered by
+#     ``--initramfs dracut-live``) which PURGES ``initramfs-tools`` +
+#     ``linux-image-amd64`` and reinstalls the kernel against the
+#     initramfs-tool provider. Without the ``dracut`` meta installed,
+#     apt sees no ``linux-initramfs-tool`` provider at that moment,
+#     falls back to ``tiny-initramfs``, and the build dies with "dracut
+#     is broken or not fully installed" (E: unexpected failure). So we
+#     name all three: ``dracut`` (provider + hooks), ``dracut-live``
+#     (dmsquash-live + livenet), ``dracut-network`` (network module).
+#     ``live-boot`` is deliberately absent (dracut replaces it). The
+#     initrd is configured by
 #     ``config/includes.chroot/etc/dracut.conf.d/10-pixie-live-env.conf``.
 #   * usbboot-pc -> live-boot: live-build refuses ``--initramfs
 #     dracut-live`` with syslinux/iso-hybrid, and usbboot has no
@@ -189,6 +198,7 @@ esac
 case "${PIXIE_VARIANT}" in
     netboot-pc)
         cat >>config/package-lists/pixie-arch.list.chroot <<'PKGS'
+dracut
 dracut-live
 dracut-network
 PKGS
