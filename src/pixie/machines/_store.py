@@ -46,7 +46,24 @@ target boots into ``unavailable.j2``. Kept close to :data:`BOOT_MODES`
 so a reader adding a mode sees both spots at once."""
 
 BOOT_MODES: frozenset[str] = frozenset({"ipxe-exit", "nbdboot"}) | LIVE_ENV_MODES
-DEFAULT_BOOT_MODE = "ipxe-exit"
+
+# A freshly-discovered MAC auto-registers with this mode. Default is
+# ``pixie-inventory``: non-destructive (boots the live env, collects
+# lshw + disks, POSTs them back, reboots to firmware) and immediately
+# useful -- it populates the machine's inventory and unblocks the flash
+# modes, which require it. Inventory is one-shot: on the first inventory
+# POST the binding auto-flips to ``ipxe-exit`` (see pxe/_routes.py) so a
+# PXE-first machine doesn't re-inventory + boot-loop. Overridable per
+# deploy via ``PIXIE_DEFAULT_BOOT_MODE`` (resolved in web/main.py).
+# ``ipxe-exit`` degrades safely when no live env is staged: the renderer
+# falls back to an exit plan, so a bare deploy behaves like the old
+# default until the operator fetches the live env.
+DEFAULT_BOOT_MODE = "pixie-inventory"
+
+# The non-committal auto states: a machine sitting in one of these with
+# no bound image has not been meaningfully operator-bound yet. Used to
+# tell a first ``machine.bound`` from a later ``machine.binding.changed``.
+UNCOMMITTED_BOOT_MODES: frozenset[str] = frozenset({"ipxe-exit", "pixie-inventory"})
 
 # Presentation metadata for the six boot modes. Ordered
 # passthrough -> diagnostic -> interactive -> destructive so the
@@ -480,10 +497,18 @@ class MachinesStore:
             row = conn.execute("SELECT * FROM machines WHERE mac = ?", (canon,)).fetchone()
         return _row(row)
 
-    def touch_seen(self, mac: str, *, ip: str = "") -> Machine:
+    def touch_seen(
+        self, mac: str, *, ip: str = "", default_boot_mode: str = DEFAULT_BOOT_MODE
+    ) -> Machine:
         """Discovery-side write: create-or-update ``last_seen_at`` +
-        optionally ``last_seen_ip``. Does NOT touch operator fields."""
+        optionally ``last_seen_ip``. Does NOT touch operator fields.
+
+        A brand-new MAC is auto-registered with ``default_boot_mode``
+        (the deploy's ``PIXIE_DEFAULT_BOOT_MODE``, resolved by the
+        caller; falls back to :data:`DEFAULT_BOOT_MODE`). Unknown values
+        are refused here so a bad env can't seed an unrenderable mode."""
         canon = normalise_mac(mac)
+        mode = default_boot_mode if default_boot_mode in BOOT_MODES else DEFAULT_BOOT_MODE
         now = now_iso()
         with _DB_WRITE_LOCK, self._conn() as conn:
             existing = conn.execute("SELECT * FROM machines WHERE mac = ?", (canon,)).fetchone()
@@ -495,7 +520,7 @@ class MachinesStore:
                         discovered_at, last_seen_at, last_seen_ip, updated_at
                     ) VALUES (?, ?, '', ?, ?, ?, ?)
                     """,
-                    (canon, DEFAULT_BOOT_MODE, now, now, ip, now),
+                    (canon, mode, now, now, ip, now),
                 )
             else:
                 conn.execute(

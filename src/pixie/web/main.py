@@ -66,7 +66,12 @@ from pixie.exports._routes import router as exports_router
 from pixie.exports._store import ExportsStore, OverlaysStore
 from pixie.exports._supervisor import DEFAULT_PORT_BASE, NbdServer
 from pixie.machines._routes import router as machines_router
-from pixie.machines._store import IMAGE_BOOT_MODES, MachinesStore
+from pixie.machines._store import (
+    BOOT_MODES,
+    DEFAULT_BOOT_MODE,
+    IMAGE_BOOT_MODES,
+    MachinesStore,
+)
 from pixie.pxe._renderer import PlanRenderer
 from pixie.pxe._routes import router as pxe_router
 from pixie.tftp import DEFAULT_TFTP_ROOT, TftpServer
@@ -181,6 +186,18 @@ def _resolve_live_env_dir() -> Path | None:
     # deploy is the whole install step.
     default = _resolve_state_dir() / "live-env"
     return default
+
+
+def _resolve_default_boot_mode() -> str:
+    """Boot mode a freshly-discovered MAC auto-registers with.
+
+    ``PIXIE_DEFAULT_BOOT_MODE`` override -> :data:`DEFAULT_BOOT_MODE`
+    (``pixie-inventory``). An unknown value falls back to the default
+    rather than seeding an unrenderable mode on every new machine."""
+    override = (os.environ.get("PIXIE_DEFAULT_BOOT_MODE") or "").strip()
+    if override in BOOT_MODES:
+        return override
+    return DEFAULT_BOOT_MODE
 
 
 def _resolve_state_dir() -> Path:
@@ -403,6 +420,18 @@ def _deployment_envvar_docs() -> list[dict[str, str]]:
                 " pixie-live-env chain. Global default; a machine"
                 " with its own extra_cmdline binding overrides. See"
                 " the Live env page for the live-editable override."
+            ),
+        },
+        {
+            "name": "PIXIE_DEFAULT_BOOT_MODE",
+            "default": "pixie-inventory",
+            "purpose": (
+                "Boot mode a freshly-discovered MAC auto-registers with."
+                " Default 'pixie-inventory' is non-destructive (collects"
+                " lshw + disks, posts them, exits) and one-shot: the first"
+                " inventory POST flips it to 'ipxe-exit' so a PXE-first"
+                " box does not re-inventory. Set 'ipxe-exit' for the old"
+                " exit-by-default behaviour."
             ),
         },
         {
@@ -726,6 +755,7 @@ def create_app() -> FastAPI:
         nbdkit_bin=_resolve_nbdkit_bin(),
     )
     app.state.live_env_dir = _resolve_live_env_dir()
+    app.state.default_boot_mode = _resolve_default_boot_mode()
     # Root for per-machine qcow2 overlay files. Sub-directory under
     # the state dir so a single ``PIXIE_DATA_DIR`` override still
     # relocates everything (catalog blobs + overlays + state.db)

@@ -8,20 +8,32 @@ tokens.
 
 ## The six modes
 
-### `ipxe-exit` (default)
+### `ipxe-exit`
 
 Pixie exits the iPXE chain. The target's BIOS boot order picks the
-next bootable device. This is the safe default for a fresh MAC:
-pixie won't reflash a machine or attempt to netboot it until an
-operator has explicitly bound it.
+next bootable device. A pure no-op: pixie won't reflash a machine or
+netboot it. This is where `pixie-inventory` self-terminates to (see
+below), and where an operator parks a machine pixie should leave alone.
 
-### `pixie-inventory`
+### `pixie-inventory` (default)
 
 The target boots pixie's own live env. The `pixie` CLI collects
 disk + NIC + lshw output and POSTs it to `/pxe/<mac>/inventory`,
 then the target reboots to firmware. Prerequisite for
 `pixie-flash-*`: without inventory, pixie doesn't know which disk
 serial to hand the flash pipeline.
+
+This is the **default a freshly-discovered MAC auto-registers with**:
+it's non-destructive (touches no disk) and immediately useful (every
+new machine's hardware shows up on `/ui/machines`, and the flash modes
+become available without a manual pass). It is **one-shot** -- on the
+first successful inventory POST pixie flips the binding to `ipxe-exit`,
+so a PXE-first machine inventories itself exactly once and then stops
+touching the boot (no re-inventory loop). Rebinding to
+`pixie-inventory` buys one more pass. If no live env is staged the plan
+degrades to `unavailable`/exit, so a bare deploy behaves like the old
+exit-by-default until the operator fetches the live env. Set
+`PIXIE_DEFAULT_BOOT_MODE=ipxe-exit` to restore the old exit-by-default.
 
 ### `pixie-tui`
 
@@ -123,9 +135,11 @@ volumes alone.
 
 A binding is what pixie serves a MAC next time it PXEs: a boot mode,
 plus (for the modes that need one) an image, plus (for `nbdboot`) an
-optional overlay alias. A fresh MAC auto-registers as `ipxe-exit` with
-no image on first contact; the machine detail page is where an
-operator promotes it. Saving the bind form persists all three fields
+optional overlay alias. A fresh MAC auto-registers with
+`PIXIE_DEFAULT_BOOT_MODE` (default `pixie-inventory`, which
+self-terminates to `ipxe-exit` after one inventory pass) and no image
+on first contact; the machine detail page is where an operator promotes
+it. Saving the bind form persists all three fields
 together, and the plan renderer reads them per PXE request: it resolves
 the image's netboot bundle, resolves the alias to its overlay (and
 base image), ensures the NBD export is up, and renders the plan. A

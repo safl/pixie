@@ -11,6 +11,21 @@ operator-facing summary.
 
 ## [Unreleased]
 
+### Changed
+
+**New machines default to `pixie-inventory`, one-shot.** A
+freshly-discovered MAC now auto-registers with `pixie-inventory`
+instead of `ipxe-exit`: non-destructive (boots the live env, collects
+lshw + disks, posts them, exits to firmware) and immediately useful --
+every new machine's hardware shows up and the flash modes (which
+require inventory) become available without a manual pass. It is
+one-shot: the first inventory POST flips the binding to `ipxe-exit`, so
+a PXE-first box inventories itself exactly once and never boot-loops.
+With no live env staged the plan degrades to exit, so a bare deploy
+behaves like before until the operator fetches the live env. Override
+per deploy with `PIXIE_DEFAULT_BOOT_MODE` (e.g. `ipxe-exit` for the old
+behaviour).
+
 ### Fixed
 
 **Live env boots on arbitrary NICs (netboot-pc initramfs is now

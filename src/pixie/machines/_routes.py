@@ -20,7 +20,7 @@ from pydantic import BaseModel, Field
 from pixie.events._kinds import MACHINE_BINDING_CHANGED, MACHINE_BOUND, MACHINE_DELETED
 from pixie.machines._store import (
     BOOT_MODES,
-    DEFAULT_BOOT_MODE,
+    UNCOMMITTED_BOOT_MODES,
     BadMac,
     MachinesStore,
     normalise_mac,
@@ -165,12 +165,14 @@ def upsert_machine(
         details: dict[str, Any] = {"boot_mode": row.boot_mode}
         if row.image_content_sha256:
             details["image_content_sha256"] = row.image_content_sha256
-        # ``machine.bound`` on a fresh MAC or on a row that was
-        # discovered-only (previous.boot_mode default with no bound
-        # image); ``machine.binding.changed`` when the mode or image
-        # actually shifted between the previous state and the new one.
+        # ``machine.bound`` on a fresh MAC or on a row that was only
+        # auto-registered (an uncommitted mode -- ipxe-exit or
+        # pixie-inventory -- with no bound image, including a machine
+        # that auto-inventoried then flipped back to ipxe-exit);
+        # ``machine.binding.changed`` when the mode or image actually
+        # shifted from a real prior operator bind.
         was_bound = previous is not None and (
-            bool(previous.image_content_sha256) or previous.boot_mode != DEFAULT_BOOT_MODE
+            bool(previous.image_content_sha256) or previous.boot_mode not in UNCOMMITTED_BOOT_MODES
         )
         changed = previous is not None and (
             previous.boot_mode != row.boot_mode
