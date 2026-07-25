@@ -47,8 +47,10 @@ CMDLINE=$(cat /proc/cmdline 2>/dev/null || echo "")
 #      variant.
 #   2. /proc/cmdline-based detection for the live env where
 #      these marker files don't exist:
-#        - netboot vs usb-iso: ``fetch=`` only appears on
-#          PXE-netboot (live-boot's HTTP fetch).
+#        - netboot vs usb-iso: ``root=live:http`` only appears on
+#          PXE-netboot (dracut dmsquash-live fetching the squashfs
+#          over HTTP); USB uses ``root=live:LABEL=``. This replaced
+#          the pre-dracut ``fetch=`` token (live-boot's HTTP fetch).
 #        - server-driven vs USB-local: ``pixie.mac=`` only appears
 #          on the PXE chain (rendered by the server's iPXE
 #          template). v0.22.10+ retired the cmdline-level
@@ -58,8 +60,8 @@ if [ -r /etc/pixie/variant ]; then
     VARIANT=$(cat /etc/pixie/variant 2>/dev/null | head -1 | tr -d '\r\n[:space:]')
 else
     case "${CMDLINE}" in
-        *fetch=*) VARIANT="Netboot" ;;
-        *)        VARIANT="USB" ;;
+        *root=live:http*) VARIANT="Netboot" ;;
+        *)                VARIANT="USB" ;;
     esac
 fi
 

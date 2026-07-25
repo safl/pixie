@@ -34,11 +34,13 @@
 # late dirs); a ``<unit>`` symlink to /dev/null in the early dir
 # masks the unit.
 #
-# The ``fetch=`` cmdline token is reliably present on netboot
-# (set by both ``ipxe_flash.j2`` and ``ipxe_tui.j2`` for
-# live-boot's squashfs URL) and absent on USB (the squashfs is
-# found via live-boot's local-label discovery). Clean
-# netboot-vs-USB discriminator.
+# The ``root=live:http`` cmdline token is reliably present on netboot
+# (the server's ``ipxe/pixie-live-env.j2`` points dracut's dmsquash-live
+# at the squashfs over HTTP) and absent on USB, where the squashfs is
+# found on local media via ``root=live:LABEL=PIXIE_LIVE``. Clean
+# netboot-vs-USB discriminator. This replaced the pre-dracut ``fetch=``
+# token (live-boot's HTTP-fetch handler), which no longer appears on the
+# cmdline now that the initrd is dracut.
 
 set -eu
 
@@ -60,14 +62,14 @@ early_dir="${2:?pixie-skip-usb-only-units-on-netboot: missing early dir arg}"
 
 # Self-trace: every generator invocation drops a one-line marker
 # via /dev/kmsg so an operator can see in dmesg whether the
-# generator (a) ran at all, (b) saw fetch= on the cmdline, and
-# (c) actually wrote the mask symlinks.
+# generator (a) ran at all, (b) saw the netboot token on the
+# cmdline, and (c) actually wrote the mask symlinks.
 _trace() {
     ( printf '<6>pixie-trace: generator/pixie-skip-usb-only-units: %s\n' "$*" > /dev/kmsg ) 2>/dev/null || true
 }
 
-if ! grep -q 'fetch=' /proc/cmdline 2>/dev/null; then
-    _trace "no fetch= on cmdline; not a netboot, nothing to mask"
+if ! grep -q 'root=live:http' /proc/cmdline 2>/dev/null; then
+    _trace "no root=live:http on cmdline; not a netboot, nothing to mask"
     exit 0
 fi
 
@@ -75,4 +77,4 @@ mkdir -p "$early_dir"
 for unit in pixie-usb-grow.service var-lib-pixie-images.mount; do
     ln -sf /dev/null "$early_dir/$unit"
 done
-_trace "fetch= detected, masked: pixie-usb-grow.service var-lib-pixie-images.mount (early_dir=$early_dir)"
+_trace "root=live:http detected, masked: pixie-usb-grow.service var-lib-pixie-images.mount (early_dir=$early_dir)"

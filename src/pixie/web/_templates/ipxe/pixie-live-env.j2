@@ -4,52 +4,59 @@
 # Boot pixie's own live env. The netboot-pc bake produced vmlinuz +
 # initrd + squashfs artifacts; the pixie deploy staged them under
 # ``$PIXIE_LIVE_ENV_DIR`` and this HTTP process exposes them at
-# ``/boot/pixie-live-env/``. Debian live-boot cmdline shape:
+# ``/boot/pixie-live-env/``. The initrd is a dracut initramfs
+# (dmsquash-live + livenet + network); the cmdline shape is:
 #
-#   boot=live components fetch=<squashfs URL>
+#   root=live:<squashfs URL> rd.live.image ip=dhcp rd.neednet=1
 #
-# handles the initrd -> squashfs pivot. ``pixie.server`` +
-# ``pixie.mac`` are the two knobs pixie-on-tty1.service reads on
-# every live-env boot; the pixie CLI then GETs
-# ``<server>/pxe/<mac>/plan`` and dispatches (auto-flash,
+# livenet fetches the squashfs over HTTP, dmsquash-live loop-mounts
+# it read-only under a tmpfs overlay, and the boot pivots into it.
+# ``pixie.server`` + ``pixie.mac`` are the two knobs
+# pixie-on-tty1.service reads on every live-env boot; the pixie CLI
+# then GETs ``<server>/pxe/<mac>/plan`` and dispatches (auto-flash,
 # inventory + reboot, interactive wizard, or exit).
 #
-# ``ip=dhcp`` mirrors the nbdboot template's cmdline: the initrd's
-# network module (Debian live-boot, in this case) needs an explicit
-# DHCP directive to bring the primary NIC up before pixie CLI tries
-# to reach ``$pixie-server``. ``console=`` chain matches nbdboot too
-# so a target with a serial console reads output on both tty0 and
-# ttyS0/1 -- most bench-side debugging happens on serial.
+# WHY dracut (was Debian live-boot + ``fetch=``): live-boot's
+# initramfs network bring-up hung on some hardware (a dual-NIC Intel
+# igb box never fetched its squashfs; the SAME box nbdboots fine
+# under dracut in ~24s). dracut's network stack works where
+# live-boot's did not, and it is the exact path the nbdboot template
+# already uses. See CHANGELOG 0.4.x + the dracut drop-in at
+# ``config/includes.chroot/etc/dracut.conf.d/10-pixie-live-env.conf``.
 
 set pixie-base http://{{ host }}:{{ port }}
 
-# Cmdline matches bty's proven-working live-env kernel line
-# (bty/src/bty/web/_templates/ipxe_flash.j2 + ipxe_tui.j2). Deltas
-# from an earlier pixie shape that had drifted:
+# Cmdline notes:
 #
-# - ``ip=dhcp`` REMOVED. Debian live-boot's ``fetch=`` handler
-#   configures the network itself via its own DHCP client; keeping
-#   both racing produced silent hangs on GIGABYTE MC12-LE0 hardware
-#   where live-boot's ipconfig would return with no NIC configured
-#   despite iPXE having successfully DHCP'd from the same interface.
-#   bty never had it; verified live on 10.20.30.61 (matx-bmc) with
-#   nothing else changing.
+# - ``root=live:<url> rd.live.image``: the dracut dmsquash-live +
+#   livenet source. A ``root=live:`` value that is a URL routes
+#   dmsquash-live through livenet, which downloads the squashfs and
+#   hands it back to dmsquash-live to loop-mount. This replaces
+#   live-boot's old ``fetch=<url>`` handler shape.
+# - ``ip=dhcp rd.neednet=1``: dracut's ``network`` module needs an
+#   explicit DHCP directive AND ``rd.neednet=1`` to bring the primary
+#   NIC up in the initramfs before livenet reaches out for the
+#   squashfs. (This is the OPPOSITE of the old live-boot advice, which
+#   wanted ``ip=dhcp`` REMOVED to avoid live-boot racing its own DHCP
+#   client -- that race, and the note about it, no longer apply under
+#   dracut, which owns the single DHCP bring-up.) Mirrors the nbdboot
+#   template, which is the proven-working dracut cmdline on this
+#   hardware.
 # - ``plymouth.enable=0 modprobe.blacklist=nouveau,rndis_host
-#   nouveau.modeset=0 systemd.gpt_auto=0`` ADDED. Same set bty
-#   ships. plymouth stays off so the operator sees the full boot
-#   stream (a wedge between two ``[ OK ] Started X`` lines is
-#   immediately diagnostic); nouveau blacklist keeps NVIDIA
-#   GPU quirks from stalling non-graphics targets; rndis_host
-#   blacklist stops the kernel from claiming a USB-console-emulated
-#   NIC before the real one appears; systemd.gpt_auto=0 keeps
-#   systemd from auto-mounting random GPT partitions the flasher
-#   is about to overwrite.
+#   nouveau.modeset=0 systemd.gpt_auto=0``: plymouth stays off so the
+#   operator sees the full boot stream (a wedge between two ``[ OK ]
+#   Started X`` lines is immediately diagnostic); nouveau blacklist
+#   keeps NVIDIA GPU quirks from stalling non-graphics targets;
+#   rndis_host blacklist stops the kernel from claiming a USB-console-
+#   emulated NIC before the real one appears; systemd.gpt_auto=0 keeps
+#   systemd from auto-mounting random GPT partitions the flasher is
+#   about to overwrite.
 #
-# ``console=`` chain matches bty too; LAST-wins for /dev/console.
-# The ttyS0 tail lands on most bench-side USB-serial adapters;
-# operators driving from a BMC's SoL on ttyS1 append their own
-# ``console=ttyS1,115200`` via PIXIE_LIVE_ENV_EXTRA_CMDLINE.
+# ``console=`` chain: LAST-wins for /dev/console. The ttyS0 tail lands
+# on most bench-side USB-serial adapters; operators driving from a
+# BMC's SoL on ttyS1 append their own ``console=ttyS1,115200`` via
+# PIXIE_LIVE_ENV_EXTRA_CMDLINE.
 
-kernel ${pixie-base}/boot/pixie-live-env/vmlinuz boot=live fetch=${pixie-base}/boot/pixie-live-env/live.squashfs components console=tty0 console=ttyS1,115200 console=ttyS0,115200 earlyprintk=ttyS0,115200 plymouth.enable=0 modprobe.blacklist=nouveau,rndis_host nouveau.modeset=0 systemd.gpt_auto=0 pixie.server=${pixie-base} pixie.mac={{ mac }} bty.server=${pixie-base} bty.mac={{ mac }}{% if extra_cmdline %} {{ extra_cmdline }}{% endif %}
+kernel ${pixie-base}/boot/pixie-live-env/vmlinuz root=live:${pixie-base}/boot/pixie-live-env/live.squashfs rd.live.image ip=dhcp rd.neednet=1 console=tty0 console=ttyS1,115200 console=ttyS0,115200 earlyprintk=ttyS0,115200 plymouth.enable=0 modprobe.blacklist=nouveau,rndis_host nouveau.modeset=0 systemd.gpt_auto=0 pixie.server=${pixie-base} pixie.mac={{ mac }} bty.server=${pixie-base} bty.mac={{ mac }}{% if extra_cmdline %} {{ extra_cmdline }}{% endif %}
 initrd ${pixie-base}/boot/pixie-live-env/initrd
 boot

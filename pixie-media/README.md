@@ -128,9 +128,10 @@ to end. Most operators never run this build pipeline themselves -
 
 - **usbboot-pc.** Hybrid ISO that boots into a Debian live environment
   with the `pixie` wizard installed into `/opt/pixie/venv`, and an
-  exFAT `PIXIE_IMGS` partition for pre-built images. live-boot's
-  SquashFS + tmpfs overlay provides the ephemeral rootfs (no
-  `overlayroot` package needed). End-to-end use case in
+  exFAT `PIXIE_IMGS` partition for pre-built images. dracut's
+  `dmsquash-live` module provides the ephemeral rootfs (SquashFS +
+  tmpfs overlay, no `overlayroot` package needed); it finds the local
+  squashfs via `root=live:LABEL=PIXIE_LIVE`. End-to-end use case in
   [`docs/src/tutorials/pixie-usbboot-pc.md`](../docs/src/tutorials/pixie-usbboot-pc.md).
 - **netboot-pc.** Kernel + initrd + squashfs trio used by PXE
   clients. The chroot ships `pixie-on-tty1.service` (after

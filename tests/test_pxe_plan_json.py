@@ -252,16 +252,16 @@ def test_ipxe_plan_pixie_inventory_no_live_env_dir_falls_back(client: TestClient
     # + a reason comment naming the missing live-env media.
     assert "exit" in body
     assert "pixie live-env media" in body
-    # A live-env chain would carry boot=live in the kernel line; the
-    # fallback must NOT emit that.
-    assert "boot=live" not in body
+    # A live-env chain would carry the dracut ``root=live:`` source in
+    # the kernel line; the fallback must NOT emit that.
+    assert "root=live:" not in body
 
 
 def test_ipxe_plan_pixie_inventory_with_staged_artifacts_renders_live_env(
     client: TestClient, tmp_path: Path
 ) -> None:
     """Once the three artifact files are on disk under the
-    live-env dir the renderer emits the Debian live-boot chain."""
+    live-env dir the renderer emits the dracut live-net chain."""
     live_env = client.app.state.live_env_dir  # type: ignore[attr-defined]
     assert isinstance(live_env, Path)
     live_env.mkdir(parents=True, exist_ok=True)
@@ -272,7 +272,15 @@ def test_ipxe_plan_pixie_inventory_with_staged_artifacts_renders_live_env(
         r = client.get("/pxe/aa:bb:cc:dd:ee:13")
         assert r.status_code == 200
         body = r.text
-        assert "boot=live" in body
+        # dracut live-net shape: dmsquash-live source is the squashfs URL
+        # (``root=live:<url>``), the NIC is brought up in the initramfs
+        # (``ip=dhcp rd.neednet=1``), and the pre-dracut ``boot=live``
+        # token is gone.
+        assert "boot=live" not in body
+        assert "root=live:${pixie-base}/boot/pixie-live-env/live.squashfs" in body
+        assert "rd.live.image" in body
+        assert "ip=dhcp" in body
+        assert "rd.neednet=1" in body
         assert "/boot/pixie-live-env/vmlinuz" in body
         assert "/boot/pixie-live-env/initrd" in body
         assert "/boot/pixie-live-env/live.squashfs" in body

@@ -144,7 +144,18 @@ def main(args, cijoe):
     cijoe.run_local(f"sudo find {build_dir} -maxdepth 4 -type d 2>/dev/null | head -60")
 
     kernels = sorted(p for p in build_dir.rglob("vmlinuz*") if _outside_chroot(p))
-    initrds = sorted(p for p in build_dir.rglob("initrd.img*") if _outside_chroot(p))
+    # The initrd basename depends on the initramfs generator. live-build
+    # under ``--initramfs dracut-live`` (the dracut migration) still lands
+    # the initrd under ``binary/live/``, but dracut on Debian normally
+    # follows the ``initrd.img-<kver>`` convention (its kernel-postinst
+    # hook) while a future dracut could emit its native
+    # ``initramfs-<kver>.img`` instead. Match both so a naming change
+    # doesn't silently break the publish.
+    initrds = sorted(
+        p
+        for p in (*build_dir.rglob("initrd.img*"), *build_dir.rglob("initramfs*.img"))
+        if _outside_chroot(p)
+    )
     squashfses = sorted(p for p in build_dir.rglob("filesystem.squashfs") if _outside_chroot(p))
 
     if not kernels:
@@ -152,8 +163,11 @@ def main(args, cijoe):
         cijoe.run_local(f"sudo find {build_dir} -name 'vmlinuz*' 2>/dev/null")
         return errno.ENOENT
     if not initrds:
-        log.error(f"no initrd matching initrd.img* under {build_dir} (excluding chroot)")
-        cijoe.run_local(f"sudo find {build_dir} -name 'initrd.img*' 2>/dev/null")
+        log.error(f"no initrd (initrd.img* / initramfs*.img) under {build_dir} (excluding chroot)")
+        cijoe.run_local(
+            rf"sudo find {build_dir} "
+            r"\( -name 'initrd.img*' -o -name 'initramfs*.img' \) 2>/dev/null"
+        )
         return errno.ENOENT
     if not squashfses:
         log.error(f"no filesystem.squashfs under {build_dir}")

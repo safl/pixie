@@ -40,7 +40,7 @@
 #
 # Operator override to force r8169 even where r8125 would load:
 #       ln -s /dev/null /etc/modprobe.d/zz-pixie-r8125-prefer.conf
-#       update-initramfs -u && reboot
+#       dracut --force && reboot   # (update-initramfs -u on initramfs-tools)
 #
 # The awesometic DKMS install script ships a flat
 # ``blacklist r8169`` modprobe entry that would impact non-2.5GbE
@@ -153,7 +153,7 @@ rm -f /etc/modprobe.d/r8125-dkms.conf /etc/modprobe.d/blacklist-r8169.conf
 # Operator override to force r8169-only (e.g. when r8125 misbehaves
 # on a specific board):
 #   ln -s /dev/null /etc/modprobe.d/zz-pixie-r8125-prefer.conf
-#   update-initramfs -u && reboot
+#   dracut --force && reboot   # (update-initramfs -u on initramfs-tools)
 cat > /etc/modprobe.d/zz-pixie-r8125-prefer.conf <<'EOF'
 # pixie: prefer the out-of-tree r8125 driver for the RTL8125 / B and
 # RTL8126 2.5GbE family by loading it before r8169. If r8125 can't
@@ -177,11 +177,21 @@ EOF
 
 # Rebuild the initramfs so the r8125 module is available during
 # early boot (the live env's first action is to fetch the squashfs
-# over HTTP via the kernel cmdline ``fetch=`` param; the NIC must
-# be alive before pivot-root). live-build's binary stage
-# regenerates the initrd anyway; ``update-initramfs -u -k all`` is
-# defence in depth.
-update-initramfs -u -k all
+# over HTTP from the dracut ``root=live:<url>`` source; the NIC must
+# be alive before pivot-root). live-build's binary stage regenerates
+# the initrd anyway; this is defence in depth.
+#
+# Generator-aware: the live env now builds its initrd with dracut
+# (``--initramfs dracut-live``), so ``update-initramfs`` is no longer
+# the generator here -- with ``live-boot`` dropped, initramfs-tools may
+# not even be installed. Prefer dracut when present, fall back to
+# ``update-initramfs`` so this hook stays correct if a future variant
+# reverts to initramfs-tools.
+if command -v dracut >/dev/null 2>&1 && [ -d /etc/dracut.conf.d ]; then
+    dracut --regenerate-all --force
+else
+    update-initramfs -u -k all
+fi
 
 # Drop the build deps. We keep ``dkms`` itself + the staged source
 # under /usr/src so an operator at runtime can rebuild against a

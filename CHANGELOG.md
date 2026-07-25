@@ -11,6 +11,30 @@ operator-facing summary.
 
 ## [Unreleased]
 
+### Changed
+
+**Live env now boots via dracut instead of Debian live-boot.** The
+netboot-pc bake builds its initrd with dracut (`dmsquash-live` +
+`livenet` + `network`) rather than live-boot + initramfs-tools, and the
+per-client kernel cmdline changes from live-boot's
+`boot=live components fetch=<squashfs URL>` to dracut's
+`root=live:<squashfs URL> rd.live.image ip=dhcp rd.neednet=1`. Why:
+live-boot's `fetch=` initramfs network bring-up hung on some hardware --
+a dual-NIC Intel igb box never fetched its squashfs and sat at `initrd`
+forever, even though the SAME box nbdboots fine under dracut in ~24s.
+dracut's network stack works where live-boot's did not, and it is the
+exact path nbdboot already uses, so the live env now shares it. The
+usbboot-pc ISO moves to the same dracut initrd and finds its local
+squashfs via `root=live:LABEL=PIXIE_LIVE`. Operators see no behaviour
+change when it works; the fix is that it now works on hardware where the
+live env previously never came up.
+
+This supersedes 0.4.1's `MODULES=most` change (see the correction on
+that entry below): the real cause of the "live env never fetches its
+squashfs" failures was live-boot's initramfs network framework, not a
+missing NIC driver, so the fix is to change the framework rather than
+widen the driver set.
+
 ## [0.4.1] - 2026-07-25
 
 ### Changed
@@ -42,6 +66,14 @@ sets `MODULES=most`, baking the broad Debian-installer driver set so an
 arbitrary lab machine's NIC (and storage) is alive before the fetch.
 Costs some initramfs size; worth it for an appliance whose job is
 booting unknown hardware.
+
+> **Correction (Unreleased):** the `MODULES=most` widening was necessary
+> but not sufficient. The deeper cause of live-env boxes never fetching
+> their squashfs was live-boot's `fetch=` initramfs network framework
+> hanging on some hardware (a dual-NIC Intel igb box), not merely a
+> missing NIC driver. The Unreleased dracut migration replaces the
+> framework (and carries the broad-driver intent forward as
+> `hostonly="no"` in the dracut config).
 
 **No more `${PIXIE_LIVE_ENV_EXTRA_CMDLINE:-}` literal on the kernel
 cmdline.** On a deploy whose compose runner doesn't expand `${VAR:-}`
