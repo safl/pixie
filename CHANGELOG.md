@@ -11,6 +11,23 @@ operator-facing summary.
 
 ## [Unreleased]
 
+### Fixed
+
+**RTL8125 (2.5GbE) targets boot the live env: force the r8125 DKMS
+driver into the netboot-pc initramfs.** The live env brings the NIC up
+from inside the initramfs to fetch its squashfs, and `update-initramfs`
+-- even `MODULES=most` -- only pulls IN-TREE drivers, so the
+out-of-tree DKMS `r8125` an RTL8125 needs was absent from the initrd.
+Early boot bound the in-tree `r8169`, which mis-drives the 2.5GbE chip:
+link up but the squashfs fetch stalls and the boot hangs silently
+before pivot-root (observed on ASRock Rack / matx). The r8125 hook now
+force-adds `r8125` to `/etc/initramfs-tools/modules` before rebuilding
+the initrd, so the existing `softdep r8169 pre: r8125` can actually
+prefer it. (0.4.1's `MODULES=most` change did NOT fix this -- the
+Debian live-env base already defaulted to `most`, and `most` never
+covers out-of-tree modules; that entry was a misdiagnosis, corrected
+below.)
+
 ## [0.4.1] - 2026-07-25
 
 ### Changed
@@ -30,18 +47,14 @@ behaviour).
 
 ### Fixed
 
-**Live env boots on arbitrary NICs (netboot-pc initramfs is now
-`MODULES=most`).** The live env fetches its squashfs over HTTP from the
-initramfs before pivot-root, so the target's NIC must be driven from
-inside the initrd. It was built the mkinitramfs default `MODULES=dep` --
-only the build host's drivers (plus the DKMS'd r8125) -- so a target
-with a different NIC came up to `initrd` and then stalled forever at the
-squashfs fetch, silently breaking `pixie-inventory` / `-tui` / `-flash`
-on that box (observed on an ASRock Rack board). The netboot-pc bake now
-sets `MODULES=most`, baking the broad Debian-installer driver set so an
-arbitrary lab machine's NIC (and storage) is alive before the fetch.
-Costs some initramfs size; worth it for an appliance whose job is
-booting unknown hardware.
+**netboot-pc initramfs pins `MODULES=most` explicitly.** A
+belt-and-suspenders guard so the live-env initrd keeps its broad
+in-tree driver set even if a future base image defaults to `dep`.
+(Correction: this was released as a fix for the matx live-env stall,
+but it was a no-op -- the Debian live-env base already defaulted to
+`MODULES=most`, so nothing changed, and the actual matx cause was an
+out-of-tree RTL8125 driver `most` can't cover. The real fix is under
+Unreleased.)
 
 **No more `${PIXIE_LIVE_ENV_EXTRA_CMDLINE:-}` literal on the kernel
 cmdline.** On a deploy whose compose runner doesn't expand `${VAR:-}`

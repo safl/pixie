@@ -1,22 +1,19 @@
-# pixie netboot-pc live env: bake a BROAD driver set into the initramfs.
+# pixie netboot-pc live env: pin a BROAD in-tree driver set in the
+# initramfs, explicitly.
 #
-# The live env's very first action after the kernel hands off is to
-# fetch its squashfs over HTTP from the kernel cmdline `fetch=` param
-# (Debian live-boot). That means the target's NIC must be driven from
-# INSIDE the initramfs, before pivot-root -- iPXE loaded vmlinuz+initrd
-# over the firmware's network stack, but from Linux on it's the kernel
-# module that matters.
+# The live env's first action after the kernel hands off is to fetch
+# its squashfs over HTTP from the kernel cmdline `fetch=` param (Debian
+# live-boot), so the target's NIC must be driven from INSIDE the
+# initramfs, before pivot-root -- iPXE loaded vmlinuz+initrd over the
+# firmware's network stack, but from Linux on it's the kernel module
+# that matters.
 #
-# mkinitramfs' default is MODULES=dep: only the drivers the BUILD HOST
-# needs. So the netboot-pc initrd shipped drivers for the builder's NIC
-# (plus the r8125 DKMS hook) and nothing else -- a target with a
-# different NIC (e.g. matx / ASRock Rack) came up to `initrd` and then
-# stalled forever at the squashfs fetch, because its NIC had no driver.
-#
-# MODULES=most bakes the broad Debian-installer driver set, so an
-# arbitrary lab box's NIC (and storage) is alive before the fetch.
-# Costs initramfs size (~2x); acceptable for a netboot appliance whose
-# whole job is booting unknown hardware. Narrow to an explicit NIC list
-# in /etc/initramfs-tools/modules later if size becomes a problem and
-# the target NICs are known.
+# NOTE: the Debian live-build base ALREADY defaults to MODULES=most, so
+# this line is a belt-and-suspenders pin, NOT a behaviour change -- it
+# guards against a future base whose default is `dep`. It does NOT, on
+# its own, fix an arbitrary NIC: `most` only covers IN-TREE drivers.
+# The out-of-tree DKMS driver an RTL8125 (2.5GbE) needs -- e.g. ASRock
+# Rack matx -- is force-added by name in the r8125 DKMS hook
+# (hooks/normal/0600-pixie-r8125-dkms.hook.chroot); `most` never pulls
+# it in. See that hook for the real 2.5GbE story.
 MODULES=most
