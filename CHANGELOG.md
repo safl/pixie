@@ -11,6 +11,21 @@ operator-facing summary.
 
 ## [Unreleased]
 
+### Fixed
+
+**Live env boots on arbitrary NICs (netboot-pc initramfs is now
+`MODULES=most`).** The live env fetches its squashfs over HTTP from the
+initramfs before pivot-root, so the target's NIC must be driven from
+inside the initrd. It was built the mkinitramfs default `MODULES=dep` --
+only the build host's drivers (plus the DKMS'd r8125) -- so a target
+with a different NIC came up to `initrd` and then stalled forever at the
+squashfs fetch, silently breaking `pixie-inventory` / `-tui` / `-flash`
+on that box (observed on an ASRock Rack board). The netboot-pc bake now
+sets `MODULES=most`, baking the broad Debian-installer driver set so an
+arbitrary lab machine's NIC (and storage) is alive before the fetch.
+Costs some initramfs size; worth it for an appliance whose job is
+booting unknown hardware.
+
 ## [0.4.0] - 2026-07-24
 
 ### Changed
