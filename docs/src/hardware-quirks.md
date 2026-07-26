@@ -5,7 +5,7 @@ pixie's live env end-to-end, and the kernel cmdline tokens that
 unblock them. Set the tokens via the Settings page
 (`/ui/settings`, "Live-env" card, "Extra kernel cmdline") or via
 `PIXIE_LIVE_ENV_EXTRA_CMDLINE` in `envvars`. Either path is
-appended verbatim to the `pixie-live-env.j2` kernel line, after
+appended verbatim to the live-env kernel line, after
 `pixie.mac=` + `bty.mac=` so last-token-wins on any conflict.
 
 The Settings page persists across restarts (state.db). The
@@ -21,14 +21,14 @@ Symptom pattern from the pixie access log:
 
     GET /pxe-bootstrap.ipxe                    200
     GET /pxe/<mac>                             200
-    GET /boot/pixie-live-env/vmlinuz           200
-    GET /boot/pixie-live-env/initrd            200
-    # ...silence. No /boot/pixie-live-env/live.squashfs fetch.
+    GET /artifacts/<sha>/vmlinuz               200
+    GET /artifacts/<sha>/initrd                200
+    # ...silence. No NBD connect to the live-env export.
 
 iPXE handed the kernel + initrd off to Linux, then Linux couldn't
 bring up the boot NIC (driver -EIO, DMA fail, ROM-BAR conflict,
-etc). live-boot has no interface to run `fetch=` through and the
-target hangs silently before any userspace runs.
+etc), so the initrd never connects the live-env image over NBD and
+the target hangs silently before any userspace runs.
 
 Get to a serial console (BMC SoL, USB-serial adapter, or physical
 COM1). If the console shows the kernel initialising, then falling
@@ -67,7 +67,7 @@ workaround kicks in the kernel logs:
     igb 0000:06:00.0: Intel(R) Gigabit Ethernet Network Connection
     igb 0000:06:00.0 enp6s0: igb: enp6s0 NIC Link is Up 1000 Mbps Full Duplex
 
-...and the live-boot initrd fetches the squashfs normally.
+...and the initrd connects the live-env image over NBD normally.
 
 ## Target firmware prerequisites (not cmdline)
 

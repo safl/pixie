@@ -48,6 +48,13 @@ The compose file runs pixie under `network_mode: host` so udp/69
 (TFTP) plus the NBD port range plus tcp/8080 (HTTP) all reach the
 LAN without publish gymnastics.
 
+For a fresh lab machine you can collapse the generate + edit + up steps
+above into one command -- `uv tool run pixie-lab deploy /opt/pixie`
+runs `init`, auto-fills `envvars` (host address detected, admin
+password generated), brings the stack up, and waits on `/healthz`.
+Every flag has a default; override with `--host-addr`, `--admin-password`,
+`--image`. See [Tear it down](#tear-it-down).
+
 ## Point DHCP at pixie
 
 Set your DHCP server to chain PXE targets through pixie's TFTP and
@@ -61,6 +68,19 @@ with your admin password, and add a catalog entry with a source URL.
 Hit Fetch. Pixie pulls the bytes to disk (and for `img.gz` / `img.zst`
 inputs, decompresses on the way in). The row flips to `fetched` when
 the pipeline lands.
+
+## Select the live env
+
+The `pixie-inventory`, `pixie-tui`, and `pixie-flash-*` boot modes boot
+the `pixie-live-env` disk image (the operator TUI + CLI baked in) over
+nbdboot. On `/ui/catalog`, Fetch the **`pixie-live-env`** image and its
+**`nosi arch-headless netboot bundle`** (both ship in the seed catalog).
+Then open the **Live env** page (`/ui/live-env`) and set **Image content
+sha** to the fetched image's `content_sha256` (shown on its catalog
+row), or set `PIXIE_LIVE_ENV_IMAGE_SHA` in `envvars`. Until an image is
+selected, those boot modes render an `unavailable` plan. See
+[](deployment.md#select-the-live-env) for detail and the air-gapped
+path.
 
 ## Bind a machine
 
