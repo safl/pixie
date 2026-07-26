@@ -11,6 +11,8 @@ operator-facing summary.
 
 ## [Unreleased]
 
+## [0.4.4] - 2026-07-27
+
 ### Added
 
 **One-click live-env setup.** The Live env page now has a **Set up live
