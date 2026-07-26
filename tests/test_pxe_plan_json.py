@@ -7,13 +7,11 @@ Two contracts covered here:
   pixie-tui -> interactive, pixie-flash-* -> interactive until the
   target-disk field lands, ipxe-exit / nbdboot / unknown -> exit).
 - The renderer's ``pixie-*`` branch degrades to ``unavailable`` when
-  no live-env artifacts are staged, and renders the ``pixie-live-env``
-  iPXE chain when they are.
+  no live-env image is configured (or its bundle/blob is not fetched),
+  and renders the ephemeral-nbdboot chain when it is.
 """
 
 from __future__ import annotations
-
-from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
@@ -240,8 +238,8 @@ def test_status_done_leaves_pixie_flash_always_alone(client: TestClient) -> None
     assert client.get(f"/machines/{mac}").json()["boot_mode"] == "pixie-flash-always"
 
 
-def test_ipxe_plan_pixie_inventory_no_live_env_dir_falls_back(client: TestClient) -> None:
-    """With no netboot-pc artifacts staged, ``boot_mode=pixie-inventory``
+def test_ipxe_plan_pixie_inventory_no_image_degrades(client: TestClient) -> None:
+    """With no live-env image configured, ``boot_mode=pixie-inventory``
     must degrade to the readable ``unavailable`` plan rather than
     emitting a chain the target cannot fetch."""
     _seed_machine(client, "aa:bb:cc:dd:ee:12", "pixie-inventory")
@@ -249,104 +247,12 @@ def test_ipxe_plan_pixie_inventory_no_live_env_dir_falls_back(client: TestClient
     assert r.status_code == 200
     body = r.text
     # unavailable.j2 emits ``exit`` (unloads iPXE, firmware moves on)
-    # + a reason comment naming the missing live-env media.
+    # + a reason comment naming the missing live-env image.
     assert "exit" in body
-    assert "pixie live-env media" in body
-    # A live-env chain would carry boot=live in the kernel line; the
-    # fallback must NOT emit that.
+    assert "needs a live-env image" in body
+    # No live-env chain of any kind.
     assert "boot=live" not in body
-
-
-def test_ipxe_plan_pixie_inventory_with_staged_artifacts_renders_live_env(
-    client: TestClient, tmp_path: Path
-) -> None:
-    """Once the three artifact files are on disk under the
-    live-env dir the renderer emits the Debian live-boot chain."""
-    live_env = client.app.state.live_env_dir  # type: ignore[attr-defined]
-    assert isinstance(live_env, Path)
-    live_env.mkdir(parents=True, exist_ok=True)
-    for name in ("vmlinuz", "initrd", "live.squashfs"):
-        (live_env / name).write_bytes(b"stub")
-    try:
-        _seed_machine(client, "aa:bb:cc:dd:ee:13", "pixie-inventory")
-        r = client.get("/pxe/aa:bb:cc:dd:ee:13")
-        assert r.status_code == 200
-        body = r.text
-        assert "boot=live" in body
-        assert "/boot/pixie-live-env/vmlinuz" in body
-        assert "/boot/pixie-live-env/initrd" in body
-        assert "/boot/pixie-live-env/live.squashfs" in body
-        assert "pixie.mac=aa:bb:cc:dd:ee:13" in body
-    finally:
-        for name in ("vmlinuz", "initrd", "live.squashfs"):
-            (live_env / name).unlink(missing_ok=True)
-
-
-def test_live_env_artifacts_served_when_staged_after_startup(client: TestClient) -> None:
-    """Regression: ``/boot/pixie-live-env`` must serve files staged AFTER
-    app startup (a fresh deploy fetches the live-env into a running
-    container), with no restart. The mount is created unconditionally
-    with ``check_dir=False``; guarding it on ``is_dir()`` at startup made
-    these URLs 404 even though the rendered plan pointed the target at
-    them -- so pixie-inventory / -tui / -flash boots died at kernel
-    fetch."""
-    live_env = Path(client.app.state.live_env_dir)  # type: ignore[attr-defined]
-    kernel = live_env / "vmlinuz"
-    kernel.unlink(missing_ok=True)  # ensure nothing staged yet
-    # Mount exists but the file isn't there -> 404 (not a 500, not a
-    # missing route).
-    assert client.get("/boot/pixie-live-env/vmlinuz").status_code == 404
-    # Stage it now, mid-run, exactly like an operator hitting "Fetch
-    # live env" on a running fresh container.
-    live_env.mkdir(parents=True, exist_ok=True)
-    kernel.write_bytes(b"KERNEL")
-    try:
-        r = client.get("/boot/pixie-live-env/vmlinuz")
-        assert r.status_code == 200
-        assert r.content == b"KERNEL"
-    finally:
-        kernel.unlink(missing_ok=True)
-
-
-def test_ipxe_plan_live_env_appends_extra_cmdline(
-    client: TestClient, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """PIXIE_LIVE_ENV_EXTRA_CMDLINE lets an operator pin hardware
-    workarounds (e.g. pci=nommconf for the GIGABYTE MC12-LE0's
-    Intel i210 NICs) without rebaking the live-env image.
-    Verified: the tokens land on the kernel line verbatim; an empty
-    env is a legal no-op."""
-    live_env = client.app.state.live_env_dir  # type: ignore[attr-defined]
-    live_env.mkdir(parents=True, exist_ok=True)
-    for name in ("vmlinuz", "initrd", "live.squashfs"):
-        (live_env / name).write_bytes(b"stub")
-    try:
-        _seed_machine(client, "aa:bb:cc:dd:ee:36", "pixie-inventory")
-        # Empty env -> no extra tokens injected.
-        monkeypatch.setenv("PIXIE_LIVE_ENV_EXTRA_CMDLINE", "")
-        body = client.get("/pxe/aa:bb:cc:dd:ee:36").text
-        assert "pci=nommconf" not in body
-        # With env -> tokens appended to the kernel line, still one
-        # line, still after the pixie.mac= / bty.mac= tail so a
-        # workaround token can't accidentally shadow a pixie.* knob.
-        monkeypatch.setenv(
-            "PIXIE_LIVE_ENV_EXTRA_CMDLINE", "pci=nommconf amd_iommu=off pcie_aspm=off"
-        )
-        body = client.get("/pxe/aa:bb:cc:dd:ee:36").text
-        # Find the kernel line (one line, starts with "kernel ").
-        kernel_line = next(line for line in body.splitlines() if line.startswith("kernel "))
-        assert "pci=nommconf" in kernel_line
-        assert "amd_iommu=off" in kernel_line
-        assert "pcie_aspm=off" in kernel_line
-        # Tokens land AFTER the bty.mac= tail (last-token-wins for
-        # any kernel parameter conflict, so an operator override
-        # takes effect).
-        idx_bty = kernel_line.index("bty.mac=")
-        idx_nommconf = kernel_line.index("pci=nommconf")
-        assert idx_nommconf > idx_bty
-    finally:
-        for name in ("vmlinuz", "initrd", "live.squashfs"):
-            (live_env / name).unlink(missing_ok=True)
+    assert "boot=nbdboot" not in body
 
 
 def _stage_live_env_image(client: TestClient, live_env_sha: str, bundle_sha: str) -> None:
@@ -424,27 +330,38 @@ def test_ipxe_plan_live_env_image_renders_nbdboot(
     assert client.get("/pxe/aa:bb:cc:dd:ee:40/plan").json() == {"mode": "inventory"}
 
 
-def test_ipxe_plan_live_env_image_unset_keeps_squashfs(
+def test_ipxe_plan_live_env_appends_extra_cmdline(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """With PIXIE_LIVE_ENV_IMAGE_SHA unset, staged live-env media still
-    renders the historical Debian live-boot squashfs chain -- the new
-    setting is strictly opt-in and does not disturb existing deploys."""
-    monkeypatch.delenv("PIXIE_LIVE_ENV_IMAGE_SHA", raising=False)
-    live_env = client.app.state.live_env_dir  # type: ignore[attr-defined]
-    assert isinstance(live_env, Path)
-    live_env.mkdir(parents=True, exist_ok=True)
-    for name in ("vmlinuz", "initrd", "live.squashfs"):
-        (live_env / name).write_bytes(b"stub")
-    try:
-        _seed_machine(client, "aa:bb:cc:dd:ee:41", "pixie-inventory")
-        body = client.get("/pxe/aa:bb:cc:dd:ee:41").text
-        assert "boot=live" in body
-        assert "/boot/pixie-live-env/live.squashfs" in body
-        assert "boot=nbdboot" not in body
-    finally:
-        for name in ("vmlinuz", "initrd", "live.squashfs"):
-            (live_env / name).unlink(missing_ok=True)
+    """PIXIE_LIVE_ENV_EXTRA_CMDLINE lets an operator pin hardware
+    workarounds (e.g. pci=nommconf for the GIGABYTE MC12-LE0's Intel
+    i210 NICs) without rebaking the live-env image. The tokens land on
+    the live-env nbdboot kernel line verbatim, after the pixie.mac= /
+    bty.mac= tail (last-token-wins); an empty env is a legal no-op."""
+    live_env_sha = "e" * 64
+    bundle_sha = "f" * 64
+    _authed(client)
+    _stage_live_env_image(client, live_env_sha, bundle_sha)
+    monkeypatch.setattr(
+        client.app.state.nbd_server,  # type: ignore[attr-defined]
+        "spawn",
+        lambda name, blob: 10820,
+    )
+    monkeypatch.setenv("PIXIE_LIVE_ENV_IMAGE_SHA", live_env_sha)
+    _seed_machine(client, "aa:bb:cc:dd:ee:36", "pixie-inventory")
+    # Empty extra-cmdline env -> no extra tokens injected.
+    monkeypatch.setenv("PIXIE_LIVE_ENV_EXTRA_CMDLINE", "")
+    body = client.get("/pxe/aa:bb:cc:dd:ee:36").text
+    assert "pci=nommconf" not in body
+    # With env -> tokens appended to the kernel line, still one line.
+    monkeypatch.setenv("PIXIE_LIVE_ENV_EXTRA_CMDLINE", "pci=nommconf amd_iommu=off pcie_aspm=off")
+    body = client.get("/pxe/aa:bb:cc:dd:ee:36").text
+    kernel_line = next(line for line in body.splitlines() if line.startswith("kernel "))
+    assert "pci=nommconf" in kernel_line
+    assert "amd_iommu=off" in kernel_line
+    assert "pcie_aspm=off" in kernel_line
+    # Tokens land AFTER the bty.mac= tail (last-token-wins).
+    assert kernel_line.index("pci=nommconf") > kernel_line.index("bty.mac=")
 
 
 def test_ipxe_plan_live_env_image_configured_but_missing_degrades(
@@ -452,27 +369,17 @@ def test_ipxe_plan_live_env_image_configured_but_missing_degrades(
 ) -> None:
     """When PIXIE_LIVE_ENV_IMAGE_SHA names an image whose bundle/blob is
     NOT fetched, the live-env modes degrade to the readable unavailable
-    plan (matching how nbdboot degrades) rather than silently falling
-    back to the squashfs -- a configured-but-broken live env is an
-    operator error worth surfacing. Staged squashfs media present to
-    prove the fallback does NOT mask the misconfiguration."""
+    plan (matching how nbdboot degrades) rather than booting nothing --
+    a configured-but-broken live env is an operator error worth
+    surfacing."""
     live_env_sha = "1" * 64
     monkeypatch.setenv("PIXIE_LIVE_ENV_IMAGE_SHA", live_env_sha)
-    live_env = client.app.state.live_env_dir  # type: ignore[attr-defined]
-    assert isinstance(live_env, Path)
-    live_env.mkdir(parents=True, exist_ok=True)
-    for name in ("vmlinuz", "initrd", "live.squashfs"):
-        (live_env / name).write_bytes(b"stub")
-    try:
-        _seed_machine(client, "aa:bb:cc:dd:ee:42", "pixie-inventory")
-        body = client.get("/pxe/aa:bb:cc:dd:ee:42").text
-        assert "exit" in body
-        assert "live-env image" in body
-        assert "boot=live" not in body
-        assert "boot=nbdboot" not in body
-    finally:
-        for name in ("vmlinuz", "initrd", "live.squashfs"):
-            (live_env / name).unlink(missing_ok=True)
+    _seed_machine(client, "aa:bb:cc:dd:ee:42", "pixie-inventory")
+    body = client.get("/pxe/aa:bb:cc:dd:ee:42").text
+    assert "exit" in body
+    assert "live-env image" in body
+    assert "boot=live" not in body
+    assert "boot=nbdboot" not in body
 
 
 def test_pxe_first_contact_emits_machine_discovered_once(client: TestClient) -> None:

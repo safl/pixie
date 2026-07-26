@@ -55,8 +55,6 @@ from pixie.events._kinds import (
     CATALOG_IMPORT_OK,
     EVENTS_CLEARED,
     EXPORT_NBDKIT_SPAWNED,
-    LIVE_ENV_FETCH_DONE,
-    LIVE_ENV_FETCH_FAILED,
     TFTP_STARTED,
     TFTP_STOPPED,
 )
@@ -83,12 +81,10 @@ from pixie.web._auth import (
     using_default_password,
 )
 from pixie.web._settings_store import (
-    DEFAULT_LIVE_ENV_SRC,
     KEY_DATETIME_FORMAT,
     KEY_DISPLAY_TZ,
     KEY_LIVE_ENV_EXTRA_CMDLINE,
     KEY_LIVE_ENV_IMAGE_SHA,
-    KEY_LIVE_ENV_SRC,
     SettingsStore,
     SettingValueError,
     format_ts,
@@ -101,7 +97,6 @@ _STATIC_DIR = _HERE / "_static"
 
 DEFAULT_STATE_DIR = Path("/var/lib/pixie")
 STATE_DIR_ENV = "PIXIE_DATA_DIR"
-LIVE_ENV_DIR_ENV = "PIXIE_LIVE_ENV_DIR"
 FETCH_POOL_SIZE_ENV = "PIXIE_FETCH_POOL_SIZE"
 DEFAULT_FETCH_POOL_SIZE = 4
 
@@ -169,24 +164,6 @@ def _resolve_tftp_root() -> Path:
 
 def _resolve_tftp_bin() -> str:
     return (os.environ.get(TFTP_BIN_ENV) or "").strip() or DEFAULT_TFTP_BIN
-
-
-def _resolve_live_env_dir() -> Path | None:
-    """Directory holding the pixie netboot-pc bake artifacts
-    (vmlinuz + initrd + squashfs). Default: ``<state_dir>/live-env``.
-    Explicit override via ``PIXIE_LIVE_ENV_DIR``. Returns the resolved
-    path whether or not it exists yet -- readiness is decided per-render
-    by stat'ing the individual files, and the serving mount is created
-    with ``check_dir=False``, so a fresh deploy can stage the artifacts
-    into a running container and have them picked up without a restart."""
-    override = (os.environ.get(LIVE_ENV_DIR_ENV) or "").strip()
-    if override:
-        return Path(override)
-    # Default sits under the state dir so an operator dropping
-    # artifacts into ``/opt/pixie/data/live-env/`` on a compose
-    # deploy is the whole install step.
-    default = _resolve_state_dir() / "live-env"
-    return default
 
 
 def _resolve_default_boot_mode() -> str:
@@ -404,16 +381,6 @@ def _deployment_envvar_docs() -> list[dict[str, str]]:
             ),
         },
         {
-            "name": LIVE_ENV_DIR_ENV,
-            "default": "$PIXIE_DATA_DIR/live-env",
-            "purpose": (
-                "Where the pixie live-env vmlinuz + initrd +"
-                " live.squashfs are staged. The pixie-* boot modes"
-                " degrade to an unavailable plan when this dir is"
-                " missing or incomplete."
-            ),
-        },
-        {
             "name": "PIXIE_LIVE_ENV_EXTRA_CMDLINE",
             "default": "",
             "purpose": (
@@ -436,31 +403,17 @@ def _deployment_envvar_docs() -> list[dict[str, str]]:
             ),
         },
         {
-            "name": "PIXIE_LIVE_ENV_SRC",
-            "default": (
-                "https://github.com/safl/pixie/releases/latest/download/"
-                "pixie-live-env-x86_64.tar.gz"
-            ),
-            "purpose": (
-                "Tarball the dashboard 'Fetch live-env' action pulls the"
-                " netboot-pc bake from (https:// or oras://). Defaults to"
-                " the latest pixie GitHub release; point at a mirror for"
-                " air-gapped deploys. Live-editable override on the"
-                " Live env page."
-            ),
-        },
-        {
             "name": "PIXIE_LIVE_ENV_IMAGE_SHA",
             "default": "",
             "purpose": (
                 "Disk-image content sha (64 hex) the live-env boot modes"
-                " boot over EPHEMERAL nbdboot instead of the Debian"
-                " live-boot squashfs. When set (and the image + its"
-                " netboot bundle are fetched) the pixie-inventory / -tui /"
-                " -flash-* modes stream this image over NBD -- dracut"
-                " brings the NIC up where the squashfs live-boot hangs on"
-                " some boards. Empty keeps the squashfs path. Live-editable"
-                " override on the Live env page."
+                " boot over EPHEMERAL nbdboot. When set (and the image +"
+                " its netboot bundle are fetched) the pixie-inventory /"
+                " -tui / -flash-* modes stream this image over NBD --"
+                " dracut brings the NIC up where the retired squashfs"
+                " live-boot hung on some boards. Empty means those modes"
+                " degrade to the unavailable plan. Live-editable override"
+                " on the Live env page."
             ),
         },
         {
@@ -769,7 +722,6 @@ def create_app() -> FastAPI:
         bind=_resolve_nbd_bind(),
         nbdkit_bin=_resolve_nbdkit_bin(),
     )
-    app.state.live_env_dir = _resolve_live_env_dir()
     app.state.default_boot_mode = _resolve_default_boot_mode()
     # Root for per-machine qcow2 overlay files. Sub-directory under
     # the state dir so a single ``PIXIE_DATA_DIR`` override still
@@ -783,7 +735,6 @@ def create_app() -> FastAPI:
         overlays=app.state.overlays_store,
         nbd=app.state.nbd_server,
         overlays_dir=app.state.overlays_dir,
-        live_env_dir=app.state.live_env_dir,
         events=app.state.events_log,
     )
     app.state.tftp_server = (
@@ -801,11 +752,6 @@ def create_app() -> FastAPI:
         thread_name_prefix="pixie-fetch",
     )
     app.state.fetch_states = {}
-    # Single-slot progress dict for the operator "Fetch live-env"
-    # action (there is one live env per pixie, not one per resource).
-    # Shape mirrors a fetch_states entry: state -> fetching / done /
-    # error, plus phase + byte counters while the download runs.
-    app.state.live_env_fetch_state = {}
 
     # SessionMiddleware signs the ``pixie-token`` cookie. Sliding TTL:
     # 7 days from last touch. ``https_only=False`` because pixie is
@@ -845,28 +791,6 @@ def create_app() -> FastAPI:
     templates.env.filters["humanize_hz"] = humanize_hz
     if _STATIC_DIR.is_dir():
         app.mount("/static", StaticFiles(directory=str(_STATIC_DIR)), name="static")
-    # Serve the netboot-pc bake artifacts (vmlinuz + initrd + squashfs)
-    # under ``/boot/pixie-live-env/`` so the live-env iPXE chain can
-    # fetch them. Mounted UNCONDITIONALLY with ``check_dir=False``: on a
-    # fresh deploy the dir doesn't exist at startup (the operator stages
-    # it later via "Fetch live env"), and StaticFiles resolves each
-    # request against the directory live -- so a post-startup fetch is
-    # served without a pixie restart. Guarding the mount on ``is_dir()``
-    # at startup was a bug: the renderer would emit a plan pointing at
-    # ``/boot/pixie-live-env/vmlinuz`` that then 404'd until a restart.
-    if app.state.live_env_dir is not None:
-        # Create the dir so StaticFiles serves a clean 404 for a
-        # not-yet-staged file (an empty/absent dir would otherwise raise
-        # at request time) and picks up a later "Fetch live env" with no
-        # restart. ``check_dir=False`` keeps app startup resilient if the
-        # mkdir is somehow refused.
-        with contextlib_suppress(OSError):
-            app.state.live_env_dir.mkdir(parents=True, exist_ok=True)
-        app.mount(
-            "/boot/pixie-live-env",
-            StaticFiles(directory=str(app.state.live_env_dir), check_dir=False),
-            name="live-env",
-        )
 
     # ---------- exception handlers -----------------------------------
 
@@ -1813,28 +1737,17 @@ def create_app() -> FastAPI:
                 overlays=overlays_store, machines=machines_store, catalog=catalog, nbd=nbd
             )
         )
-        # Live-env media state. ``pixie-tui`` / ``pixie-inventory`` /
-        # ``pixie-flash-*`` all need vmlinuz + initrd + live.squashfs
-        # staged under ``PIXIE_LIVE_ENV_DIR`` (defaults to
-        # ``<state>/live-env``). Surface the staged / missing signal
-        # + per-file byte counts so the operator can tell at a glance
-        # whether the pixie boot modes are live or would fall back to
-        # the "unavailable" plan.
-        live_env_dir = request.app.state.live_env_dir
-        live_env_ready = False
-        live_env_files: dict[str, int | None] = {
-            "vmlinuz": None,
-            "initrd": None,
-            "live.squashfs": None,
-        }
-        if live_env_dir is not None:
-            for name in live_env_files:
-                p = live_env_dir / name
-                try:
-                    live_env_files[name] = p.stat().st_size if p.is_file() else None
-                except OSError:
-                    live_env_files[name] = None
-            live_env_ready = all(v is not None for v in live_env_files.values())
+        # Live-env readiness. ``pixie-tui`` / ``pixie-inventory`` /
+        # ``pixie-flash-*`` boot the disk image named by
+        # ``live_env.image_sha`` (PIXIE_LIVE_ENV_IMAGE_SHA / the Live env
+        # page) over ephemeral nbdboot. Ready == a sha is selected AND
+        # its catalog image is fetched on disk; otherwise those modes
+        # degrade to the "unavailable" plan. The renderer does the full
+        # bundle+blob check at boot; this is the at-a-glance signal.
+        live_env_image_sha = request.app.state.settings_store.resolve_live_env_image_sha()
+        live_env_ready = bool(live_env_image_sha) and any(
+            e.content_sha256 == live_env_image_sha for e in images if e.content_sha256
+        )
         # Events summary: total row count + unacknowledged error
         # count + newest ts. ``events_ack_ts`` is a soft cursor an
         # operator advances by hitting Acknowledge on the dashboard;
@@ -1870,10 +1783,7 @@ def create_app() -> FastAPI:
             "events_last_ts": events_stats["last_ts"],
             "events_ack_ts": events_ack_ts,
             "live_env_ready": live_env_ready,
-            "live_env_dir": str(live_env_dir) if live_env_dir is not None else "",
-            "live_env_files": live_env_files,
-            "live_env_src": request.app.state.settings_store.resolve_live_env_src(),
-            "live_env_fetch_state": dict(request.app.state.live_env_fetch_state),
+            "live_env_image_sha": live_env_image_sha,
         }
 
     @app.get("/ui/dashboard-live.json")
@@ -2529,35 +2439,15 @@ def create_app() -> FastAPI:
         return RedirectResponse(url="/ui/settings", status_code=status.HTTP_303_SEE_OTHER)
 
     def _live_env_context(request: Request, flash_error: str | None = None) -> dict[str, Any]:
-        """Render context for the dedicated /ui/live-env pane: staged
-        media state (ready + per-file sizes), the fetch source + extra
-        cmdline overrides (with provenance), and any in-flight fetch."""
+        """Render context for the dedicated /ui/live-env pane: the
+        selected live-env disk image (nbdboot), plus the extra-cmdline
+        override, each with provenance."""
         state = request.app.state
         store: SettingsStore = state.settings_store
-        live_env_dir = state.live_env_dir
-        files: dict[str, int | None] = {"vmlinuz": None, "initrd": None, "live.squashfs": None}
-        if live_env_dir is not None:
-            for name in files:
-                p = live_env_dir / name
-                try:
-                    files[name] = p.stat().st_size if p.is_file() else None
-                except OSError:
-                    files[name] = None
         return {
             "version": pixie.__version__,
             "authed": True,
             "page": "live-env",
-            "live_env_ready": all(v is not None for v in files.values()),
-            "live_env_dir": str(live_env_dir) if live_env_dir is not None else "",
-            "live_env_files": files,
-            "live_env_fetch_state": dict(state.live_env_fetch_state),
-            "live_env_src": {
-                "override": store.get(KEY_LIVE_ENV_SRC) or "",
-                "effective": store.resolve_live_env_src(),
-                "default": DEFAULT_LIVE_ENV_SRC,
-                "env": "PIXIE_LIVE_ENV_SRC",
-                "updated_at": store.updated_at(KEY_LIVE_ENV_SRC) or "",
-            },
             "live_env_extra_cmdline": {
                 "override": store.get(KEY_LIVE_ENV_EXTRA_CMDLINE) or "",
                 "effective": store.resolve_live_env_extra_cmdline(),
@@ -2615,23 +2505,6 @@ def create_app() -> FastAPI:
             store.clear(KEY_LIVE_ENV_EXTRA_CMDLINE)
         return RedirectResponse(url="/ui/live-env", status_code=status.HTTP_303_SEE_OTHER)
 
-    @app.post("/ui/live-env/src/edit", response_model=None)
-    def ui_live_env_src_edit(
-        request: Request,
-        live_env_src: str = Form(""),
-        _auth: None = Depends(_require_ui_auth),
-    ) -> RedirectResponse:
-        """Persist the live-env fetch-src override. Blank clears it so
-        the value falls back to $PIXIE_LIVE_ENV_SRC then the default
-        GitHub-release URL."""
-        store: SettingsStore = request.app.state.settings_store
-        raw = (live_env_src or "").strip()
-        if raw:
-            store.set_value(KEY_LIVE_ENV_SRC, raw)
-        else:
-            store.clear(KEY_LIVE_ENV_SRC)
-        return RedirectResponse(url="/ui/live-env", status_code=status.HTTP_303_SEE_OTHER)
-
     @app.post("/ui/live-env/image/edit", response_model=None)
     def ui_live_env_image_edit(
         request: Request,
@@ -2640,12 +2513,12 @@ def create_app() -> FastAPI:
     ) -> HTMLResponse | RedirectResponse:
         """Persist the live-env disk-image content sha. When set (and the
         image + its netboot bundle are fetched) the live-env boot modes
-        nbdboot this image ephemerally instead of fetching the squashfs.
-        Blank clears the override so the value falls back to
-        $PIXIE_LIVE_ENV_IMAGE_SHA then empty (the squashfs path). Rejects
-        anything that is not 64 lowercase hex chars so a fat-fingered sha
-        doesn't quietly send every live-env boot into the unavailable
-        plan."""
+        nbdboot this image ephemerally. Blank clears the override so the
+        value falls back to $PIXIE_LIVE_ENV_IMAGE_SHA then empty, in
+        which case the live-env boot modes degrade to the unavailable
+        plan. Rejects anything that is not 64 lowercase hex chars so a
+        fat-fingered sha doesn't quietly send every live-env boot into
+        the unavailable plan."""
         import re as _re
 
         store: SettingsStore = request.app.state.settings_store
@@ -2667,69 +2540,6 @@ def create_app() -> FastAPI:
             store.set_value(KEY_LIVE_ENV_IMAGE_SHA, raw)
         else:
             store.clear(KEY_LIVE_ENV_IMAGE_SHA)
-        return RedirectResponse(url="/ui/live-env", status_code=status.HTTP_303_SEE_OTHER)
-
-    @app.post("/ui/live-env/fetch")
-    def ui_live_env_fetch(
-        request: Request,
-        _auth: None = Depends(_require_ui_auth),
-    ) -> RedirectResponse:
-        """Download the live-env tarball (from PIXIE_LIVE_ENV_SRC or its
-        override) and stage vmlinuz + initrd + live.squashfs under
-        PIXIE_LIVE_ENV_DIR, on the fetch pool. The in-app replacement
-        for a manual ``make build VARIANT=netboot-pc`` + copy. Progress
-        lands on ``app.state.live_env_fetch_state`` for the dashboard to
-        poll; idempotent while a fetch is already running."""
-        state = request.app.state
-        live_env_dir = state.live_env_dir
-        fs = state.live_env_fetch_state
-        if live_env_dir is None:
-            fs.clear()
-            fs.update(
-                {
-                    "state": "error",
-                    "error": "no live-env dir (PIXIE_LIVE_ENV_DIR unset or unwritable)",
-                    "at_iso": _now_iso(),
-                }
-            )
-            return RedirectResponse(url="/ui/live-env", status_code=status.HTTP_303_SEE_OTHER)
-        if fs.get("state") == "fetching":
-            return RedirectResponse(url="/ui/live-env", status_code=status.HTTP_303_SEE_OTHER)
-
-        src = state.settings_store.resolve_live_env_src()
-        fs.clear()
-        fs.update({"state": "fetching", "src": src, "phase": "starting", "at_iso": _now_iso()})
-        events = getattr(state, "events_log", None)
-
-        def _run() -> None:
-            from pixie.catalog._live_env import stage_live_env
-
-            def _report(payload: dict[str, Any]) -> None:
-                # Layer phase / byte counters onto the "fetching" pill.
-                fs.update(payload)
-
-            try:
-                result = stage_live_env(src, live_env_dir, progress=_report)
-            except Exception as exc:
-                fs.clear()
-                fs.update({"state": "error", "src": src, "error": str(exc), "at_iso": _now_iso()})
-                if events is not None:
-                    events.emit(
-                        LIVE_ENV_FETCH_FAILED,
-                        summary=f"live-env fetch failed: {exc}",
-                        details={"src": src, "error": str(exc)},
-                    )
-                return
-            fs.clear()
-            fs.update({"state": "done", "src": src, "sha256": result.sha256, "at_iso": _now_iso()})
-            if events is not None:
-                events.emit(
-                    LIVE_ENV_FETCH_DONE,
-                    summary=f"live-env staged from {src} (sha {result.sha256[:12]})",
-                    details={"src": src, "sha256": result.sha256, "bytes": result.size},
-                )
-
-        state.fetch_pool.submit(_run)
         return RedirectResponse(url="/ui/live-env", status_code=status.HTTP_303_SEE_OTHER)
 
     # ---------- feature routers --------------------------------------
