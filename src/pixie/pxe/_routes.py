@@ -80,10 +80,23 @@ def _render_context(request: Request) -> RenderContext:
     # (envvars-style pin) -> empty. Known-good values per hardware are
     # documented in docs/src/hardware-quirks.md.
     extra_cmdline = ""
+    # Disk-image content sha the live-env boot modes nbdboot ephemerally
+    # instead of fetching the Debian live-boot squashfs. Same resolution
+    # shape: /ui/live-env override (state.db) -> $PIXIE_LIVE_ENV_IMAGE_SHA
+    # -> empty (empty keeps the squashfs path). Proven on hardware; see
+    # the renderer's _render_live_env.
+    live_env_image_sha = ""
     settings = getattr(request.app.state, "settings_store", None)
     if settings is not None:
         extra_cmdline = settings.resolve_live_env_extra_cmdline()
-    return RenderContext(host=host, port=port, nbd_host=nbd_host, extra_cmdline=extra_cmdline)
+        live_env_image_sha = settings.resolve_live_env_image_sha()
+    return RenderContext(
+        host=host,
+        port=port,
+        nbd_host=nbd_host,
+        extra_cmdline=extra_cmdline,
+        live_env_image_sha=live_env_image_sha,
+    )
 
 
 @router.get("/pxe-bootstrap.ipxe", response_class=PlainTextResponse)

@@ -87,6 +87,7 @@ from pixie.web._settings_store import (
     KEY_DATETIME_FORMAT,
     KEY_DISPLAY_TZ,
     KEY_LIVE_ENV_EXTRA_CMDLINE,
+    KEY_LIVE_ENV_IMAGE_SHA,
     KEY_LIVE_ENV_SRC,
     SettingsStore,
     SettingValueError,
@@ -446,6 +447,20 @@ def _deployment_envvar_docs() -> list[dict[str, str]]:
                 " the latest pixie GitHub release; point at a mirror for"
                 " air-gapped deploys. Live-editable override on the"
                 " Live env page."
+            ),
+        },
+        {
+            "name": "PIXIE_LIVE_ENV_IMAGE_SHA",
+            "default": "",
+            "purpose": (
+                "Disk-image content sha (64 hex) the live-env boot modes"
+                " boot over EPHEMERAL nbdboot instead of the Debian"
+                " live-boot squashfs. When set (and the image + its"
+                " netboot bundle are fetched) the pixie-inventory / -tui /"
+                " -flash-* modes stream this image over NBD -- dracut"
+                " brings the NIC up where the squashfs live-boot hangs on"
+                " some boards. Empty keeps the squashfs path. Live-editable"
+                " override on the Live env page."
             ),
         },
         {
@@ -2550,6 +2565,13 @@ def create_app() -> FastAPI:
                 "env": "PIXIE_LIVE_ENV_EXTRA_CMDLINE",
                 "updated_at": store.updated_at(KEY_LIVE_ENV_EXTRA_CMDLINE) or "",
             },
+            "live_env_image_sha": {
+                "override": store.get(KEY_LIVE_ENV_IMAGE_SHA) or "",
+                "effective": store.resolve_live_env_image_sha(),
+                "default": "",
+                "env": "PIXIE_LIVE_ENV_IMAGE_SHA",
+                "updated_at": store.updated_at(KEY_LIVE_ENV_IMAGE_SHA) or "",
+            },
             "flash_error": flash_error,
         }
 
@@ -2608,6 +2630,43 @@ def create_app() -> FastAPI:
             store.set_value(KEY_LIVE_ENV_SRC, raw)
         else:
             store.clear(KEY_LIVE_ENV_SRC)
+        return RedirectResponse(url="/ui/live-env", status_code=status.HTTP_303_SEE_OTHER)
+
+    @app.post("/ui/live-env/image/edit", response_model=None)
+    def ui_live_env_image_edit(
+        request: Request,
+        live_env_image_sha: str = Form(""),
+        _auth: None = Depends(_require_ui_auth),
+    ) -> HTMLResponse | RedirectResponse:
+        """Persist the live-env disk-image content sha. When set (and the
+        image + its netboot bundle are fetched) the live-env boot modes
+        nbdboot this image ephemerally instead of fetching the squashfs.
+        Blank clears the override so the value falls back to
+        $PIXIE_LIVE_ENV_IMAGE_SHA then empty (the squashfs path). Rejects
+        anything that is not 64 lowercase hex chars so a fat-fingered sha
+        doesn't quietly send every live-env boot into the unavailable
+        plan."""
+        import re as _re
+
+        store: SettingsStore = request.app.state.settings_store
+        raw = (live_env_image_sha or "").strip().lower()
+        if raw and not _re.match(r"^[0-9a-f]{64}$", raw):
+            return templates.TemplateResponse(
+                request,
+                "live_env.html",
+                _live_env_context(
+                    request,
+                    flash_error=(
+                        "Live-env image sha must be 64 hex chars "
+                        "(a fetched disk-image's content_sha256)."
+                    ),
+                ),
+                status_code=400,
+            )
+        if raw:
+            store.set_value(KEY_LIVE_ENV_IMAGE_SHA, raw)
+        else:
+            store.clear(KEY_LIVE_ENV_IMAGE_SHA)
         return RedirectResponse(url="/ui/live-env", status_code=status.HTTP_303_SEE_OTHER)
 
     @app.post("/ui/live-env/fetch")

@@ -158,6 +158,42 @@
                 </span>
             </div>
         </form>
+
+        <hr class="my-4">
+
+        <form method="post" action="/ui/live-env/image/edit" class="row g-3">
+            <div class="col-12">
+                <label for="live_env_image_sha" class="form-label">
+                    Boot live env as disk image (nbdboot)
+                    <span class="badge text-bg-{% if live_env_image_sha.override %}primary{% else %}secondary{% endif %} ms-1">
+                        {% if live_env_image_sha.override %}override{% elif live_env_image_sha.effective %}env{% else %}default{% endif %}
+                    </span>
+                </label>
+                <input type="text" id="live_env_image_sha" name="live_env_image_sha"
+                       class="form-control font-monospace"
+                       value="{{ live_env_image_sha.override }}"
+                       placeholder="(unset - use the live-boot squashfs above)"
+                       pattern="[0-9a-fA-F]{64}">
+                <div class="form-text">
+                    A fetched disk-image's <code>content_sha256</code> (64 hex). When set - and that
+                    image plus its netboot bundle are fetched - the <code>pixie-inventory</code> /
+                    <code>pixie-tui</code> / <code>pixie-flash-*</code> modes boot it over
+                    <strong>ephemeral nbdboot</strong> instead of fetching the squashfs. dracut brings
+                    the NIC up where the live-boot squashfs hangs in the initramfs on some boards; the
+                    on-target pixie CLI still phones home so inventory / flash work unchanged. Blank
+                    falls back to <code>{{ live_env_image_sha.env }}</code> then the squashfs path.
+                    Effective:
+                    {% if live_env_image_sha.effective %}<code>{{ live_env_image_sha.effective }}</code>{% else %}<em class="text-muted">(none - squashfs)</em>{% endif %}.
+                    {% if live_env_image_sha.updated_at %}<br>Last updated: <code>{{ live_env_image_sha.updated_at | fmt_ts }}</code>.{% endif %}
+                </div>
+            </div>
+            <div class="col-12">
+                <button type="submit" class="btn btn-primary"><i class="bi bi-check2 me-1"></i>Save</button>
+                <span class="text-muted small ms-2">
+                    Takes effect on the NEXT <code>GET /pxe/&lt;mac&gt;</code>; a target already mid-boot must be power-cycled.
+                </span>
+            </div>
+        </form>
     </div>
 </div>
 

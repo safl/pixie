@@ -349,6 +349,132 @@ def test_ipxe_plan_live_env_appends_extra_cmdline(
             (live_env / name).unlink(missing_ok=True)
 
 
+def _stage_live_env_image(client: TestClient, live_env_sha: str, bundle_sha: str) -> None:
+    """Set up the on-disk state the nbdboot renderer needs for a
+    configured live-env image: a fetched disk-image catalog entry whose
+    ``netboot_src`` points at a fetched netboot-bundle entry, the
+    unpacked bundle manifest under artifacts/, and the disk-image blob.
+    Mirrors what the fetch pipeline lands so the renderer's resolution +
+    on-disk checks pass."""
+    from pixie.catalog._schema import CatalogEntry
+
+    catalog = client.app.state.catalog_store  # type: ignore[attr-defined]
+    bundle_src = "oras://x/pixie-live-env-bundle:latest"
+    catalog.upsert(CatalogEntry(name="pixie-live-env bundle", src=bundle_src, format="tar.gz"))
+    catalog.mark_fetched("pixie-live-env bundle", content_sha256=bundle_sha, size_bytes=10)
+    catalog.upsert(
+        CatalogEntry(
+            name="pixie-live-env image",
+            src="https://x/pixie-live-env.img",
+            format="img",
+            netboot_src=bundle_src,
+        )
+    )
+    catalog.mark_fetched("pixie-live-env image", content_sha256=live_env_sha, size_bytes=20)
+    # Unpacked bundle manifest + disk-image blob the renderer stats.
+    art = catalog.artifact_dir(bundle_sha)
+    art.mkdir(parents=True, exist_ok=True)
+    (art / "manifest.json").write_text("{}")
+    blob = catalog.blob_path(live_env_sha)
+    blob.parent.mkdir(parents=True, exist_ok=True)
+    blob.write_bytes(b"pixie-live-env-disk-image")
+
+
+def test_ipxe_plan_live_env_image_renders_nbdboot(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """With PIXIE_LIVE_ENV_IMAGE_SHA set + the image + its netboot bundle
+    fetched, a pixie-inventory machine renders an EPHEMERAL nbdboot plan
+    (boot=nbdboot, pixie.nbd=, the live-env image's own kernel/initrd,
+    pixie.server/pixie.mac so the on-target CLI phones home) instead of
+    the Debian live-boot squashfs chain. The machine's bound mode still
+    drives GET /pxe/<mac>/plan, so the CLI's dispatch is unchanged."""
+    live_env_sha = "e" * 64
+    bundle_sha = "f" * 64
+    _authed(client)
+    _stage_live_env_image(client, live_env_sha, bundle_sha)
+    # Avoid a real nbdkit: the ephemeral export spawn returns a fixed
+    # port. Everything else (row upsert, template render) is real.
+    monkeypatch.setattr(
+        client.app.state.nbd_server,  # type: ignore[attr-defined]
+        "spawn",
+        lambda name, blob: 10820,
+    )
+    monkeypatch.setenv("PIXIE_LIVE_ENV_IMAGE_SHA", live_env_sha)
+    _seed_machine(client, "aa:bb:cc:dd:ee:40", "pixie-inventory")
+
+    body = client.get("/pxe/aa:bb:cc:dd:ee:40").text
+    # nbdboot chain, not the squashfs live-boot chain.
+    assert "boot=nbdboot" in body
+    assert "boot=live" not in body
+    assert "fetch=" not in body
+    # NBD wiring + the live-env image's own content-addressed kernel/initrd.
+    assert "pixie.nbd=" in body
+    assert f"/artifacts/{bundle_sha}/vmlinuz" in body
+    assert f"/artifacts/{bundle_sha}/initrd" in body
+    # Inspect the actual kernel cmdline (the template carries the string
+    # "pixie.persist=1" in a comment, so check the kernel line only).
+    kernel_line = next(line for line in body.splitlines() if line.startswith("kernel "))
+    # Ephemeral: no persistent-overlay flag on the cmdline.
+    assert "pixie.persist=1" not in kernel_line
+    # Phone-home tokens the on-target pixie CLI reads.
+    assert "pixie.mac=aa:bb:cc:dd:ee:40" in kernel_line
+    assert "pixie.server=" in kernel_line
+    # The JSON plan contract the CLI dispatches on is UNCHANGED.
+    assert client.get("/pxe/aa:bb:cc:dd:ee:40/plan").json() == {"mode": "inventory"}
+
+
+def test_ipxe_plan_live_env_image_unset_keeps_squashfs(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """With PIXIE_LIVE_ENV_IMAGE_SHA unset, staged live-env media still
+    renders the historical Debian live-boot squashfs chain -- the new
+    setting is strictly opt-in and does not disturb existing deploys."""
+    monkeypatch.delenv("PIXIE_LIVE_ENV_IMAGE_SHA", raising=False)
+    live_env = client.app.state.live_env_dir  # type: ignore[attr-defined]
+    assert isinstance(live_env, Path)
+    live_env.mkdir(parents=True, exist_ok=True)
+    for name in ("vmlinuz", "initrd", "live.squashfs"):
+        (live_env / name).write_bytes(b"stub")
+    try:
+        _seed_machine(client, "aa:bb:cc:dd:ee:41", "pixie-inventory")
+        body = client.get("/pxe/aa:bb:cc:dd:ee:41").text
+        assert "boot=live" in body
+        assert "/boot/pixie-live-env/live.squashfs" in body
+        assert "boot=nbdboot" not in body
+    finally:
+        for name in ("vmlinuz", "initrd", "live.squashfs"):
+            (live_env / name).unlink(missing_ok=True)
+
+
+def test_ipxe_plan_live_env_image_configured_but_missing_degrades(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """When PIXIE_LIVE_ENV_IMAGE_SHA names an image whose bundle/blob is
+    NOT fetched, the live-env modes degrade to the readable unavailable
+    plan (matching how nbdboot degrades) rather than silently falling
+    back to the squashfs -- a configured-but-broken live env is an
+    operator error worth surfacing. Staged squashfs media present to
+    prove the fallback does NOT mask the misconfiguration."""
+    live_env_sha = "1" * 64
+    monkeypatch.setenv("PIXIE_LIVE_ENV_IMAGE_SHA", live_env_sha)
+    live_env = client.app.state.live_env_dir  # type: ignore[attr-defined]
+    assert isinstance(live_env, Path)
+    live_env.mkdir(parents=True, exist_ok=True)
+    for name in ("vmlinuz", "initrd", "live.squashfs"):
+        (live_env / name).write_bytes(b"stub")
+    try:
+        _seed_machine(client, "aa:bb:cc:dd:ee:42", "pixie-inventory")
+        body = client.get("/pxe/aa:bb:cc:dd:ee:42").text
+        assert "exit" in body
+        assert "live-env image" in body
+        assert "boot=live" not in body
+        assert "boot=nbdboot" not in body
+    finally:
+        for name in ("vmlinuz", "initrd", "live.squashfs"):
+            (live_env / name).unlink(missing_ok=True)
+
+
 def test_pxe_first_contact_emits_machine_discovered_once(client: TestClient) -> None:
     """First GET /pxe/<mac> for an unknown MAC auto-registers it and
     emits ``machine.discovered`` exactly once; subsequent hits update

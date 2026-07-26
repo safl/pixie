@@ -86,6 +86,23 @@ DEFAULT_LIVE_ENV_SRC = (
     "https://github.com/safl/pixie/releases/latest/download/pixie-live-env-x86_64.tar.gz"
 )
 
+# Disk-image content sha the live-env boot modes
+# (pixie-inventory / -tui / -flash-once / -flash-always) boot over
+# EPHEMERAL nbdboot instead of the Debian live-boot squashfs. When set
+# (and the named image + its netboot bundle are fetched) the renderer
+# streams this image over NBD -- proven on hardware to bring the NIC up
+# via dracut where the squashfs live-boot hangs in the initramfs on some
+# boards. Empty (the default) keeps the historical squashfs path so
+# existing deploys are untouched. Resolution: DB override -> env ->
+# empty. A value that is not 64 lowercase hex chars is treated as unset
+# so a fat-fingered setting degrades to the squashfs path rather than
+# sending every live-env boot into the unavailable plan.
+KEY_LIVE_ENV_IMAGE_SHA = "live_env.image_sha"
+ENV_LIVE_ENV_IMAGE_SHA = "PIXIE_LIVE_ENV_IMAGE_SHA"
+
+# 64 lowercase hex chars: a catalog entry's ``content_sha256``.
+_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+
 
 class SettingValueError(ValueError):
     """A stored override failed validation at resolve time. The
@@ -209,6 +226,29 @@ class SettingsStore:
             or (os.environ.get(ENV_LIVE_ENV_SRC) or "").strip()
             or DEFAULT_LIVE_ENV_SRC
         )
+
+    def resolve_live_env_image_sha(self) -> str:
+        """Effective live-env disk-image content sha: DB override -> env
+        -> empty.
+
+        When non-empty (and the named image + its netboot bundle are
+        fetched) the live-env boot modes nbdboot this image ephemerally
+        instead of fetching the Debian live-boot squashfs. Empty is the
+        default and keeps the squashfs path, so an existing deploy that
+        never sets this is untouched.
+
+        A value that is not 64 lowercase hex chars is treated as unset:
+        the renderer then falls back to the squashfs path rather than
+        degrading every live-env boot to the unavailable plan. The
+        Settings / Live env form validates the shape at set time, so a
+        bad value can only reach here from a stray env-var."""
+        override = self.get(KEY_LIVE_ENV_IMAGE_SHA)
+        if override and _SHA256_RE.match(override.strip()):
+            return override.strip()
+        env = (os.environ.get(ENV_LIVE_ENV_IMAGE_SHA) or "").strip()
+        if env and _SHA256_RE.match(env):
+            return env
+        return ""
 
 
 def parse_iso_utc(raw: str) -> datetime | None:
