@@ -1,67 +1,45 @@
 # Quickstart
 
-This walks through a first pixie deploy: install, bring the container
-up, point DHCP at it, and boot a first target.
-
-## Run the deploy generator (no install)
-
-The `pixie-lab` commands (`init` / `deploy` / `purge`) are one-off
-admin tasks, so run them ephemerally with `uv` instead of installing
-anything:
-
-```
-uv tool run pixie-lab init
-```
-
-`uv tool run pixie-lab` fetches the distribution into a temporary
-isolated environment, runs the command, and leaves nothing behind: no
-system Python pollution, nothing to uninstall. Every command below is
-invoked the same way. (If you would rather keep it around, `uv tool
-install pixie-lab` installs the `pixie-lab` command persistently.)
-
-The distribution ships two console-scripts: `pixie-lab` (the deploy
-generator you run here) and `pixie` (the operator TUI baked into the
-pixie live env; targets run it after booting the live env, operators
-don't call it on their workstation).
-
-## Generate the deploy bundle
-
-```
-mkdir /opt/pixie && cd /opt/pixie
-uv tool run pixie-lab init
-${EDITOR:-vi} envvars     # set PIXIE_HOST_ADDR + PIXIE_ADMIN_PASSWORD
-```
-
-`uv tool run pixie-lab init` writes `compose.yml`, `envvars` (with placeholder
-values), and `envvars.example` into the current directory. Edit
-`envvars` to point pixie at your LAN address and set a real admin
-password.
+Bring pixie up, point DHCP at it, and boot a first target.
 
 ## Bring pixie up
 
+One command. It generates the config, starts the container, and waits
+until pixie answers healthy:
+
 ```
-podman compose --env-file envvars up -d
-curl http://<PIXIE_HOST_ADDR>:8080/healthz
+uv tool run pixie-lab deploy /opt/pixie --host-addr <LAN-IP>
 ```
 
-The compose file runs pixie under `network_mode: host` so udp/69
-(TFTP) plus the NBD port range plus tcp/8080 (HTTP) all reach the
-LAN without publish gymnastics.
+`uv tool run` fetches `pixie-lab` into a throwaway environment (nothing
+to install or leave behind). `deploy` writes `compose.yml` + `envvars`
+into `/opt/pixie`, brings the stack up under `network_mode: host` (so
+TFTP + the NBD range + HTTP all reach the LAN), waits on `/healthz`, and
+prints the admin password it generated. The only default you usually
+set is `--host-addr` (otherwise auto-detected); override the rest with
+`--admin-password` / `--image` as needed.
 
-For a fresh lab machine you can collapse the generate + edit + up steps
-above into one command -- `uv tool run pixie-lab deploy /opt/pixie`
-runs `init`, auto-fills `envvars` (host address detected, admin
-password generated), brings the stack up, and waits on `/healthz`.
-Every flag has a default; override with `--host-addr`, `--admin-password`,
-`--image`. See [Tear it down](#tear-it-down).
+Host prerequisite: podman + a compose provider. Then log in at
+`http://<LAN-IP>:8080/`.
 
-## Point DHCP at pixie
+> Prefer to review the generated files first? `uv tool run pixie-lab
+> init /opt/pixie` writes the same `compose.yml` + `envvars` without
+> starting anything; edit `envvars` (`PIXIE_HOST_ADDR` +
+> `PIXIE_ADMIN_PASSWORD`), then `cd /opt/pixie && podman compose
+> --env-file envvars up -d`.
+
+## Usage
+
+pixie is up; the rest is day-to-day operation. Point DHCP at it once,
+then drive everything from the web UI at `http://<LAN-IP>:8080/`.
+
+### Point DHCP at pixie
 
 Set your DHCP server to chain PXE targets through pixie's TFTP and
 iPXE bootstrap. See [](deployment.md#dhcp-handoff) for BIOS + UEFI
 dnsmasq recipes.
 
-## Add a first catalog entry
+### Add a catalog entry
 
 Open `http://<PIXIE_HOST_ADDR>:8080/ui/catalog` in a browser, log in
 with your admin password, and add a catalog entry with a source URL.
@@ -69,7 +47,7 @@ Hit Fetch. Pixie pulls the bytes to disk (and for `img.gz` / `img.zst`
 inputs, decompresses on the way in). The row flips to `fetched` when
 the pipeline lands.
 
-## Select the live env
+### Select the live env
 
 The `pixie-inventory`, `pixie-tui`, and `pixie-flash-*` boot modes boot
 the `pixie-live-env` disk image (the operator TUI + CLI baked in) over
@@ -82,7 +60,7 @@ selected, those boot modes render an `unavailable` plan. See
 [](deployment.md#select-the-live-env) for detail and the air-gapped
 path.
 
-## Bind a machine
+### Bind a machine
 
 Once a target has PXEd at least once, it appears on `/ui/machines`.
 Click its MAC to open the machine detail page. Pick a boot mode from
@@ -94,24 +72,14 @@ machine to an image and, for `nbdboot`, an overlay volume.
 
 ## Tear it down
 
-`uv tool run pixie-lab purge` is the inverse of the deploy. Run it from
-the deploy directory (or pass the path):
+One command, the inverse of deploy:
 
 ```
-uv tool run pixie-lab purge            # stop + remove the container only
-uv tool run pixie-lab purge --data     # also DELETE data/ (state.db, blobs, artifacts, overlays, live-env)
-uv tool run pixie-lab purge --images   # also remove the pixie container image
-uv tool run pixie-lab purge --all      # container + image + data/ + the deploy directory itself
+uv tool run pixie-lab purge /opt/pixie --all --yes
 ```
 
-Purge prints its plan and gates every variant behind a `y/N`
-confirmation; pass `--yes` to skip the prompt for scripted teardown.
-Even the plain stop is impactful: it drops every nbdkit / qemu-nbd
-export, so any target currently booted `nbdboot` off pixie loses its
-NBD root at that moment. The `--data` and `--all` deletions are
-irreversible, so the confirmation is deliberate.
-
-The single-shot `uv tool run pixie-lab deploy` is the mirror image of purge: it
-runs `init`, auto-fills `envvars`, brings the stack up, and waits on
-`/healthz` in one command, for when you don't need to hand-edit the
-generated files first.
+`--all` removes the container, its image, and `data/`. Drop `--all` to
+stop + remove the container only, or pick with `--data` / `--images`.
+Without `--yes` it prints the plan and asks first -- the `--data` /
+`--all` deletions are irreversible, and even a plain stop drops every
+live NBD export (any target booted `nbdboot` off pixie loses its root).
