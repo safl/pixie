@@ -11,6 +11,8 @@ operator-facing summary.
 
 ## [Unreleased]
 
+## [0.4.3] - 2026-07-26
+
 ### Removed
 
 **The squashfs live-env path is retired.** The live-env boot modes
