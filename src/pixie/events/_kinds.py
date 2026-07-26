@@ -196,7 +196,14 @@ EVENTS_CLEARED = "events.cleared"
 right after the wipe so the freshly-empty log still records who reset
 it and when; carries the deleted-row count in ``details``."""
 
-# ---------- live-env fetch ------------------------------------------
+# ---------- live env ------------------------------------------------
+
+LIVE_ENV_IMAGE_SELECTED = "live_env.image.selected"
+"""The one-click "Set up live env" action fetched the pixie-live-env
+image + its bundle and selected the image (set ``live_env.image_sha``).
+Carries the selected ``image_sha`` in ``details``."""
+
+
 # The canonical closed set. Every kind above is registered here; the
 # ``EventsLog.emit`` call rejects anything not in this frozenset.
 KNOWN_EVENT_KINDS: frozenset[str] = frozenset(
@@ -230,6 +237,7 @@ KNOWN_EVENT_KINDS: frozenset[str] = frozenset(
         AUTH_LOGIN_SUCCEEDED,
         AUTH_LOGIN_FAILED,
         EVENTS_CLEARED,
+        LIVE_ENV_IMAGE_SELECTED,
     }
 )
 

@@ -11,6 +11,15 @@ operator-facing summary.
 
 ## [Unreleased]
 
+### Added
+
+**One-click live-env setup.** The Live env page now has a **Set up live
+env** button that fetches the `pixie-live-env` image + its arch-headless
+netboot bundle and selects the image in a single action, with a live
+progress bar -- no more hopping to the Catalog tab, fetching two entries
+by hand, and copying a `content_sha256` onto the Live env page. The
+manual "select by content sha" form remains as an advanced override.
+
 ## [0.4.3] - 2026-07-26
 
 ### Removed
