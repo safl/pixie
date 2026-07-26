@@ -278,3 +278,58 @@ def test_resolve_extra_cmdline_ignores_unexpanded_placeholder(
     assert store.resolve_live_env_extra_cmdline() == "pci=nommconf amd_iommu=off"
     monkeypatch.setenv(ENV_LIVE_ENV_EXTRA_CMDLINE, "foo=${bar} baz")
     assert store.resolve_live_env_extra_cmdline() == "foo=${bar} baz"
+
+
+def test_live_env_image_sha_resolution(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """live_env.image_sha resolves override -> env -> empty, and a value
+    that is not 64 lowercase hex chars is treated as unset (the renderer
+    then keeps the squashfs path rather than degrading every live-env
+    boot to the unavailable plan)."""
+    from pixie.web._settings_store import KEY_LIVE_ENV_IMAGE_SHA, SettingsStore
+
+    monkeypatch.delenv("PIXIE_LIVE_ENV_IMAGE_SHA", raising=False)
+    store = SettingsStore(tmp_path / "state.db")
+    assert store.resolve_live_env_image_sha() == ""
+
+    good = "a" * 64
+    monkeypatch.setenv("PIXIE_LIVE_ENV_IMAGE_SHA", good)
+    assert store.resolve_live_env_image_sha() == good
+    # A malformed env value is ignored, not surfaced.
+    monkeypatch.setenv("PIXIE_LIVE_ENV_IMAGE_SHA", "not-a-sha")
+    assert store.resolve_live_env_image_sha() == ""
+
+    # DB override wins over a (good) env value.
+    monkeypatch.setenv("PIXIE_LIVE_ENV_IMAGE_SHA", good)
+    other = "b" * 64
+    store.set_value(KEY_LIVE_ENV_IMAGE_SHA, other)
+    assert store.resolve_live_env_image_sha() == other
+    store.clear(KEY_LIVE_ENV_IMAGE_SHA)
+    assert store.resolve_live_env_image_sha() == good
+
+
+def test_ui_live_env_image_edit_persists_and_validates(client: TestClient) -> None:
+    """POST /ui/live-env/image/edit stores a 64-hex sha, rejects a
+    malformed one with a 400 + inline error, and clears the override on
+    a blank submit."""
+    from pixie.web._settings_store import KEY_LIVE_ENV_IMAGE_SHA
+
+    c = _authed(client)
+    store = c.app.state.settings_store  # type: ignore[attr-defined]
+    sha = "c" * 64
+    r = c.post(
+        "/ui/live-env/image/edit",
+        data={"live_env_image_sha": sha},
+        follow_redirects=False,
+    )
+    assert r.status_code == 303
+    assert store.get(KEY_LIVE_ENV_IMAGE_SHA) == sha
+
+    # Malformed -> 400 + error, override unchanged.
+    bad = c.post("/ui/live-env/image/edit", data={"live_env_image_sha": "xyz"})
+    assert bad.status_code == 400
+    assert "64 hex" in bad.text
+    assert store.get(KEY_LIVE_ENV_IMAGE_SHA) == sha
+
+    # Blank clears the override.
+    c.post("/ui/live-env/image/edit", data={"live_env_image_sha": ""})
+    assert store.get(KEY_LIVE_ENV_IMAGE_SHA) is None

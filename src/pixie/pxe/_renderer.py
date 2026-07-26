@@ -90,6 +90,15 @@ class RenderContext:
     # Empty by default; the template shims it in unconditionally so
     # no-op is a legal value.
     extra_cmdline: str = ""
+    # Disk-image content sha the live-env boot modes boot over
+    # ephemeral nbdboot instead of the Debian live-boot squashfs.
+    # Operator-set via PIXIE_LIVE_ENV_IMAGE_SHA / the Live env page.
+    # Empty (default) keeps the squashfs path so existing deploys are
+    # untouched; when set, ``render`` streams this image over NBD for
+    # every LIVE_ENV_MODES machine (the machine's own bind still drives
+    # what GET /pxe/<mac>/plan returns, so the on-target CLI dispatches
+    # inventory / interactive / flash correctly).
+    live_env_image_sha: str = ""
 
 
 class PlanRenderer:
@@ -155,23 +164,7 @@ class PlanRenderer:
         if mode == "nbdboot":
             return self._render_nbdboot(machine, ctx, effective_extra)
         if mode in LIVE_ENV_MODES:
-            if not self._live_env_ready():
-                # netboot-pc bake artifacts have not been staged on
-                # this deploy yet; degrade to the readable
-                # unavailable plan so a bound target lands on a
-                # legible screen instead of a bty-media initrd.
-                return self._unavailable(
-                    machine,
-                    f"boot_mode={mode!r} needs pixie live-env media; "
-                    f"stage vmlinuz+initrd+squashfs under $PIXIE_LIVE_ENV_DIR",
-                )
-            return self._env.get_template("pixie-live-env.j2").render(
-                mac=machine.mac,
-                boot_mode=mode,
-                host=ctx.host,
-                port=ctx.port,
-                extra_cmdline=effective_extra,
-            )
+            return self._render_live_env(machine, ctx, mode, effective_extra)
         # Unknown mode: refuse loudly rather than falling through.
         return self._env.get_template("unavailable.j2").render(
             mac=machine.mac,
@@ -190,46 +183,10 @@ class PlanRenderer:
             return self._unavailable(
                 machine, "no image bound; set image_content_sha256 to a fetched entry"
             )
-
-        disk_entry = self._catalog_entry_by_sha(image_sha)
-        if disk_entry is None:
-            return self._unavailable(
-                machine,
-                f"no catalog entry with content_sha256={image_sha[:12]}; re-fetch it",
-            )
-        if not disk_entry.netboot_src:
-            return self._unavailable(
-                machine,
-                f"catalog entry {disk_entry.name!r} has no netboot_src; "
-                "advertise a sibling bundle before selecting nbdboot",
-            )
-        bundle_entry = self._catalog.get_entry_by_src(disk_entry.netboot_src)
-        if bundle_entry is None:
-            return self._unavailable(
-                machine,
-                f"netboot_src {disk_entry.netboot_src} has no catalog entry",
-            )
-        if not bundle_entry.content_sha256:
-            return self._unavailable(
-                machine,
-                f"netboot bundle {bundle_entry.name!r} not fetched yet",
-            )
-        artifact_dir = self._catalog.artifact_dir(bundle_entry.content_sha256)
-        if not (artifact_dir / "manifest.json").is_file():
-            return self._unavailable(
-                machine,
-                f"netboot bundle {bundle_entry.name!r} not unpacked "
-                f"(manifest.json missing under artifacts/{bundle_entry.content_sha256[:12]})",
-            )
-
-        # Blob for the disk image must exist too; that's what the NBD
-        # export streams over the wire.
-        blob = self._catalog.blob_path(image_sha)
-        if not blob.is_file():
-            return self._unavailable(
-                machine,
-                f"disk image {disk_entry.name!r} blob missing on disk; re-fetch it",
-            )
+        resolved = self._resolve_bundle_and_blob(image_sha)
+        if isinstance(resolved, str):
+            return self._unavailable(machine, resolved)
+        bundle_entry, blob = resolved
 
         # Persistent overlay path: if the machine's bind carries a
         # non-blank ``overlay_alias``, serve that alias's qcow2 via
@@ -299,7 +256,64 @@ class PlanRenderer:
             )
 
         # Ephemeral path: nbdkit's cow filter on the shared blob.
-        # Idempotent per name+blob.
+        # Idempotent per name+blob. Shared with the configured live-env
+        # image path (see :meth:`_render_live_env`).
+        return self._render_ephemeral_nbdboot(
+            machine, ctx, image_sha, bundle_entry, blob, extra_cmdline
+        )
+
+    def _resolve_bundle_and_blob(self, image_sha: str) -> tuple[CatalogEntry, Path] | str:
+        """Walk ``catalog[image_sha] -> netboot_src -> bundle`` and check
+        the bundle is unpacked + the disk-image blob is present on disk.
+
+        Returns ``(bundle_entry, blob_path)`` on success, or an
+        operator-readable reason string on the first missing link.
+        Shared by the machine-bound ``nbdboot`` mode and the configured
+        live-env image path so BOTH degrade to the same
+        ``unavailable`` reasons -- the live-env nbdboot is deliberately
+        the identical resolution the ``nbdboot`` mode uses, just against
+        a deploy-configured sha instead of the machine's bound one."""
+        disk_entry = self._catalog_entry_by_sha(image_sha)
+        if disk_entry is None:
+            return f"no catalog entry with content_sha256={image_sha[:12]}; re-fetch it"
+        if not disk_entry.netboot_src:
+            return (
+                f"catalog entry {disk_entry.name!r} has no netboot_src; "
+                "advertise a sibling bundle before selecting nbdboot"
+            )
+        bundle_entry = self._catalog.get_entry_by_src(disk_entry.netboot_src)
+        if bundle_entry is None:
+            return f"netboot_src {disk_entry.netboot_src} has no catalog entry"
+        if not bundle_entry.content_sha256:
+            return f"netboot bundle {bundle_entry.name!r} not fetched yet"
+        artifact_dir = self._catalog.artifact_dir(bundle_entry.content_sha256)
+        if not (artifact_dir / "manifest.json").is_file():
+            return (
+                f"netboot bundle {bundle_entry.name!r} not unpacked "
+                f"(manifest.json missing under artifacts/{bundle_entry.content_sha256[:12]})"
+            )
+        # Blob for the disk image must exist too; that's what the NBD
+        # export streams over the wire.
+        blob = self._catalog.blob_path(image_sha)
+        if not blob.is_file():
+            return f"disk image {disk_entry.name!r} blob missing on disk; re-fetch it"
+        return (bundle_entry, blob)
+
+    def _render_ephemeral_nbdboot(
+        self,
+        machine: Machine,
+        ctx: RenderContext,
+        image_sha: str,
+        bundle_entry: CatalogEntry,
+        blob: Path,
+        extra_cmdline: str,
+    ) -> str:
+        """Ensure an ephemeral nbdkit export for ``blob`` (idempotent per
+        name+blob) and render ``nbdboot.j2`` with ``persist=False`` -- an
+        overlay-on-tmpfs root, nothing persists across reboots. The
+        cmdline keeps ``pixie.server`` / ``pixie.mac`` (the template
+        always emits them) so an nbdboot'd live-env image's on-target
+        pixie CLI phones home to ``GET /pxe/<mac>/plan``."""
         export_name = _export_name_for(image_sha)
         try:
             port = self._ensure_export(export_name, image_sha, blob)
@@ -307,7 +321,6 @@ class PlanRenderer:
             return self._unavailable(
                 machine, f"nbdkit refused to start for export {export_name!r}: {exc}"
             )
-
         return self._env.get_template("nbdboot.j2").render(
             mac=machine.mac,
             host=ctx.host,
@@ -319,6 +332,61 @@ class PlanRenderer:
             overlay_size=ctx.overlay_size,
             extra_cmdline=extra_cmdline,
             persist=False,
+        )
+
+    # ---------- live-env resolution --------------------------------
+
+    def _render_live_env(
+        self, machine: Machine, ctx: RenderContext, mode: str, extra_cmdline: str
+    ) -> str:
+        """Render a plan for one of the ``LIVE_ENV_MODES``.
+
+        Two deliveries, picked by ``ctx.live_env_image_sha``
+        (PIXIE_LIVE_ENV_IMAGE_SHA / the Live env page):
+
+        * Set -> boot that disk image over EPHEMERAL nbdboot, the same
+          code path the ``nbdboot`` mode uses. Proven on hardware to
+          bring the NIC up via dracut where the squashfs live-boot
+          hangs in the initramfs on some boards. If the configured
+          image or its netboot bundle isn't fetched, degrade to
+          ``unavailable`` (matching how ``nbdboot`` degrades) rather
+          than silently falling back -- a configured-but-broken live
+          env is an operator error worth surfacing.
+        * Unset -> the historical Debian live-boot squashfs
+          (``pixie-live-env.j2``), or ``unavailable`` when the
+          netboot-pc bake artifacts have not been staged.
+
+        Either way the machine's OWN ``boot_mode`` still drives what
+        ``GET /pxe/<mac>/plan`` returns, so the on-target pixie CLI
+        dispatches inventory / interactive / flash exactly as before."""
+        live_env_sha = ctx.live_env_image_sha
+        if live_env_sha:
+            resolved = self._resolve_bundle_and_blob(live_env_sha)
+            if isinstance(resolved, str):
+                return self._unavailable(
+                    machine,
+                    f"live-env image {live_env_sha[:12]} not bootable: {resolved}",
+                )
+            bundle_entry, blob = resolved
+            return self._render_ephemeral_nbdboot(
+                machine, ctx, live_env_sha, bundle_entry, blob, extra_cmdline
+            )
+        if not self._live_env_ready():
+            # netboot-pc bake artifacts have not been staged on this
+            # deploy yet; degrade to the readable unavailable plan so a
+            # bound target lands on a legible screen instead of a
+            # bty-media initrd.
+            return self._unavailable(
+                machine,
+                f"boot_mode={mode!r} needs pixie live-env media; "
+                f"stage vmlinuz+initrd+squashfs under $PIXIE_LIVE_ENV_DIR",
+            )
+        return self._env.get_template("pixie-live-env.j2").render(
+            mac=machine.mac,
+            boot_mode=mode,
+            host=ctx.host,
+            port=ctx.port,
+            extra_cmdline=extra_cmdline,
         )
 
     def _unavailable(self, machine: Machine, reason: str) -> str:
