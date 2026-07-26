@@ -6,7 +6,8 @@
 <nav class="navbar subnav-strip" aria-label="Section sub-navigation">
     <div class="container">
         <span class="subnav-jumps d-flex align-items-center flex-wrap">
-            <a href="#image">Image</a>
+            <a href="#setup">Setup</a>
+            <a href="#advanced">Advanced</a>
             <a href="#options">Options</a>
         </span>
     </div>
@@ -14,60 +15,104 @@
 {% endblock %}
 
 {% block content %}
-{{ page_description('boombox', 'The pixie live env that the pixie-flash-once / pixie-flash-always / pixie-inventory / pixie-tui boot modes boot into. It is a fetched disk image (the pixie-live-env catalog entry) booted over ephemeral nbdboot: select it here by content sha. Until an image is selected and fetched, those boot modes fall back to an "unavailable" iPXE plan.') }}
+{% set ss = live_env_setup_state or {} %}
+{{ page_description('boombox', 'The pixie live env that the pixie-inventory / pixie-tui / pixie-flash-once / pixie-flash-always boot modes boot into: a disk image (the pixie-live-env catalog entry) booted over ephemeral nbdboot. Click Set up live env to fetch it and select it in one step; until then those boot modes render an "unavailable" plan.') }}
 
 {% if flash_error %}
 <div class="alert alert-danger py-2">{{ flash_error }}</div>
 {% endif %}
 
-{# ---- Live-env image (the nbdboot selector) ---------------------- #}
-<div class="card shadow-sm mb-4" id="image">
+{# ---- One-click setup -------------------------------------------- #}
+<div class="card shadow-sm mb-4" id="setup">
     <div class="card-header bg-light d-flex align-items-center gap-2">
-        <h2 class="h5 mb-0"><i class="bi bi-boombox me-2"></i>Live-env image</h2>
-        {% if live_env_image_sha.effective %}
-        <span class="badge text-bg-success ms-auto"><i class="bi bi-check-circle me-1"></i>selected</span>
+        <h2 class="h5 mb-0"><i class="bi bi-boombox me-2"></i>Live env</h2>
+        {% if live_env_ready %}
+        <span class="badge text-bg-success ms-auto"><i class="bi bi-check-circle me-1"></i>ready</span>
+        {% elif ss.state == 'running' %}
+        <span class="badge text-bg-info ms-auto"><span class="spinner-border spinner-border-sm me-1" role="status"></span>setting up</span>
         {% else %}
-        <span class="badge text-bg-warning ms-auto"><i class="bi bi-exclamation-triangle me-1"></i>none selected</span>
+        <span class="badge text-bg-warning ms-auto"><i class="bi bi-exclamation-triangle me-1"></i>not set up</span>
         {% endif %}
     </div>
     <div class="card-body">
+        {% if live_env_ready %}
+        <p class="small mb-3">
+            Image <code>{{ live_env_image_sha.effective[:12] }}</code> is fetched and
+            selected; the <code>pixie-inventory</code> / <code>pixie-tui</code> /
+            <code>pixie-flash-*</code> modes nbdboot it. Nothing else to do.
+        </p>
+        {% else %}
+        <p class="small mb-3">
+            One click fetches the <code>pixie-live-env</code> image (~900&nbsp;MiB) +
+            its arch-headless netboot bundle from the catalog, then selects the image.
+            No catalog hopping or sha copying. It runs on the server; you can leave
+            this page. Re-running when everything is already fetched just re-selects.
+        </p>
+        {% endif %}
+
+        {# Progress (polled live while a setup runs). #}
+        <div id="setup-progress" class="{% if ss.state != 'running' %}d-none{% endif %} mb-3">
+            <div class="d-flex align-items-center gap-2 small mb-1">
+                <span class="spinner-border spinner-border-sm" role="status"></span>
+                <span id="setup-step">Fetching {{ ss.step or 'live env' }}{% if ss.phase %} ({{ ss.phase }}){% endif %}...</span>
+            </div>
+            <div class="progress" role="progressbar" style="height: 1.1rem;">
+                <div id="setup-bar" class="progress-bar progress-bar-striped progress-bar-animated"
+                     style="width: {% if ss.total_bytes %}{{ (100 * ss.bytes_downloaded / ss.total_bytes) | round(0, 'floor') }}{% else %}100{% endif %}%"></div>
+            </div>
+        </div>
+        <div id="setup-error" class="alert alert-danger py-2 small {% if ss.state != 'error' %}d-none{% endif %}">
+            <i class="bi bi-exclamation-triangle me-1"></i><span id="setup-error-msg">{{ ss.error }}</span>
+        </div>
+
+        <form method="post" action="/ui/live-env/setup" class="m-0">
+            <button type="submit" class="btn {% if live_env_ready %}btn-outline-secondary{% else %}btn-primary{% endif %}"
+                    id="setup-btn" {% if ss.state == 'running' %}disabled{% endif %}>
+                {% if ss.state == 'running' %}
+                <span class="spinner-border spinner-border-sm me-1" role="status"></span>Setting up...
+                {% else %}
+                <i class="bi bi-boombox me-1"></i>{% if live_env_ready %}Re-run setup{% else %}Set up live env{% endif %}
+                {% endif %}
+            </button>
+            <span class="text-muted small ms-2">Fetch + select in one step.</span>
+        </form>
+    </div>
+</div>
+
+{# ---- Advanced: select by content sha ---------------------------- #}
+<div class="card shadow-sm mb-4" id="advanced">
+    <div class="card-header bg-light fw-semibold">
+        <i class="bi bi-sliders me-1"></i>Advanced: select by content sha
+    </div>
+    <div class="card-body">
         <p class="small text-muted mb-3">
-            Fetch the <code>pixie-live-env</code> image on the
-            <a href="/ui/catalog">Catalog</a> page, then paste its
-            <code>content_sha256</code> here. The
-            <code>pixie-inventory</code> / <code>pixie-tui</code> /
-            <code>pixie-flash-*</code> modes boot it over
-            <strong>ephemeral nbdboot</strong> (a RO NBD lower + tmpfs
-            overlay); dracut brings the NIC up where the retired
-            live-boot squashfs hung in the initramfs on some boards. The
-            on-target pixie CLI phones home so inventory / flash work as
-            before.
+            Manual override of what Set up above does automatically: point the live env
+            at a specific fetched image by its <code>content_sha256</code> (from its
+            <a href="/ui/catalog">Catalog</a> row). The image plus its netboot bundle
+            (via the entry's <code>netboot_src</code>) must both be fetched.
         </p>
         <form method="post" action="/ui/live-env/image/edit" class="row g-3">
             <div class="col-12">
                 <label for="live_env_image_sha" class="form-label">
                     Image content sha
                     <span class="badge text-bg-{% if live_env_image_sha.override %}primary{% else %}secondary{% endif %} ms-1">
-                        {% if live_env_image_sha.override %}override{% elif live_env_image_sha.effective %}env{% else %}default{% endif %}
+                        {% if live_env_image_sha.override %}override{% elif live_env_image_sha.effective %}env{% else %}unset{% endif %}
                     </span>
                 </label>
                 <input type="text" id="live_env_image_sha" name="live_env_image_sha"
                        class="form-control font-monospace"
                        value="{{ live_env_image_sha.override }}"
-                       placeholder="(unset - live-env modes degrade to the unavailable plan)"
+                       placeholder="(unset - live-env modes render the unavailable plan)"
                        pattern="[0-9a-fA-F]{64}">
                 <div class="form-text">
-                    A fetched disk-image's <code>content_sha256</code> (64 hex), plus its
-                    netboot bundle (via the entry's <code>netboot_src</code>), must both be
-                    fetched. Blank falls back to <code>{{ live_env_image_sha.env }}</code>
-                    then unset, in which case the live-env boot modes render the
-                    <code>unavailable</code> plan. Effective:
+                    Blank falls back to <code>{{ live_env_image_sha.env }}</code> then unset.
+                    Effective:
                     {% if live_env_image_sha.effective %}<code>{{ live_env_image_sha.effective }}</code>{% else %}<em class="text-muted">(none)</em>{% endif %}.
                     {% if live_env_image_sha.updated_at %}<br>Last updated: <code>{{ live_env_image_sha.updated_at | fmt_ts }}</code>.{% endif %}
                 </div>
             </div>
             <div class="col-12">
-                <button type="submit" class="btn btn-primary"><i class="bi bi-check2 me-1"></i>Save</button>
+                <button type="submit" class="btn btn-outline-secondary"><i class="bi bi-check2 me-1"></i>Save</button>
                 <span class="text-muted small ms-2">
                     Takes effect on the NEXT <code>GET /pxe/&lt;mac&gt;</code>; a target already mid-boot must be power-cycled.
                 </span>
@@ -79,7 +124,7 @@
 {# ---- Options (config) ------------------------------------------- #}
 <div class="card shadow-sm mb-4" id="options">
     <div class="card-header bg-light fw-semibold">
-        <i class="bi bi-sliders me-1"></i>Options
+        <i class="bi bi-gear me-1"></i>Options
     </div>
     <div class="card-body">
         <form method="post" action="/ui/live-env/cmdline/edit" class="row g-3">
@@ -99,7 +144,7 @@
                     <option value="pci=realloc=on,nocrs">
                 </datalist>
                 <div class="form-text">
-                    Tokens appended verbatim to the <code>pixie-live-env</code> kernel cmdline
+                    Tokens appended verbatim to the live-env kernel cmdline
                     (after <code>pixie.mac=</code> / <code>bty.mac=</code>, so last-token-wins on any
                     conflict). Whitespace-separated; single line. Blank falls back to
                     <code>{{ live_env_extra_cmdline.env }}</code> then no append. A machine with its own
@@ -119,4 +164,34 @@
         </form>
     </div>
 </div>
+
+{# Poll setup progress while a run is in flight; reload when it lands
+   so the ready badge + selected sha update. #}
+<script>
+(function () {
+    if ("{{ ss.state }}" !== "running") return;
+    var box = document.getElementById("setup-progress");
+    var step = document.getElementById("setup-step");
+    var bar = document.getElementById("setup-bar");
+    function poll() {
+        fetch("/ui/live-env/setup-state.json", { headers: { "Accept": "application/json" } })
+            .then(function (r) { return r.json(); })
+            .then(function (s) {
+                if (!s || s.state === "running") {
+                    if (step) step.textContent = "Fetching " + (s.step || "live env") +
+                        (s.phase ? " (" + s.phase + ")" : "") + "...";
+                    if (bar && s.total_bytes) {
+                        bar.style.width = Math.floor(100 * s.bytes_downloaded / s.total_bytes) + "%";
+                    }
+                    setTimeout(poll, 1500);
+                } else {
+                    // done or error -> reload to render the final state.
+                    location.reload();
+                }
+            })
+            .catch(function () { setTimeout(poll, 3000); });
+    }
+    setTimeout(poll, 1500);
+})();
+</script>
 {% endblock %}

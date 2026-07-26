@@ -20,7 +20,7 @@ from __future__ import annotations
 import os
 import secrets
 import tempfile
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from contextlib import suppress as contextlib_suppress
@@ -55,6 +55,7 @@ from pixie.events._kinds import (
     CATALOG_IMPORT_OK,
     EVENTS_CLEARED,
     EXPORT_NBDKIT_SPAWNED,
+    LIVE_ENV_IMAGE_SELECTED,
     TFTP_STARTED,
     TFTP_STOPPED,
 )
@@ -99,6 +100,13 @@ DEFAULT_STATE_DIR = Path("/var/lib/pixie")
 STATE_DIR_ENV = "PIXIE_DATA_DIR"
 FETCH_POOL_SIZE_ENV = "PIXIE_FETCH_POOL_SIZE"
 DEFAULT_FETCH_POOL_SIZE = 4
+
+# Catalog entry name of the pixie-live-env disk image the one-click
+# "Set up live env" action fetches + selects. Matches the bundled seed
+# catalog (and the release catalog fragment); its netboot bundle is
+# resolved from the entry's ``netboot_src``, so only the image name is
+# pinned here.
+LIVE_ENV_IMAGE_ENTRY = "pixie-live-env"
 
 # NBD supervisor knobs. In production ``--network=host`` covers the
 # bind + port range; in dev / tests operators tweak.
@@ -752,6 +760,11 @@ def create_app() -> FastAPI:
         thread_name_prefix="pixie-fetch",
     )
     app.state.fetch_states = {}
+    # Progress for the one-click "Set up live env" action (fetch the
+    # pixie-live-env image + its bundle, then select the image). One per
+    # pixie, mirrors a fetch_states entry: state running/done/error +
+    # step + the underlying fetch's phase/byte counters.
+    app.state.live_env_setup_state = {}
 
     # SessionMiddleware signs the ``pixie-token`` cookie. Sliding TTL:
     # 7 days from last touch. ``https_only=False`` because pixie is
@@ -2440,14 +2453,25 @@ def create_app() -> FastAPI:
 
     def _live_env_context(request: Request, flash_error: str | None = None) -> dict[str, Any]:
         """Render context for the dedicated /ui/live-env pane: the
-        selected live-env disk image (nbdboot), plus the extra-cmdline
-        override, each with provenance."""
+        selected live-env disk image (nbdboot), the one-click setup
+        progress, plus the extra-cmdline override."""
         state = request.app.state
         store: SettingsStore = state.settings_store
+        # Ready == an image sha is selected AND its catalog image is
+        # fetched on disk (the at-a-glance signal; the renderer does the
+        # full bundle+blob check at boot).
+        selected_sha = store.resolve_live_env_image_sha()
+        live_env_ready = bool(selected_sha) and any(
+            e.content_sha256 == selected_sha
+            for e in state.catalog_store.list_entries()
+            if getattr(e, "bindable", False) and e.content_sha256
+        )
         return {
             "version": pixie.__version__,
             "authed": True,
             "page": "live-env",
+            "live_env_ready": live_env_ready,
+            "live_env_setup_state": dict(state.live_env_setup_state),
             "live_env_extra_cmdline": {
                 "override": store.get(KEY_LIVE_ENV_EXTRA_CMDLINE) or "",
                 "effective": store.resolve_live_env_extra_cmdline(),
@@ -2541,6 +2565,114 @@ def create_app() -> FastAPI:
         else:
             store.clear(KEY_LIVE_ENV_IMAGE_SHA)
         return RedirectResponse(url="/ui/live-env", status_code=status.HTTP_303_SEE_OTHER)
+
+    @app.post("/ui/live-env/setup")
+    def ui_live_env_setup(
+        request: Request,
+        _auth: None = Depends(_require_ui_auth),
+    ) -> RedirectResponse:
+        """One-click live-env setup: fetch the ``pixie-live-env`` image +
+        its netboot bundle (from the seeded catalog), then select the
+        image (set ``live_env.image_sha``) -- the whole
+        catalog-fetch-then-copy-sha dance in a single click. Runs on the
+        fetch pool; progress lands on ``app.state.live_env_setup_state``
+        for the Live env page to poll. Idempotent: re-running when
+        everything is already fetched just re-selects the image."""
+        state = request.app.state
+        store = state.catalog_store
+        settings: SettingsStore = state.settings_store
+        setup_state = state.live_env_setup_state
+        events = getattr(state, "events_log", None)
+
+        if setup_state.get("state") == "running":
+            return RedirectResponse(url="/ui/live-env", status_code=status.HTTP_303_SEE_OTHER)
+
+        image_entry = store.get_entry(LIVE_ENV_IMAGE_ENTRY)
+        if image_entry is None:
+            setup_state.clear()
+            setup_state.update(
+                {
+                    "state": "error",
+                    "error": (
+                        f"no {LIVE_ENV_IMAGE_ENTRY!r} entry in the catalog; import the "
+                        "release catalog first (it seeds on a fresh deploy)."
+                    ),
+                    "at_iso": _now_iso(),
+                }
+            )
+            return RedirectResponse(url="/ui/live-env", status_code=status.HTTP_303_SEE_OTHER)
+        bundle_entry = (
+            store.get_entry_by_src(image_entry.netboot_src) if image_entry.netboot_src else None
+        )
+        if bundle_entry is None:
+            setup_state.clear()
+            setup_state.update(
+                {
+                    "state": "error",
+                    "error": (
+                        f"{LIVE_ENV_IMAGE_ENTRY!r} has no netboot bundle in the catalog "
+                        "(its netboot_src does not resolve)."
+                    ),
+                    "at_iso": _now_iso(),
+                }
+            )
+            return RedirectResponse(url="/ui/live-env", status_code=status.HTTP_303_SEE_OTHER)
+
+        setup_state.clear()
+        setup_state.update({"state": "running", "step": "bundle", "at_iso": _now_iso()})
+
+        def _step_report(step: str) -> Callable[[dict[str, Any]], None]:
+            def cb(payload: dict[str, Any]) -> None:
+                setup_state.update(payload)
+                setup_state["step"] = step
+                setup_state["state"] = "running"
+
+            return cb
+
+        def _run() -> None:
+            try:
+                # Bundle first (small; the render needs its unpacked
+                # kernel/initrd), then the image (the ~900 MiB leg).
+                setup_state["step"] = "bundle"
+                _fetch(bundle_entry, store, progress=_step_report("bundle"))
+                setup_state["step"] = "image"
+                img = _fetch(image_entry, store, progress=_step_report("image"))
+                settings.set_value(KEY_LIVE_ENV_IMAGE_SHA, img.content_sha256)
+                setup_state.clear()
+                setup_state.update(
+                    {
+                        "state": "done",
+                        "image_sha": img.content_sha256,
+                        "at_iso": _now_iso(),
+                    }
+                )
+                if events is not None:
+                    events.emit(
+                        LIVE_ENV_IMAGE_SELECTED,
+                        summary=(
+                            f"live env set up + selected (image sha {img.content_sha256[:12]})"
+                        ),
+                        details={"image_sha": img.content_sha256},
+                    )
+            except FetchError as exc:
+                setup_state.clear()
+                setup_state.update({"state": "error", "error": str(exc), "at_iso": _now_iso()})
+            except Exception as exc:  # pragma: no cover -- defensive
+                setup_state.clear()
+                setup_state.update(
+                    {"state": "error", "error": f"internal: {exc}", "at_iso": _now_iso()}
+                )
+
+        state.fetch_pool.submit(_run)
+        return RedirectResponse(url="/ui/live-env", status_code=status.HTTP_303_SEE_OTHER)
+
+    @app.get("/ui/live-env/setup-state.json")
+    def ui_live_env_setup_state(
+        request: Request,
+        _auth: None = Depends(_require_ui_auth),
+    ) -> JSONResponse:
+        """Poll target for the Live env page's setup progress bar."""
+        return JSONResponse(dict(request.app.state.live_env_setup_state))
 
     # ---------- feature routers --------------------------------------
     #
