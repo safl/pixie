@@ -131,6 +131,13 @@ test-pxe:
 test-pxe-nbdboot:
 	cd cijoe && cijoe tasks/test-pxe-nbdboot.yaml --monitor -c configs/test-pxe-nbdboot.toml
 
+# Consolidated live-env-modes chain: nbdboots the pixie-live-env image
+# once, then exercises pixie-inventory / -tui / -flash-once against it
+# in sequence. Needs the same host tools as test-pxe + internet for the
+# pixie-live-env release image + arch bundle + nosi flash target.
+test-pxe-live-env-modes:
+	cd cijoe && cijoe tasks/test-pxe-live-env-modes.yaml --monitor -c configs/test-pxe-live-env-modes.toml
+
 # Structural + Ventoy-boot verification of the usbboot .iso. Needs a
 # prior VARIANT=usbboot-pc bake staged under ~/system_imaging/disk/ (or
 # a downloaded pixie-usbboot-pc-x86_64 CI artifact) + qemu/KVM/OVMF +

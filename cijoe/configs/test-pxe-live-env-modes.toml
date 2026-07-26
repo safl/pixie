@@ -1,0 +1,105 @@
+# pixie consolidated live-env-modes chain test: containerized pixie +
+# a bridged QEMU client that nbdboots the pixie-live-env disk image
+# ONCE, then exercises the pixie-inventory / pixie-tui /
+# pixie-flash-once boot modes against it in sequence.
+#
+# Usage:
+#   cijoe tasks/test-pxe-live-env-modes.yaml --monitor -c configs/test-pxe-live-env-modes.toml
+#
+# Pre-conditions:
+# - podman, qemu-system-x86_64, dnsmasq, ipxe (NBPs under /usr/lib/ipxe),
+#   iproute2 on PATH; passwordless sudo (bridge/tap/dnsmasq); KVM.
+# - Internet access from the runner to github.com/safl/pixie releases
+#   (the pixie-live-env img.gz) + ghcr.io (the arch-headless netboot
+#   bundle + the nosi flash target image).
+
+[pixie]
+variant = "test-pxe-live-env-modes"
+
+[cijoe.workflow]
+fail_fast = true
+
+[test.pxe]
+mode = "live-env-modes"
+
+# pixie container image tag (built by pxe_prepare from this checkout).
+pixie_image = "pixie:pxetest"
+
+# Admin password set on the container; the test uses it to add catalog
+# entries, set live_env.image_sha, and bind the machine.
+admin_password = "test-admin-pw"
+
+# Client VM firmware: "bios" (SeaBIOS + NIC option ROM) or "uefi" (OVMF).
+client_firmware = "bios"
+client_mac = "52:54:00:11:22:66"
+
+# QEMU virtio-blk serial the pixie-flash-once submode flashes onto
+# (matches the hardcoded PIXIETEST device in _start_client_vm).
+target_disk_serial = "PIXIETEST"
+flash_boot_mode = "pixie-flash-once"
+
+# Host bridge for the synthetic PXE segment.
+bridge = "br-lem"
+tap_iface = "tap-lem"
+server_pxe_ip = "192.168.99.1"
+pxe_netmask = "255.255.255.0"
+dhcp_range_lo = "192.168.99.50"
+dhcp_range_hi = "192.168.99.150"
+
+# ---- common boot markers (shared by all three submodes) -------------
+#
+# The live-env image boots identically for every submode (iPXE -> arch
+# kernel/initrd from the netboot bundle's /artifacts/ -> nbdboot ->
+# arch userspace -> the injected pixie CLI phones home). These fire on
+# the client serial log OR pixie's container access log; the injected
+# CLI runs on tty1, so the reliable "CLI booted + reached the server"
+# signal is the server-side plan fetch, not client serial CLI output.
+[[test.pxe.common_markers]]
+key = "ipxe-loaded"
+needle = "iPXE"
+
+[[test.pxe.common_markers]]
+key = "ipxe-fetch-bootstrap"
+needle = "pxe-bootstrap.ipxe"
+
+# Kernel + initrd fetched from pixie's content-addressed /artifacts/
+# (unpacked from the arch-headless netboot bundle). Server-side hit.
+[[test.pxe.common_markers]]
+key = "artifacts-fetch"
+needle = "/artifacts/"
+
+# The injected pixie CLI (pixie-on-tty1) GETs its plan -- proves the
+# arch live-env booted over nbdboot AND the CLI reached the server.
+[[test.pxe.common_markers]]
+key = "cli-plan-fetch"
+needle = "/plan"
+
+# ---- per-submode markers (the mode-specific server-side effect) -----
+#
+# inventory: the CLI POSTs an inventory blob (server-side verify then
+# reads it from state.db and asserts a non-empty disks list).
+[[test.pxe.inventory_markers]]
+key = "inventory-post"
+needle = "/inventory"
+
+# tui: mode=interactive; the wizard loads the catalog from the server
+# (GET /catalog.toml). _verify_tui_effects then asserts the bind did
+# NOT flip (pixie-tui persists).
+[[test.pxe.tui_markers]]
+key = "tui-catalog-wire"
+needle = "/catalog.toml"
+
+# flash: the CLI auto-flashes the target image + POSTs status; the
+# server-side verify reads the flashed bytes + the mode flip.
+[[test.pxe.flash_markers]]
+key = "flash-status-post"
+needle = "/status"
+
+# ---- forbidden markers (fail fast on a known-bad userland signal) ---
+[[test.pxe.forbidden_markers]]
+key = "dracut-emergency"
+needle = "dracut-emergency"
+
+[[test.pxe.forbidden_markers]]
+key = "kernel-panic"
+needle = "Kernel panic"

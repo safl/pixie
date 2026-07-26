@@ -1,0 +1,35 @@
+doc: |
+  pixie consolidated live-env-modes chain test
+  =============================================
+
+  End-to-end proof that the live-env boot modes (pixie-inventory /
+  pixie-tui / pixie-flash-once) work over ephemeral nbdboot on a QEMU
+  client through pixie:
+
+  1. ``pxe_prepare``: build the ``pixie:pxetest`` container image
+     from this checkout.
+  2. ``pxe_run_chain_test`` with ``mode = "live-env-modes"``: brings up
+     pixie ONCE, adds + fetches the pinned pixie-live-env disk image
+     (an https release asset) + its arch-headless netboot bundle (an
+     oras ref), sets ``live_env.image_sha`` to the fetched image, then
+     for each of pixie-inventory / pixie-tui / pixie-flash-once: binds
+     the client MAC to that mode, PXE-boots a fresh QEMU client that
+     nbdboots the live-env image, asserts the common boot markers +
+     the submode's marker, and runs the submode's server-side verify
+     (inventory blob posted / bind-not-flipped / flashed bytes).
+
+  Consolidated on purpose: one heavy image fetch, three client boots,
+  destructive flash last. Covers the live-env MODE dispatch end to end
+  where the renderer unit tests (test_pxe_plan_json) cover only the
+  rendered plan.
+
+  Requires: podman, qemu-system-x86, dnsmasq, ipxe,
+  bridge-utils / iproute2, KVM, passwordless sudo, and internet access
+  to github.com/safl/pixie releases + ghcr.io.
+
+steps:
+- name: pxe_prepare
+  uses: pxe_prepare
+
+- name: pxe_run_chain_test
+  uses: pxe_run_chain_test

@@ -353,6 +353,62 @@ jobs:
           path: cijoe/_build/test-pxe
           if-no-files-found: warn
 
+  test-pxe-live-env-modes:
+    name: PXE live-env modes chain test (containerized pixie + client QEMU VM)
+    # Consolidated: nbdboots the pixie-live-env image ONCE, then runs
+    # pixie-inventory / -tui / -flash-once against it in sequence (one
+    # heavy image fetch, three client boots, destructive flash last).
+    # Fetches the pinned pixie-live-env release image (https) + its
+    # arch-headless netboot bundle (oras) + the nosi flash target
+    # (oras). No build-media dependency.
+    #
+    # 90 min: the pixie-live-env img.gz fetch + the flash submode's
+    # ~2.6 GiB nosi image pull/decompress + three sequential QEMU boots
+    # dominate wall clock.
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install host tools (qemu, dnsmasq, ipxe, bridge)
+        run: |
+          set -eu
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            qemu-system-x86 \
+            qemu-utils \
+            dnsmasq \
+            ipxe \
+            bridge-utils \
+            iproute2
+          sudo chmod a+rw /dev/kvm
+          ls -la /dev/kvm
+
+      - name: Install cijoe
+        run: pipx install --force cijoe
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v8.1.0
+
+      - name: Run PXE live-env modes chain test
+        run: make test-pxe-live-env-modes
+
+      - name: Upload cijoe output
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: cijoe-output-test-pxe-live-env-modes
+          path: cijoe/cijoe-output
+          if-no-files-found: warn
+
+      - name: Upload PXE workspace (serial logs, dnsmasq.log)
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: test-pxe-live-env-modes-workspace
+          path: cijoe/_build/test-pxe
+          if-no-files-found: warn
+
   verify-usbboot:
     name: Verify usbboot .iso (structural + Ventoy boot in QEMU)
     # Downloads the usbboot-pc bake, structurally verifies the hybrid
@@ -445,6 +501,7 @@ jobs:
       - build-live-env-image
       - test-pxe
       - test-pxe-nbdboot
+      - test-pxe-live-env-modes
       - verify-usbboot
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/v')
@@ -484,6 +541,7 @@ jobs:
       - build-live-env-image
       - test-pxe
       - test-pxe-nbdboot
+      - test-pxe-live-env-modes
       - verify-usbboot
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/v')
@@ -526,6 +584,7 @@ jobs:
       - build-live-env-image
       - test-pxe
       - test-pxe-nbdboot
+      - test-pxe-live-env-modes
       - verify-usbboot
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/v')

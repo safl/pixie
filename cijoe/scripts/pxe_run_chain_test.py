@@ -98,6 +98,20 @@ NOSI_TUI_FORMAT = "tar.gz"
 # names must match nosi's catalog.toml verbatim.
 NOSI_NBDBOOT_DISK_ENTRY_NAME = NOSI_FLASH_ENTRY_NAME
 NOSI_NBDBOOT_BUNDLE_ENTRY_NAME = NOSI_TUI_ENTRY_NAME
+
+# The pixie-live-env image the consolidated ``live-env-modes`` chain
+# nbdboots for the pixie-inventory / -tui / -flash-* boot modes. Pinned
+# to a pixie release (not ``latest``) so a new release can't silently
+# shift what the test boots; the paired arch-headless netboot bundle
+# (kernel + initrd that match the image's own kernel) comes from nosi.
+PIXIE_LIVE_ENV_TAG = "v0.4.2"
+PIXIE_LIVE_ENV_IMAGE_URL = (
+    f"https://github.com/safl/pixie/releases/download/{PIXIE_LIVE_ENV_TAG}/"
+    "pixie-live-env-x86_64.img.gz"
+)
+PIXIE_LIVE_ENV_BUNDLE_SRC = "oras://ghcr.io/safl/nosi/arch-headless-netboot:latest"
+PIXIE_LIVE_ENV_IMAGE_ENTRY = "pixie-live-env (test)"
+PIXIE_LIVE_ENV_BUNDLE_ENTRY = "pixie-live-env netboot bundle (test)"
 # Bigger backing store than the other tests (which use 8 GiB and
 # never populate more than ~64 KiB) so the real debian-13-headless
 # image can dd into it without hitting qcow2 grow-and-write errors
@@ -128,12 +142,23 @@ def main(args, cijoe) -> int:
         client_log.unlink()
 
     mode = str(cfg.get("mode", "bootstrap")).lower()
-    # The squashfs-based live-env chain modes (inventory / flash / tui)
-    # were retired with the squashfs live-env; only bootstrap + nbdboot
-    # remain wired. The downstream inventory/flash/tui branches below are
-    # now unreachable and slated for a follow-up gut.
+    # ``live-env-modes`` is the consolidated live-env chain: it boots
+    # the pixie-live-env image over nbdboot ONCE, then exercises the
+    # pixie-inventory / -tui / -flash-once boot modes against it in
+    # sequence (its own orchestrator, own container lifecycle). The
+    # single-shot ``bootstrap`` + ``nbdboot`` modes fall through to the
+    # linear flow below. (The old squashfs single-mode inventory/flash/
+    # tui chains were retired with the squashfs live-env; their bind +
+    # verify helpers are reused by ``live-env-modes``.)
+    if mode == "live-env-modes":
+        return _run_live_env_modes(
+            cfg, workspace, tftproot, image, admin_password, seed_base, client_log
+        )
     if mode not in ("bootstrap", "nbdboot"):
-        log.error(f"unknown [test.pxe] mode={mode!r}; expected 'bootstrap' or 'nbdboot'")
+        log.error(
+            f"unknown [test.pxe] mode={mode!r}; "
+            "expected 'bootstrap', 'nbdboot', or 'live-env-modes'"
+        )
         return errno.EINVAL
 
     container = None
@@ -323,6 +348,126 @@ def main(args, cijoe) -> int:
     finally:
         if client is not None:
             _terminate(client, "client VM")
+        _stop_container(container)
+        if dnsmasq is not None:
+            _terminate(dnsmasq, "dnsmasq", sudo=True)
+        if net_up:
+            _teardown_network(cfg)
+
+
+# ---------- consolidated live-env-modes chain ------------------------------
+
+
+def _run_live_env_modes(
+    cfg,
+    workspace: Path,
+    tftproot: Path,
+    image: str,
+    admin_password: str,
+    seed_base: str,
+    client_log: Path,
+) -> int:
+    """Bring pixie up once, nbdboot the pixie-live-env image, then run
+    the pixie-inventory / -tui / -flash-once boot modes against it in
+    sequence -- one heavy image fetch, three client boots. Each submode
+    binds the machine (reusing the single-mode seed/bind helpers), boots
+    a fresh client VM, waits its markers, and runs its server-side
+    verify; a fresh VM per submode keeps the flash submode's destructive
+    write off the others. Returns 0 on success, an errno on the first
+    failure (already logged)."""
+    # (submode, seed/bind fn, verify fn, config marker key). Order:
+    # non-destructive first (inventory, tui), destructive flash last.
+    submodes = [
+        (
+            "inventory",
+            lambda: _bind_inventory(seed_base, admin_password, cfg),
+            lambda: _verify_server_inventory(seed_base, cfg["client_mac"]),
+            "inventory_markers",
+        ),
+        (
+            "tui",
+            lambda: _seed_tui_and_bind(seed_base, admin_password, cfg),
+            lambda: _verify_tui_effects(seed_base, cfg["client_mac"]),
+            "tui_markers",
+        ),
+        (
+            "flash",
+            lambda: _seed_flash_and_bind(seed_base, admin_password, cfg),
+            lambda: _verify_flash_effects(seed_base, cfg, workspace),
+            "flash_markers",
+        ),
+    ]
+    common = list(cfg.get("common_markers", []))
+    forbidden = [(e["key"], e["needle"]) for e in cfg.get("forbidden_markers", [])]
+
+    container = None
+    dnsmasq = None
+    net_up = False
+    try:
+        _setup_network(cfg, tftproot)
+        net_up = True
+        dnsmasq = _start_dnsmasq(cfg, tftproot, workspace)
+        container = _run_container(image, admin_password)
+        log.info(f"Waiting for pixie /healthz on {seed_base}")
+        if not _wait_until(lambda: _http_ready(seed_base), HEALTHZ_TIMEOUT, "pixie /healthz"):
+            log.error("pixie container did not become healthy; logs:")
+            _dump_container_logs()
+            return errno.ETIMEDOUT
+
+        # One heavy fetch: the pixie-live-env image + its arch netboot
+        # bundle, then select it so every submode nbdboots it.
+        if err := _seed_live_env_image(seed_base, admin_password, cfg):
+            _dump_container_logs()
+            return err
+
+        firmware = str(cfg.get("client_firmware", "bios")).lower()
+        if firmware == "uefi" and _find_ovmf() is None:
+            log.warning("client_firmware=uefi but no OVMF found; falling back to BIOS")
+            firmware = "bios"
+
+        for name, bind_fn, verify_fn, marker_key in submodes:
+            log.info(f"=== live-env submode: {name} ===")
+            if err := bind_fn():
+                log.error(f"submode {name}: bind failed rc={err}")
+                _dump_container_logs()
+                return err
+
+            sub_log = client_log.with_name(f"client.{name}.serial.log")
+            if sub_log.exists():
+                sub_log.unlink()
+            # Per-submode ``mode`` so _start_client_vm sizes the target
+            # disk (flash needs FLASH_QCOW2_SIZE; the others 8G). Drop
+            # the shared blank qcow2 first so each submode gets a fresh
+            # disk at ITS size -- else flash inherits inventory's 8G.
+            (workspace / "client-blank.qcow2").unlink(missing_ok=True)
+            sub_cfg = {**cfg, "mode": name, "chain_markers": common + list(cfg.get(marker_key, []))}
+            client = _start_client_vm(workspace, sub_cfg, sub_log, firmware)
+            try:
+                markers = _build_markers(sub_cfg)
+                try:
+                    seen = _wait_for_chain_markers(sub_log, markers, CHAIN_TIMEOUT_FLASH, forbidden)
+                except ForbiddenMarkerSeen as exc:
+                    log.error(f"submode {name} hit forbidden marker {exc.key!r} ({exc.needle!r})")
+                    _dump_tail(sub_log, 200)
+                    _dump_container_logs()
+                    return errno.EPROTO
+                missing = [k for k, ok in seen.items() if not ok]
+                if missing:
+                    log.error(f"submode {name}: missing markers: {', '.join(missing)}")
+                    _dump_tail(sub_log.with_suffix(".qemu.log"), 60)
+                    _dump_tail(sub_log, 200)
+                    _dump_container_logs()
+                    return errno.EPROTO
+                if err := verify_fn():
+                    _dump_container_logs()
+                    return err
+            finally:
+                _terminate(client, f"client VM ({name})")
+            log.info(f"=== live-env submode {name}: PASSED ===")
+
+        log.info("live-env-modes chain test PASSED (inventory + tui + flash)")
+        return 0
+    finally:
         _stop_container(container)
         if dnsmasq is not None:
             _terminate(dnsmasq, "dnsmasq", sudo=True)
@@ -798,6 +943,113 @@ def _seed_nbdboot_and_bind(seed_base: str, admin_password: str, cfg) -> int:
         return errno.EPROTO
     log.info(f"Machine {mac} bound to boot_mode=nbdboot (real nosi disk + bundle)")
     return 0
+
+
+def _add_catalog_entry(seed_base: str, cookie: str, **fields) -> int:
+    """POST /catalog/entries to stage one catalog entry (add-only; the
+    fetch is a separate step). 201 on create, 409 if it already exists
+    (idempotent -- treated as success). Returns 0 or an errno."""
+    data = json.dumps(fields).encode("utf-8")
+    req = urllib.request.Request(
+        f"{seed_base}/catalog/entries",
+        data=data,
+        method="POST",
+        headers={"Content-Type": "application/json", "Cookie": cookie},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            if resp.status != 201:
+                log.error(f"POST /catalog/entries {fields.get('name')!r} -> {resp.status}")
+                return errno.EPROTO
+    except urllib.error.HTTPError as exc:
+        if exc.code == 409:
+            return 0  # already present from a prior submode iteration
+        log.error(f"POST /catalog/entries {fields.get('name')!r}: HTTP {exc.code}")
+        return errno.EPROTO
+    log.info(f"Added catalog entry {fields.get('name')!r}")
+    return 0
+
+
+def _set_live_env_image_sha(seed_base: str, cookie: str, sha: str) -> int:
+    """POST /ui/live-env/image/edit to select the live-env disk image
+    the pixie-* boot modes nbdboot. Returns 0 or an errno."""
+    body = urllib.parse.urlencode({"live_env_image_sha": sha}).encode("utf-8")
+    req = urllib.request.Request(
+        f"{seed_base}/ui/live-env/image/edit",
+        data=body,
+        method="POST",
+        headers={"Content-Type": "application/x-www-form-urlencoded", "Cookie": cookie},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            if resp.status not in (200, 303):
+                log.error(f"POST /ui/live-env/image/edit -> {resp.status}")
+                return errno.EPROTO
+    except urllib.error.HTTPError as exc:
+        log.error(f"POST /ui/live-env/image/edit: HTTP {exc.code}")
+        return errno.EPROTO
+    log.info(f"live_env.image_sha set to {sha[:12]}...")
+    return 0
+
+
+def _seed_live_env_image(seed_base: str, admin_password: str, cfg) -> int:
+    """Add the pixie-live-env disk image + its arch-headless netboot
+    bundle, fetch both (the image is an https release asset, the bundle
+    an oras ref), wait for their content shas, then set
+    ``live_env.image_sha`` so the pixie-inventory / -tui / -flash-*
+    boot modes nbdboot this image. Returns 0 or an errno (logged).
+
+    Run ONCE for the consolidated live-env-modes chain; the per-submode
+    bind/verify then reuse the same booted image. The machine bind is
+    left to the submode (inventory / tui / flash each bind differently)."""
+    image_url = str(cfg.get("live_env_image_url", PIXIE_LIVE_ENV_IMAGE_URL))
+    bundle_src = str(cfg.get("live_env_bundle_src", PIXIE_LIVE_ENV_BUNDLE_SRC))
+
+    try:
+        cookie = _login(seed_base, admin_password)
+    except Exception as exc:
+        log.error(f"login failed: {exc}")
+        return errno.EACCES
+
+    if err := _add_catalog_entry(
+        seed_base,
+        cookie,
+        name=PIXIE_LIVE_ENV_BUNDLE_ENTRY,
+        src=bundle_src,
+        format="tar.gz",
+        arch="x86_64",
+    ):
+        return err
+    if err := _add_catalog_entry(
+        seed_base,
+        cookie,
+        name=PIXIE_LIVE_ENV_IMAGE_ENTRY,
+        src=image_url,
+        format="img.gz",
+        arch="x86_64",
+        netboot_src=bundle_src,
+    ):
+        return err
+
+    if err := _fetch_entry(seed_base, cookie, PIXIE_LIVE_ENV_BUNDLE_ENTRY):
+        return err
+    if err := _fetch_entry(seed_base, cookie, PIXIE_LIVE_ENV_IMAGE_ENTRY):
+        return err
+
+    log.info(
+        f"Waiting up to {FETCH_TIMEOUT_ORAS}s for the pixie-live-env image "
+        f"({image_url}) + arch netboot bundle to fetch"
+    )
+    try:
+        _wait_content_sha(seed_base, PIXIE_LIVE_ENV_BUNDLE_ENTRY, timeout=FETCH_TIMEOUT_ORAS)
+        image_sha = _wait_content_sha(
+            seed_base, PIXIE_LIVE_ENV_IMAGE_ENTRY, timeout=FETCH_TIMEOUT_ORAS
+        )
+    except TimeoutError as exc:
+        log.error(str(exc))
+        return errno.ETIMEDOUT
+
+    return _set_live_env_image_sha(seed_base, cookie, image_sha)
 
 
 def _login(base: str, password: str) -> str:
