@@ -35,7 +35,11 @@ from pathlib import Path
 from typing import Any
 
 from pixie import oras
-from pixie._partition import PartitionNotFound, extract_partition
+from pixie._partition import (
+    PartitionNotFound,
+    extract_partition,
+    root_partition_number,
+)
 from pixie._util import CHUNK, now_iso
 from pixie.catalog._schema import CatalogEntry
 from pixie.catalog._store import CatalogStore
@@ -445,7 +449,12 @@ def _extract_rootfs_if_partitioned(
     blob_path: Path,
     progress: Callable[[dict[str, Any]], None] | None,
 ) -> None:
-    """Try to extract partition 1 into ``blobs/<sha>/rootfs.raw``.
+    """Extract the Linux root partition into ``blobs/<sha>/rootfs.raw``.
+
+    The root is selected by GPT type, not by a fixed partition number:
+    nosi images disagree on order (ubuntu/debian root=p1, arch/fedora
+    root=p3 behind BIOS-boot + ESP), so a hardcoded p1 would extract a
+    1 MiB BIOS-boot stub on the latter and fail to mount at boot.
 
     Silent on PartitionNotFound: the fetch still succeeds and the
     ephemeral / persist serve paths fall back to using the blob
@@ -458,7 +467,8 @@ def _extract_rootfs_if_partitioned(
     if progress is not None:
         progress({"phase": "extracting-rootfs"})
     try:
-        info = extract_partition(blob_path, rootfs, partition_number=1)
+        part_num = root_partition_number(blob_path)
+        info = extract_partition(blob_path, rootfs, partition_number=part_num)
     except PartitionNotFound as exc:
         _log.info(
             "fetch %r: skipping rootfs extract (%s); ephemeral / persist will serve the whole blob",
@@ -467,8 +477,9 @@ def _extract_rootfs_if_partitioned(
         )
         return
     _log.info(
-        "fetch %r: extracted partition 1 (%d bytes at offset %d) -> %s",
+        "fetch %r: extracted partition %d (%d bytes at offset %d) -> %s",
         entry.name,
+        part_num,
         info.size_bytes,
         info.start_bytes,
         rootfs,
