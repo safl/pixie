@@ -169,56 +169,19 @@ def main(args, cijoe) -> int:
         net_up = True
         dnsmasq = _start_dnsmasq(cfg, tftproot, workspace)
 
-        # ``inventory`` + ``flash`` + ``tui`` all boot into pixie's
-        # own live env (only bootstrap + nbdboot do not), so the
-        # live-env media must be staged inside the container ahead
-        # of time. Verify the caller's workspace has the three files
-        # before we start podman so a missing bake fails fast rather
-        # than mid-boot on the client.
-        live_env_dir: Path | None = None
-        if mode in ("inventory", "flash", "tui"):
-            live_env_dir = workspace / "live-env"
-            missing = [
-                name
-                for name in ("vmlinuz", "initrd", "live.squashfs")
-                if not (live_env_dir / name).is_file()
-            ]
-            if missing:
-                stage_step = {
-                    "inventory": "pxe_inventory_stage",
-                    "flash": "pxe_flash_stage",
-                    # tui reuses the flash stage step: it needs the
-                    # same live-env media + a downloadable catalog
-                    # entry so the wizard's picker has something to
-                    # render.
-                    "tui": "pxe_flash_stage",
-                }[mode]
-                log.error(
-                    f"mode={mode} needs live-env media at {live_env_dir}; "
-                    f"missing: {missing}. Run {stage_step} first."
-                )
-                return errno.ENOENT
-
-        container = _run_container(image, admin_password, live_env_dir=live_env_dir)
+        container = _run_container(image, admin_password)
         log.info(f"Waiting for pixie /healthz on {seed_base}")
         if not _wait_until(lambda: _http_ready(seed_base), HEALTHZ_TIMEOUT, "pixie /healthz"):
             log.error("pixie container did not become healthy; logs:")
             _dump_container_logs()
             return errno.ETIMEDOUT
 
-        if mode == "inventory":
-            log.info("Binding machine to boot_mode=pixie-inventory")
-            seed_err = _bind_inventory(seed_base, admin_password, cfg)
-            if seed_err:
-                log.error(f"inventory bind failed: rc={seed_err}")
-                _dump_container_logs()
-                return seed_err
-        elif mode == "nbdboot":
-            # No workspace HTTP server: nbdboot.s disk image + netboot
-            # bundle come from the real nosi catalog via oras through
-            # pixie's own fetcher. Netboot bundle (~70 MiB tar.gz) is
-            # fast; the disk image (~2.6 GiB img.gz -> ~10 GiB
-            # decompressed to blob) dominates fetch wall clock.
+        # bootstrap needs no seed; nbdboot fetches its disk image +
+        # netboot bundle from the real nosi catalog via oras through
+        # pixie's own fetcher (the ~2.6 GiB img.gz -> ~10 GiB blob is
+        # the wall-clock cost). The live-env boot modes live in the
+        # ``live-env-modes`` orchestrator, not here.
+        if mode == "nbdboot":
             log.info(
                 "Seeding pixie catalog + binding machine to nbdboot "
                 f"(real nosi catalog: {NOSI_CATALOG_URL}, disk: "
@@ -227,36 +190,6 @@ def main(args, cijoe) -> int:
             seed_err = _seed_nbdboot_and_bind(seed_base, admin_password, cfg)
             if seed_err:
                 log.error(f"nbdboot seed failed: rc={seed_err}")
-                _dump_container_logs()
-                return seed_err
-        elif mode == "flash":
-            # No workspace HTTP server: the flash test fetches a real
-            # nosi image via ``oras://`` through pixie's own oras
-            # client, so the payload comes off ghcr.io not a local
-            # http shim. The workspace still holds the client's
-            # qcow2 backing store; no shared files to serve.
-            log.info(
-                "Seeding pixie catalog + binding machine to "
-                f"{cfg.get('flash_boot_mode', 'pixie-flash-once')} "
-                f"(real nosi catalog: {NOSI_CATALOG_URL}, "
-                f"target entry: {NOSI_FLASH_ENTRY_NAME!r})"
-            )
-            seed_err = _seed_flash_and_bind(seed_base, admin_password, cfg)
-            if seed_err:
-                log.error(f"flash seed failed: rc={seed_err}")
-                _dump_container_logs()
-                return seed_err
-        elif mode == "tui":
-            # tui seeds a small real nosi artifact so the wizard's
-            # picker has at least one downloaded catalog row to
-            # render (proves /catalog.toml wire works server->CLI).
-            # Uses a netboot bundle (~70 MiB tar.gz) rather than the
-            # 2.6 GiB disk image because the wizard never flashes
-            # from tui in this test -- it only enters the picker.
-            log.info("Seeding pixie catalog + binding machine to pixie-tui")
-            seed_err = _seed_tui_and_bind(seed_base, admin_password, cfg)
-            if seed_err:
-                log.error(f"tui seed failed: rc={seed_err}")
                 _dump_container_logs()
                 return seed_err
 
@@ -269,15 +202,11 @@ def main(args, cijoe) -> int:
 
         markers = _build_markers(cfg)
         forbidden = [(e["key"], e["needle"]) for e in cfg.get("forbidden_markers", [])]
-        # ``mode=flash`` runs the full real-image pipeline (oras
-        # pull + img.gz decompress + dd of ~10 GiB) inside the live
-        # env; ``mode=nbdboot`` also pulls the real nosi image but
-        # serves it over NBD so guest writes go to nbdkit's cow
-        # overlay in RAM instead of the guest disk -- most of the
-        # wall clock there is the oras pull + decompress to pixie's
-        # blob store, similar order of magnitude. Everything else
-        # finishes well within the 5 min short-mode budget.
-        chain_deadline = CHAIN_TIMEOUT_FLASH if mode in ("flash", "nbdboot") else CHAIN_TIMEOUT
+        # ``mode=nbdboot`` pulls the real nosi image + serves it over
+        # NBD; the oras pull + decompress to pixie's blob store
+        # dominates wall clock, so it gets the longer budget.
+        # ``bootstrap`` finishes well within the 5 min short-mode budget.
+        chain_deadline = CHAIN_TIMEOUT_FLASH if mode == "nbdboot" else CHAIN_TIMEOUT
         try:
             seen = _wait_for_chain_markers(client_log, markers, chain_deadline, forbidden)
         except ForbiddenMarkerSeen as exc:
@@ -310,38 +239,12 @@ def main(args, cijoe) -> int:
             _dump_container_logs()
             return errno.EPROTO
 
-        # ``inventory``: pixie's live env boots + its CLI POSTs
-        # inventory back; GET it from state.db and assert a non-empty
-        # disks list. Different chain shape (static live-env) hits
-        # the same inventory POST code path pixie-tui + pixie-flash-*
-        # rely on.
-        #
-        # ``nbdboot`` used to pivot into pixie's own live env and
-        # POST inventory that way; the real-nosi rework boots into
-        # Debian userspace which does not run pixie's CLI. The
-        # nbdboot-specific coverage there is the chain markers
-        # (kernel + systemd + "Debian" in the console banner) --
-        # nothing to verify server-side.
-        #
-        # ``flash`` + ``tui`` have their own dedicated post-chain
-        # asserts (mode flip + marker read for flash, no-flip guard
-        # for tui).
-        if mode == "inventory":
-            inv_err = _verify_server_inventory(seed_base, cfg["client_mac"])
-            if inv_err:
-                _dump_container_logs()
-                return inv_err
-        elif mode == "flash":
-            flash_err = _verify_flash_effects(seed_base, cfg, workspace)
-            if flash_err:
-                _dump_container_logs()
-                return flash_err
-        elif mode == "tui":
-            tui_err = _verify_tui_effects(seed_base, cfg["client_mac"])
-            if tui_err:
-                _dump_container_logs()
-                return tui_err
-
+        # ``nbdboot`` boots into nosi's Debian userspace (which does not
+        # run pixie's CLI), so its coverage is the chain markers alone
+        # (kernel + systemd + "Debian" banner); nothing to verify
+        # server-side. The live-env boot modes' server-side asserts
+        # (inventory blob / bind-not-flipped / flashed bytes) run in the
+        # ``live-env-modes`` orchestrator.
         log.info(f"PXE {mode} chain test PASSED (all markers seen)")
         return 0
     finally:
@@ -580,17 +483,11 @@ def _whoami() -> str:
 # ---------- pixie container ------------------------------------------------
 
 
-def _run_container(image: str, admin_password: str, *, live_env_dir: Path | None = None):
+def _run_container(image: str, admin_password: str):
     """Run the pixie container detached on host networking with
     ``PIXIE_ADMIN_PASSWORD`` set. Host networking keeps ``/healthz``
     reachable via loopback while the client's PXE HTTP fetch hits the
-    same process via the bridge IP.
-
-    ``live_env_dir``, when passed, bind-mounts the caller's staged
-    vmlinuz + initrd + squashfs into the container at
-    ``/var/lib/pixie/live-env`` (pixie's default live-env dir), which
-    the inventory + flash chain modes need for the ``pixie-live-env.j2``
-    template to resolve. Not used in the bootstrap / nbdboot modes."""
+    same process via the bridge IP."""
     subprocess.run(
         ["podman", "rm", "-f", CONTAINER_NAME],
         stdout=subprocess.DEVNULL,
@@ -615,12 +512,6 @@ def _run_container(image: str, admin_password: str, *, live_env_dir: Path | None
         "-e",
         "PIXIE_TFTP_ENABLED=0",
     ]
-    if live_env_dir is not None:
-        # ``:z`` relabels the volume for SELinux so an enforcing
-        # runner (rare on GHA but present on some dev machines) can
-        # still open the files. ``:ro`` because pixie never writes
-        # into live-env at runtime; the operator stages it once.
-        cmd.extend(["-v", f"{live_env_dir}:/var/lib/pixie/live-env:z,ro"])
     cmd.append(image)
     subprocess.run(cmd, check=True, capture_output=True)
     return CONTAINER_NAME
