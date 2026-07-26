@@ -1,0 +1,35 @@
+doc: |
+  pixie live-env image build
+  ==========================
+
+  Builds the ``pixie-live-env`` disk image that pixie nbdboots
+  ephemerally for the live-env boot modes (``pixie-flash-once`` /
+  ``pixie-flash-always`` / ``pixie-inventory`` / ``pixie-tui``). Unlike
+  the ``netboot-pc`` live-build bake (kernel + initrd + squashfs), this
+  starts from the nosi ``arch-headless`` base disk image and injects the
+  pixie CLI + the ``pixie-on-tty1`` service into its rootfs, then serves
+  the whole disk over NBD -- the design proven on hardware where a
+  dual-NIC igb box that could never inventory over the old squashfs did
+  a full inventory this way.
+
+  The image the renderer selects via ``PIXIE_LIVE_ENV_IMAGE_SHA`` is the
+  one this task publishes; the sha an operator sets there is the
+  ``content_sha256`` the build computes (emitted as the
+  ``pixie-live-env-x86_64.content-sha256`` sidecar + baked into the
+  catalog fragment).
+
+  Steps:
+
+  1. ``live_env_image`` - build the wheel + vendored CLI tree, pull the
+     arch-headless base via ORAS (reusing ``pixie.oras_pull``),
+     transform it (``live_env_transform.sh``: qemu-nbd + mount, inject
+     CLI + service, slim, fstrim), gzip + sha256 + size-gate (< 2 GiB)
+     the asset, and emit its ``.sha256``, ``.content-sha256`` sidecar,
+     and a ``pixie-live-env-catalog.toml`` fragment.
+
+  Requires: passwordless sudo, qemu-utils (qemu-nbd + qemu-img), the
+  ``nbd`` kernel module, rsync, gzip, and ``uv`` on the build host.
+
+steps:
+- name: live_env_image
+  uses: live_env_image

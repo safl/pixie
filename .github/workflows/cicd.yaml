@@ -191,6 +191,67 @@ jobs:
             ~/system_imaging/disk/pixie-usbboot-pc-x86_64-v*.iso
             ~/system_imaging/disk/pixie-usbboot-pc-x86_64-v*.sha256
 
+  build-live-env-image:
+    name: Build pixie-live-env image
+    # The image the live-env boot modes nbdboot: the nosi arch-headless
+    # base disk image with the pixie CLI + pixie-on-tty1 service injected
+    # (cijoe/tasks/live-env-image.yaml). Unlike the live-build bakes this
+    # does NOT run debootstrap/mksquashfs; it qemu-nbd-mounts a copy of a
+    # pulled base image, injects userspace, slims, and gzips. Wired to
+    # ``test`` so we don't pay for the ORAS pull + qemu transform on a
+    # broken lint/typecheck.
+    needs: test
+    runs-on: ubuntu-latest
+    # 60 min cap for the same reason as build-media: the real ORAS pull
+    # of the arch-headless base (~1.6 GiB) + decompress + qemu transform
+    # + gzip dominate wall clock.
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install build dependencies (qemu-nbd, rsync, nbd module)
+        run: |
+          set -eu
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            qemu-utils rsync gzip
+          # The transform attaches a copy of the base image to /dev/nbdX
+          # via qemu-nbd; load the module with partition scanning so the
+          # root partition shows up as nbdXp1.
+          sudo modprobe nbd max_part=16
+          ls -la /dev/nbd0
+
+      - name: Install cijoe
+        run: pipx install --force cijoe
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v8.1.0
+
+      - name: Build pixie-live-env image
+        run: make live-env-image
+
+      # cijoe captures the full run (per-command output + report.html)
+      # under cijoe/cijoe-output/. Upload it ALWAYS so a transform
+      # failure leaves a diagnosable artifact.
+      - name: Upload cijoe output
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: cijoe-output-live-env-image
+          path: cijoe/cijoe-output
+          if-no-files-found: warn
+
+      - name: Upload artifact (pixie-live-env-image)
+        uses: actions/upload-artifact@v7
+        with:
+          name: pixie-live-env-image-x86_64
+          path: |
+            ~/system_imaging/disk/pixie-live-env-x86_64.img.gz
+            ~/system_imaging/disk/pixie-live-env-x86_64.img.gz.sha256
+            ~/system_imaging/disk/pixie-live-env-x86_64.content-sha256
+            ~/system_imaging/disk/pixie-live-env-catalog.toml
+          if-no-files-found: error
+
   test-pxe:
     name: PXE bootstrap chain test (containerized pixie + client QEMU VM)
     # Independent of the media bake: the chain test only needs the
@@ -650,6 +711,7 @@ jobs:
       - build-container
       - build-wheel
       - build-media
+      - build-live-env-image
       - test-pxe
       - test-pxe-nbdboot
       - test-pxe-inventory
@@ -692,6 +754,7 @@ jobs:
       - build-container
       - build-wheel
       - build-media
+      - build-live-env-image
       - test-pxe
       - test-pxe-nbdboot
       - test-pxe-inventory
@@ -737,6 +800,7 @@ jobs:
       - build-container
       - build-wheel
       - build-media
+      - build-live-env-image
       - test-pxe
       - test-pxe-nbdboot
       - test-pxe-inventory
@@ -758,6 +822,15 @@ jobs:
           # merge-multiple flattens both into one directory.
           pattern: pixie-*-pc-x86_64
           merge-multiple: true
+          path: release-assets
+      - name: Download pixie-live-env image
+        # The nbdboot live-env image (arch-headless + injected pixie CLI
+        # / service): the gzipped disk image + its .sha256, the
+        # .content-sha256 sidecar (the value an operator sets
+        # PIXIE_LIVE_ENV_IMAGE_SHA to), and the catalog fragment.
+        uses: actions/download-artifact@v8
+        with:
+          name: pixie-live-env-image-x86_64
           path: release-assets
       - name: List release assets
         run: ls -la release-assets
@@ -798,7 +871,10 @@ jobs:
 
             ## Media assets attached here
 
-            - `pixie-live-env-x86_64.tar.gz` — the live-env trio packaged for pixie's in-app **Fetch live-env** action (the default `PIXIE_LIVE_ENV_SRC`). Click Fetch live-env on the dashboard and pixie pulls + stages this itself; no manual bake or copy.
-            - `pixie-netboot-pc-x86_64-*.{vmlinuz,initrd,squashfs}` — the same live-env (netboot-pc bake) as loose files, if you prefer to stage `PIXIE_LIVE_ENV_DIR` (`data/live-env/`) by hand. Used by the `pixie-flash-once` / `pixie-flash-always` / `pixie-inventory` / `pixie-tui` boot modes.
+            - `pixie-live-env-x86_64.img.gz` — the **nbdboot** live-env image: the nosi `arch-headless` base disk image with the pixie CLI + `pixie-on-tty1` service injected. Fetch it from the **Catalog** tab (it seeds into a fresh catalog), then set `PIXIE_LIVE_ENV_IMAGE_SHA` to select it for the `pixie-flash-once` / `pixie-flash-always` / `pixie-inventory` / `pixie-tui` boot modes so they nbdboot this image ephemerally.
+            - `pixie-live-env-x86_64.content-sha256` — the raw-image sha256 to set `PIXIE_LIVE_ENV_IMAGE_SHA` to (identical to the `content_sha256` pixie assigns after fetching the `pixie-live-env` catalog entry).
+            - `pixie-live-env-catalog.toml` — the catalog fragment (the `pixie-live-env` disk image + its arch-headless netboot bundle) with `content_sha256` filled in; the shipped `catalog.toml` also lists these entries.
+            - `pixie-live-env-x86_64.tar.gz` — the older squashfs live-env trio for pixie's in-app **Fetch live-env** action (the default `PIXIE_LIVE_ENV_SRC`) and the `PIXIE_LIVE_ENV_DIR` staging path.
+            - `pixie-netboot-pc-x86_64-*.{vmlinuz,initrd,squashfs}` — the squashfs live-env (netboot-pc bake) as loose files, if you prefer to stage `PIXIE_LIVE_ENV_DIR` (`data/live-env/`) by hand.
             - `pixie-usbboot-pc-x86_64-*.iso` — bootable USB / ISO media for the pixie live env (uncompressed; `dd` / Etcher / Ventoy ready).
             - `*.sha256` — checksums for the above.

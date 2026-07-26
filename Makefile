@@ -23,7 +23,7 @@ endif
 
 .PHONY: help \
         deps test lint format format-check typecheck ci wheel \
-        media-deps build ipxe test-pxe test-usb-ventoy \
+        media-deps build live-env-image ipxe test-pxe test-usb-ventoy \
         clean
 
 help:
@@ -43,6 +43,8 @@ help:
 	@echo "  media-deps    pipx install cijoe"
 	@echo "  build         build a media image (override VARIANT below)"
 	@echo "                  -> ~/system_imaging/disk/pixie-<variant>.*"
+	@echo "  live-env-image  build the pixie-live-env disk image (arch-headless"
+	@echo "                  base + pixie CLI/service) nbdbooted by the live-env modes"
 	@echo "  ipxe          build pixie's custom iPXE -> IPXE_OUT/ipxe.efi (default dist/ipxe/)"
 	@echo "  test-pxe      end-to-end PXE bootstrap chain test"
 	@echo "                  (needs podman + QEMU + KVM + dnsmasq; a few min wall clock)"
@@ -106,6 +108,15 @@ media-deps:
 # plus passwordless sudo.
 build:
 	cd cijoe && cijoe $(MEDIA_TASK) --monitor -c configs/$(VARIANT).toml
+
+# Build the pixie-live-env disk image: pull the nosi arch-headless base
+# via ORAS, inject the pixie CLI + pixie-on-tty1 service, slim + gzip,
+# and publish the asset (< 2 GiB) plus its sha256 / content-sha256
+# sidecars and a catalog fragment. The live-env boot modes nbdboot this
+# image; PIXIE_LIVE_ENV_IMAGE_SHA selects it (= the content-sha256).
+# Needs qemu-nbd + passwordless sudo + uv + the nbd kernel module.
+live-env-image:
+	cd cijoe && cijoe tasks/live-env-image.yaml --monitor -c configs/live-env-image.toml
 
 # Build pixie's slim iPXE binary (bin-x86_64-efi/ipxe.efi) with the
 # embedded chain-loader baked in. Landed in the container image so a
