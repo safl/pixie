@@ -99,19 +99,18 @@ NOSI_TUI_FORMAT = "tar.gz"
 NOSI_NBDBOOT_DISK_ENTRY_NAME = NOSI_FLASH_ENTRY_NAME
 NOSI_NBDBOOT_BUNDLE_ENTRY_NAME = NOSI_TUI_ENTRY_NAME
 
-# The pixie-live-env image the consolidated ``live-env-modes`` chain
-# nbdboots for the pixie-inventory / -tui / -flash-* boot modes. Pinned
-# to a pixie release (not ``latest``) so a new release can't silently
-# shift what the test boots; the paired arch-headless netboot bundle
-# (kernel + initrd that match the image's own kernel) comes from nosi.
-PIXIE_LIVE_ENV_TAG = "v0.4.2"
-PIXIE_LIVE_ENV_IMAGE_URL = (
-    f"https://github.com/safl/pixie/releases/download/{PIXIE_LIVE_ENV_TAG}/"
-    "pixie-live-env-x86_64.img.gz"
-)
-PIXIE_LIVE_ENV_BUNDLE_SRC = "oras://ghcr.io/safl/nosi/arch-headless-netboot:latest"
-PIXIE_LIVE_ENV_IMAGE_ENTRY = "pixie-live-env (test)"
-PIXIE_LIVE_ENV_BUNDLE_ENTRY = "pixie-live-env netboot bundle (test)"
+# The consolidated ``live-env-modes`` chain nbdboots the pixie-live-env
+# image (arch-headless base + injected pixie CLI) for the pixie-inventory
+# / -tui / -flash-* boot modes. It uses the entries pixie ALREADY seeds
+# from its bundled catalog (PIXIE_SEED_CATALOG defaults on) rather than
+# adding its own -- adding a second entry with the same arch-headless
+# netboot bundle src would make ``get_entry_by_src`` (the netboot_src
+# pairing key) ambiguous and resolve the render to the unfetched seeded
+# twin. So: fetch the seeded entries by name, then select the image.
+# The seeded ``pixie-live-env`` src is releases/latest, so this tracks
+# the current release's image (fine -- the modes are what's under test).
+PIXIE_LIVE_ENV_IMAGE_ENTRY = "pixie-live-env"
+PIXIE_LIVE_ENV_BUNDLE_ENTRY = "nosi arch-headless netboot bundle"
 # Bigger backing store than the other tests (which use 8 GiB and
 # never populate more than ~64 KiB) so the real debian-13-headless
 # image can dd into it without hitting qcow2 grow-and-write errors
@@ -945,31 +944,6 @@ def _seed_nbdboot_and_bind(seed_base: str, admin_password: str, cfg) -> int:
     return 0
 
 
-def _add_catalog_entry(seed_base: str, cookie: str, **fields) -> int:
-    """POST /catalog/entries to stage one catalog entry (add-only; the
-    fetch is a separate step). 201 on create, 409 if it already exists
-    (idempotent -- treated as success). Returns 0 or an errno."""
-    data = json.dumps(fields).encode("utf-8")
-    req = urllib.request.Request(
-        f"{seed_base}/catalog/entries",
-        data=data,
-        method="POST",
-        headers={"Content-Type": "application/json", "Cookie": cookie},
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=15) as resp:
-            if resp.status != 201:
-                log.error(f"POST /catalog/entries {fields.get('name')!r} -> {resp.status}")
-                return errno.EPROTO
-    except urllib.error.HTTPError as exc:
-        if exc.code == 409:
-            return 0  # already present from a prior submode iteration
-        log.error(f"POST /catalog/entries {fields.get('name')!r}: HTTP {exc.code}")
-        return errno.EPROTO
-    log.info(f"Added catalog entry {fields.get('name')!r}")
-    return 0
-
-
 def _set_live_env_image_sha(seed_base: str, cookie: str, sha: str) -> int:
     """POST /ui/live-env/image/edit to select the live-env disk image
     the pixie-* boot modes nbdboot. Returns 0 or an errno."""
@@ -993,17 +967,20 @@ def _set_live_env_image_sha(seed_base: str, cookie: str, sha: str) -> int:
 
 
 def _seed_live_env_image(seed_base: str, admin_password: str, cfg) -> int:
-    """Add the pixie-live-env disk image + its arch-headless netboot
-    bundle, fetch both (the image is an https release asset, the bundle
-    an oras ref), wait for their content shas, then set
-    ``live_env.image_sha`` so the pixie-inventory / -tui / -flash-*
-    boot modes nbdboot this image. Returns 0 or an errno (logged).
+    """Fetch the seeded pixie-live-env disk image + its arch-headless
+    netboot bundle, wait for their content shas, then set
+    ``live_env.image_sha`` so the pixie-inventory / -tui / -flash-* boot
+    modes nbdboot this image. Returns 0 or an errno (logged).
 
-    Run ONCE for the consolidated live-env-modes chain; the per-submode
-    bind/verify then reuse the same booted image. The machine bind is
-    left to the submode (inventory / tui / flash each bind differently)."""
-    image_url = str(cfg.get("live_env_image_url", PIXIE_LIVE_ENV_IMAGE_URL))
-    bundle_src = str(cfg.get("live_env_bundle_src", PIXIE_LIVE_ENV_BUNDLE_SRC))
+    Uses the entries pixie seeds from its bundled catalog (they are the
+    sole holders of their srcs, so the render's netboot_src pairing is
+    unambiguous -- adding a second entry with the same arch-headless
+    bundle src would make ``get_entry_by_src`` resolve to the unfetched
+    twin and the plan degrade to unavailable). Run ONCE for the
+    consolidated chain; the per-submode bind/verify reuse the same
+    booted image. The machine bind is left to the submode."""
+    image_entry = str(cfg.get("live_env_image_entry", PIXIE_LIVE_ENV_IMAGE_ENTRY))
+    bundle_entry = str(cfg.get("live_env_bundle_entry", PIXIE_LIVE_ENV_BUNDLE_ENTRY))
 
     try:
         cookie = _login(seed_base, admin_password)
@@ -1011,40 +988,26 @@ def _seed_live_env_image(seed_base: str, admin_password: str, cfg) -> int:
         log.error(f"login failed: {exc}")
         return errno.EACCES
 
-    if err := _add_catalog_entry(
-        seed_base,
-        cookie,
-        name=PIXIE_LIVE_ENV_BUNDLE_ENTRY,
-        src=bundle_src,
-        format="tar.gz",
-        arch="x86_64",
-    ):
-        return err
-    if err := _add_catalog_entry(
-        seed_base,
-        cookie,
-        name=PIXIE_LIVE_ENV_IMAGE_ENTRY,
-        src=image_url,
-        format="img.gz",
-        arch="x86_64",
-        netboot_src=bundle_src,
-    ):
-        return err
+    for name in (image_entry, bundle_entry):
+        if not _catalog_has_entry(seed_base, name):
+            log.error(
+                f"seeded catalog is missing {name!r} -- PIXIE_SEED_CATALOG off, "
+                "or the bundled catalog's entry names drifted from this test."
+            )
+            return errno.ENOENT
 
-    if err := _fetch_entry(seed_base, cookie, PIXIE_LIVE_ENV_BUNDLE_ENTRY):
+    if err := _fetch_entry(seed_base, cookie, bundle_entry):
         return err
-    if err := _fetch_entry(seed_base, cookie, PIXIE_LIVE_ENV_IMAGE_ENTRY):
+    if err := _fetch_entry(seed_base, cookie, image_entry):
         return err
 
     log.info(
         f"Waiting up to {FETCH_TIMEOUT_ORAS}s for the pixie-live-env image "
-        f"({image_url}) + arch netboot bundle to fetch"
+        "(https release asset) + arch netboot bundle (oras) to fetch"
     )
     try:
-        _wait_content_sha(seed_base, PIXIE_LIVE_ENV_BUNDLE_ENTRY, timeout=FETCH_TIMEOUT_ORAS)
-        image_sha = _wait_content_sha(
-            seed_base, PIXIE_LIVE_ENV_IMAGE_ENTRY, timeout=FETCH_TIMEOUT_ORAS
-        )
+        _wait_content_sha(seed_base, bundle_entry, timeout=FETCH_TIMEOUT_ORAS)
+        image_sha = _wait_content_sha(seed_base, image_entry, timeout=FETCH_TIMEOUT_ORAS)
     except TimeoutError as exc:
         log.error(str(exc))
         return errno.ETIMEDOUT
