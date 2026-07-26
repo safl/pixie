@@ -1,20 +1,14 @@
 # pixie-media
 
-Source content for the pixie media images. Three variants:
+Source content for the pixie media images. Two variants:
 
 - **USB live image** (`VARIANT=usbboot-pc`) - bootable USB carrying the
   pixie runtime + a writable exFAT `PIXIE_IMGS` partition for pre-built
-  images. Built via Debian's live-build (`iso-hybrid` output);
-  shipped gzip-compressed as `pixie-usbboot-pc-x86_64.iso.gz` (Etcher / Rufus
-  / Raspberry Pi Imager all decompress `.gz` natively; xz tripped
-  Etcher's bundled handler regardless of preset).
-- **Network-flash live env** (`VARIANT=netboot-pc`) - kernel + initrd +
-  squashfs that PXE clients chain into. Built via live-build
-  (`netboot` output). Carries the pixie runtime plus a
-  `pixie-on-tty1.service` unit that reads `pixie.server` + `pixie.mac`
-  from `/proc/cmdline` and exec's `pixie --server X --mac Y`; ``pixie``
-  then GETs `<server>/pxe/<mac>/plan` and dispatches (auto-flash,
-  interactive wizard, or no-op).
+  images, for ad-hoc flash-install of images. Built via Debian's
+  live-build (`iso-hybrid` output); shipped gzip-compressed as
+  `pixie-usbboot-pc-x86_64.iso.gz` (Etcher / Rufus / Raspberry Pi
+  Imager all decompress `.gz` natively; xz tripped Etcher's bundled
+  handler regardless of preset).
 - **Raspberry-Pi USB flasher** (`VARIANT=usbboot-rpi`) - arm64 image that
   boots a Pi 4 / CM4 / Pi 5 / CM5 from a USB stick into the same pixie
   TUI as `usbboot-pc`, sized for in-situ flashing of local eMMC / NVMe.
@@ -31,16 +25,15 @@ trees that live-build folds in and the live-build config tree. The cijoe
 content lives at `cijoe/` at the repo root.
 
 Operators drive everything via the top-level Makefile:
-`make build VARIANT=usbboot-pc|netboot-pc|usbboot-rpi`.
+`make build VARIANT=usbboot-pc|usbboot-rpi`.
 
 ## Layout
 
 - `auxiliary/cloudinit-metadata.meta` - shared cloud-init metadata.
 - `rootfs/common/` - files baked into every variant.
-- `live-build/` - live-build config tree shared by the two x86
-  variants. The ``PIXIE_VARIANT`` env var selects the shape:
-  ``usbboot-pc`` -> amd64 iso-hybrid; ``netboot-pc`` -> amd64 netboot
-  trio. (``usbboot-rpi`` does not use live-build; it reuses this tree's
+- `live-build/` - live-build config tree used by the x86 usbboot-pc
+  variant. The ``PIXIE_VARIANT`` env var selects the shape:
+  ``usbboot-pc`` -> amd64 iso-hybrid. (``usbboot-rpi`` does not use live-build; it reuses this tree's
   ``includes.chroot/`` + ``config/hooks/`` inside an RPiOS chroot.)
 
 ## Pipeline
@@ -48,10 +41,10 @@ Operators drive everything via the top-level Makefile:
 From the repo root:
 
 ```
-make build VARIANT=usbboot-pc|netboot-pc|usbboot-rpi
+make build VARIANT=usbboot-pc|usbboot-rpi
 ```
 
-dispatches to one of three cijoe task files. The Makefile picks the
+dispatches to one of two cijoe task files. The Makefile picks the
 right one based on the variant:
 
 - `usbboot-pc` -> `cijoe tasks/usbboot-pc.yaml`. Drives Debian's `live-build`
@@ -60,11 +53,6 @@ right one based on the variant:
   `PIXIE_IMGS` partition (`sfdisk --append`, `losetup -fP`,
   `mkfs.exfat`) and gzip-compresses it. Output is
   `pixie-usbboot-pc-x86_64.iso.gz`. No QEMU full-system bake.
-
-- `netboot-pc` -> `cijoe tasks/netboot-pc.yaml`. Drives Debian's
-  `live-build` (debootstrap + mksquashfs + mkinitramfs) directly
-  on the build host: no QEMU, no cloud-init. Output is the kernel
-  + initrd + squashfs trio for PXE chain-boot.
 
 - `usbboot-rpi` -> `cijoe tasks/usbboot-rpi.yaml`. Does NOT use live-build.
   `scripts/rpios_image_build.py` downloads Raspberry Pi OS Lite
@@ -111,19 +99,12 @@ usbboot-pc:
   Decompress to `.iso` first (`gunzip ...`) before dropping onto a
   Ventoy stick; Ventoy doesn't auto-decompress.
 
-netboot-pc:
-- `~/system_imaging/disk/pixie-netboot-pc-x86_64.vmlinuz` - kernel
-- `~/system_imaging/disk/pixie-netboot-pc-x86_64.initrd` - initramfs
-- `~/system_imaging/disk/pixie-netboot-pc-x86_64.squashfs` - overlay rootfs
-- `~/system_imaging/disk/pixie-netboot-pc-x86_64.sha256` - manifest
-
 ## Status
 
 Both variants ship on every tagged release at
 [the GitHub releases page](https://github.com/safl/pixie/releases).
 The end-to-end PXE chain test (``make test-pxe``) gates each release
-on usbboot-pc and netboot-pc building cleanly and the chain working end
-to end. Most operators never run this build pipeline themselves -
+on usbboot-pc building cleanly and the chain working end to end. Most operators never run this build pipeline themselves -
 ``pixie-media/`` exists for contributors who want to modify the image.
 
 - **usbboot-pc.** Hybrid ISO that boots into a Debian live environment
@@ -132,17 +113,6 @@ to end. Most operators never run this build pipeline themselves -
   SquashFS + tmpfs overlay provides the ephemeral rootfs (no
   `overlayroot` package needed). End-to-end use case in
   [`docs/src/tutorials/pixie-usbboot-pc.md`](../docs/src/tutorials/pixie-usbboot-pc.md).
-- **netboot-pc.** Kernel + initrd + squashfs trio used by PXE
-  clients. The chroot ships `pixie-on-tty1.service` (after
-  `network-online.target`); it reads `pixie.server=` + `pixie.mac=`
-  from `/proc/cmdline` and exec's `pixie --server X --mac Y`. ``pixie``
-  then GETs `<server>/pxe/<mac>/plan` and dispatches: `mode=flash`
-  flashes a server-picked image + reboots, `mode=interactive` drops
-  the operator into the wizard with the server's catalog
-  pre-loaded, `mode=inventory` posts disks then reboots, `mode=exit`
-  prints a notice and exits cleanly. Without `pixie.mac` on the
-  cmdline (e.g. USB-local boot), ``pixie`` falls back to scanning
-  the local image-root directory.
 - **usbboot-rpi.** arm64 Pi-bootable raw image (FAT32 firmware + ext4
   live squashfs + auto-growing exFAT `PIXIE_IMGS`). Boots a CM5 /
   Pi5 / Pi4 from a USB stick into the same pixie TUI as usbboot-pc;

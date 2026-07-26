@@ -7,9 +7,9 @@ name: cicd
 #     (real nbdkit, real HTTP, real NBD wire).
 #   * ``build-container``: separate smoke build kept for the "does
 #     the Containerfile parse on a fresh runner" signal.
-#   * ``build-media``: build the live-env media (netboot-pc + usbboot-pc
-#     variants) via the cijoe pipelines under cijoe/tasks/. Requires
-#     live-build + passwordless sudo; the runner has both.
+#   * ``build-media``: build the usbboot-pc bootable .iso via the cijoe
+#     live-build pipeline under cijoe/tasks/. Requires live-build +
+#     passwordless sudo; the runner has both.
 #   * ``verify-usbboot``: structurally verify the usbboot-pc .iso
 #     (hybrid ISO + El Torito BIOS & UEFI entries + sha256), then boot
 #     it via a real Ventoy stick in QEMU and assert the pixie live env
@@ -27,9 +27,9 @@ name: cicd
 #     only. Before this the image was smoke-built and thrown away, so
 #     the documented ghcr image was never populated by CI.
 #   * ``publish-release``: create the GitHub Release for the tag and
-#     attach the media ``build-media`` produces -- the netboot-pc
-#     live-env bake + the usbboot-pc bootable image + checksums. These
-#     used to live only as ephemeral, login-gated workflow artifacts.
+#     attach the media -- the pixie-live-env nbdboot image + the
+#     usbboot-pc bootable .iso + checksums. These used to live only as
+#     ephemeral, login-gated workflow artifacts.
 #
 # First publish (claiming the pixie-lab name) requires a one-time
 # PyPI setup: register a Pending Publisher on https://pypi.org
@@ -106,7 +106,7 @@ jobs:
     name: Build ${{ matrix.variant }} image
     needs: test
     runs-on: ubuntu-latest
-    # A cold live-build (netboot-pc / usbboot-pc) finishes in
+    # A cold live-build (usbboot-pc .iso) finishes in
     # 25-40 min on a warm GHA runner. The dominant failure mode is
     # a HANG (in-chroot apt / debootstrap has no timeout), so a 60
     # min cap fails a stuck build fast; the cijoe-output artifact
@@ -116,7 +116,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        variant: [netboot-pc, usbboot-pc]
+        variant: [usbboot-pc]
     steps:
       - uses: actions/checkout@v6
 
@@ -170,17 +170,6 @@ jobs:
           name: cijoe-output-${{ matrix.variant }}
           path: cijoe/cijoe-output
           if-no-files-found: warn
-
-      - name: Upload artifact (netboot-pc)
-        if: matrix.variant == 'netboot-pc'
-        uses: actions/upload-artifact@v7
-        with:
-          name: pixie-netboot-pc-x86_64
-          path: |
-            ~/system_imaging/disk/pixie-netboot-pc-x86_64-v*.vmlinuz
-            ~/system_imaging/disk/pixie-netboot-pc-x86_64-v*.initrd
-            ~/system_imaging/disk/pixie-netboot-pc-x86_64-v*.squashfs
-            ~/system_imaging/disk/pixie-netboot-pc-x86_64-v*.sha256
 
       - name: Upload artifact (usbboot-pc)
         if: matrix.variant == 'usbboot-pc'
@@ -318,9 +307,8 @@ jobs:
     # netboot bundle, root disk from nosi's img.gz -- and asserts a
     # real Debian userspace comes up over NBD.
     #
-    # 60 min timeout for the same reasons as test-pxe-flash: the real
-    # oras pull (~2.6 GiB compressed) + img.gz decompression to
-    # pixie's blob store dominates wall clock.
+    # 60 min timeout because the real oras pull (~2.6 GiB compressed) +
+    # img.gz decompression to pixie's blob store dominates wall clock.
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
@@ -362,263 +350,6 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: test-pxe-nbdboot-workspace
-          path: cijoe/_build/test-pxe
-          if-no-files-found: warn
-
-  test-pxe-inventory:
-    name: PXE inventory chain test (containerized pixie + client QEMU VM)
-    # Depends on the netboot-pc bake for the live-env media that
-    # pixie serves at /boot/pixie-live-env/. No disk image assembly
-    # here (unlike nbdboot), so the runner does not need
-    # squashfs-tools / rsync / mkfs.ext4.
-    needs: build-media
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@v6
-
-      - name: Install host tools (qemu, dnsmasq, ipxe, bridge)
-        run: |
-          set -eu
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            qemu-system-x86 \
-            qemu-utils \
-            dnsmasq \
-            ipxe \
-            bridge-utils \
-            iproute2
-          sudo chmod a+rw /dev/kvm
-          ls -la /dev/kvm
-
-      - name: Install cijoe
-        run: pipx install --force cijoe
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@v8.1.0
-
-      - name: Download netboot-pc bake artifacts
-        uses: actions/download-artifact@v7
-        with:
-          name: pixie-netboot-pc-x86_64
-          path: ~/system_imaging/disk/
-
-      - name: Show downloaded artifact contents
-        run: |
-          set -eu
-          echo "--- ~/system_imaging/disk (recursive) ---"
-          find ~/system_imaging/disk -maxdepth 5 -print
-
-      - name: Run PXE inventory chain test
-        run: make test-pxe-inventory
-
-      - name: Upload cijoe output
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: cijoe-output-test-pxe-inventory
-          path: cijoe/cijoe-output
-          if-no-files-found: warn
-
-      - name: Upload PXE workspace (serial logs, dnsmasq.log)
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: test-pxe-inventory-workspace
-          path: cijoe/_build/test-pxe
-          if-no-files-found: warn
-
-  test-pxe-flash:
-    name: PXE flash chain test (containerized pixie + client QEMU VM)
-    # Same artifact dependency as test-pxe-inventory (the netboot-pc
-    # bake for the live-env media). qemu-utils lands qemu-img which
-    # we use to read the client disk's sector 0 for a boot-signature
-    # check without a full-disk convert.
-    #
-    # Wider timeout (60 min) because the pipeline pulls a real nosi
-    # image via oras (~2.6 GiB compressed) + decompresses img.gz +
-    # dds ~10 GiB sparsely to the client qcow2 -- not the synthetic
-    # 16 MiB marker file the earlier test-pxe-flash iterations used.
-    needs: build-media
-    runs-on: ubuntu-latest
-    timeout-minutes: 60
-    steps:
-      - uses: actions/checkout@v6
-
-      - name: Install host tools (qemu, dnsmasq, ipxe, bridge)
-        run: |
-          set -eu
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            qemu-system-x86 \
-            qemu-utils \
-            dnsmasq \
-            ipxe \
-            bridge-utils \
-            iproute2
-          sudo chmod a+rw /dev/kvm
-          ls -la /dev/kvm
-
-      - name: Install cijoe
-        run: pipx install --force cijoe
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@v8.1.0
-
-      - name: Download netboot-pc bake artifacts
-        uses: actions/download-artifact@v7
-        with:
-          name: pixie-netboot-pc-x86_64
-          path: ~/system_imaging/disk/
-
-      - name: Show downloaded artifact contents
-        run: |
-          set -eu
-          echo "--- ~/system_imaging/disk (recursive) ---"
-          find ~/system_imaging/disk -maxdepth 5 -print
-
-      - name: Run PXE flash chain test
-        run: make test-pxe-flash
-
-      - name: Upload cijoe output
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: cijoe-output-test-pxe-flash
-          path: cijoe/cijoe-output
-          if-no-files-found: warn
-
-      - name: Upload PXE workspace (serial logs, dnsmasq.log)
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: test-pxe-flash-workspace
-          path: cijoe/_build/test-pxe
-          if-no-files-found: warn
-
-  test-pxe-flash-always:
-    name: PXE flash-always chain test (containerized pixie + client QEMU VM)
-    # Same dependencies + real-nosi pipeline as test-pxe-flash. The
-    # difference is a one-line config knob + an inverted assertion:
-    # pixie-flash-always must NOT flip its bind on the CLI's /done.
-    # 60 min for the same reasons -- real oras pull dominates.
-    needs: build-media
-    runs-on: ubuntu-latest
-    timeout-minutes: 60
-    steps:
-      - uses: actions/checkout@v6
-
-      - name: Install host tools (qemu, dnsmasq, ipxe, bridge)
-        run: |
-          set -eu
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            qemu-system-x86 \
-            qemu-utils \
-            dnsmasq \
-            ipxe \
-            bridge-utils \
-            iproute2
-          sudo chmod a+rw /dev/kvm
-          ls -la /dev/kvm
-
-      - name: Install cijoe
-        run: pipx install --force cijoe
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@v8.1.0
-
-      - name: Download netboot-pc bake artifacts
-        uses: actions/download-artifact@v7
-        with:
-          name: pixie-netboot-pc-x86_64
-          path: ~/system_imaging/disk/
-
-      - name: Show downloaded artifact contents
-        run: |
-          set -eu
-          echo "--- ~/system_imaging/disk (recursive) ---"
-          find ~/system_imaging/disk -maxdepth 5 -print
-
-      - name: Run PXE flash-always chain test
-        run: make test-pxe-flash-always
-
-      - name: Upload cijoe output
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: cijoe-output-test-pxe-flash-always
-          path: cijoe/cijoe-output
-          if-no-files-found: warn
-
-      - name: Upload PXE workspace (serial logs, dnsmasq.log)
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: test-pxe-flash-always-workspace
-          path: cijoe/_build/test-pxe
-          if-no-files-found: warn
-
-  test-pxe-tui:
-    name: PXE tui chain test (containerized pixie + client QEMU VM)
-    # Same live-env media dependency as test-pxe-flash. No qemu-utils
-    # here -- the tui test does not read the target disk; it just
-    # asserts the wizard entered its picker screen (a serial marker
-    # coming out of pixie CLI's _screen_select_image).
-    needs: build-media
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@v6
-
-      - name: Install host tools (qemu, dnsmasq, ipxe, bridge)
-        run: |
-          set -eu
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            qemu-system-x86 \
-            qemu-utils \
-            dnsmasq \
-            ipxe \
-            bridge-utils \
-            iproute2
-          sudo chmod a+rw /dev/kvm
-          ls -la /dev/kvm
-
-      - name: Install cijoe
-        run: pipx install --force cijoe
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@v8.1.0
-
-      - name: Download netboot-pc bake artifacts
-        uses: actions/download-artifact@v7
-        with:
-          name: pixie-netboot-pc-x86_64
-          path: ~/system_imaging/disk/
-
-      - name: Show downloaded artifact contents
-        run: |
-          set -eu
-          echo "--- ~/system_imaging/disk (recursive) ---"
-          find ~/system_imaging/disk -maxdepth 5 -print
-
-      - name: Run PXE tui chain test
-        run: make test-pxe-tui
-
-      - name: Upload cijoe output
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: cijoe-output-test-pxe-tui
-          path: cijoe/cijoe-output
-          if-no-files-found: warn
-
-      - name: Upload PXE workspace (serial logs, dnsmasq.log)
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: test-pxe-tui-workspace
           path: cijoe/_build/test-pxe
           if-no-files-found: warn
 
@@ -714,10 +445,6 @@ jobs:
       - build-live-env-image
       - test-pxe
       - test-pxe-nbdboot
-      - test-pxe-inventory
-      - test-pxe-tui
-      - test-pxe-flash
-      - test-pxe-flash-always
       - verify-usbboot
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/v')
@@ -757,10 +484,6 @@ jobs:
       - build-live-env-image
       - test-pxe
       - test-pxe-nbdboot
-      - test-pxe-inventory
-      - test-pxe-tui
-      - test-pxe-flash
-      - test-pxe-flash-always
       - verify-usbboot
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/v')
@@ -788,11 +511,11 @@ jobs:
 
   publish-release:
     name: Publish GitHub Release (media assets)
-    # Attach the media CI already builds -- the netboot-pc live-env
-    # bake (vmlinuz + initrd + squashfs) and the usbboot-pc bootable
-    # image -- to a GitHub Release on v* tags. Before this they only
-    # existed as ephemeral, login-gated workflow artifacts, so an
-    # operator had no released live-env or USB image to download. Same
+    # Attach the media CI already builds -- the pixie-live-env nbdboot
+    # image and the usbboot-pc bootable .iso -- to a GitHub Release on
+    # v* tags. Before this they only existed as ephemeral, login-gated
+    # workflow artifacts, so an operator had no released live-env or
+    # USB image to download. Same
     # full-pipeline gate as the other publish jobs.
     needs:
       - test
@@ -803,10 +526,6 @@ jobs:
       - build-live-env-image
       - test-pxe
       - test-pxe-nbdboot
-      - test-pxe-inventory
-      - test-pxe-tui
-      - test-pxe-flash
-      - test-pxe-flash-always
       - verify-usbboot
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/v')
@@ -817,9 +536,7 @@ jobs:
       - name: Download media artifacts
         uses: actions/download-artifact@v8
         with:
-          # Both build-media matrix legs upload under this shape:
-          # ``pixie-netboot-pc-x86_64`` + ``pixie-usbboot-pc-x86_64``.
-          # merge-multiple flattens both into one directory.
+          # build-media uploads the usbboot-pc .iso under this shape.
           pattern: pixie-*-pc-x86_64
           merge-multiple: true
           path: release-assets
@@ -834,25 +551,13 @@ jobs:
           path: release-assets
       - name: List release assets
         run: ls -la release-assets
-      - name: Assemble live-env fetch tarball
-        # pixie's in-app "Fetch live-env" pulls ONE tarball that unpacks
-        # to vmlinuz + initrd + live.squashfs (see catalog/_live_env.py).
-        # Repackage the netboot-pc trio under those stable names so
-        # ``.../releases/latest/download/pixie-live-env-x86_64.tar.gz``
-        # -- the default PIXIE_LIVE_ENV_SRC -- resolves.
+      - name: Stage curated catalog
+        # Ship the curated catalog (the nosi subset + the pixie-live-env
+        # image) so DEFAULT_CATALOG_URL
+        # (.../releases/latest/download/catalog.toml) resolves and
+        # pixie's Import + live-env TUI default work.
         run: |
           set -eu
-          d=$(mktemp -d)
-          cp release-assets/pixie-netboot-pc-x86_64-*.vmlinuz  "$d/vmlinuz"
-          cp release-assets/pixie-netboot-pc-x86_64-*.initrd   "$d/initrd"
-          cp release-assets/pixie-netboot-pc-x86_64-*.squashfs "$d/live.squashfs"
-          tar -C "$d" -czf release-assets/pixie-live-env-x86_64.tar.gz \
-            vmlinuz initrd live.squashfs
-          ( cd release-assets && sha256sum pixie-live-env-x86_64.tar.gz \
-              > pixie-live-env-x86_64.tar.gz.sha256 )
-          # Ship the curated catalog (the netboot-capable nosi subset)
-          # so DEFAULT_CATALOG_URL (.../releases/latest/download/catalog.toml)
-          # resolves and pixie's Import + live-env TUI default work.
           cp src/pixie/catalog/catalog.toml release-assets/catalog.toml
           ls -la release-assets
       - name: Create / update GitHub Release
@@ -874,7 +579,5 @@ jobs:
             - `pixie-live-env-x86_64.img.gz` — the **nbdboot** live-env image: the nosi `arch-headless` base disk image with the pixie CLI + `pixie-on-tty1` service injected. Fetch it from the **Catalog** tab (it seeds into a fresh catalog), then set `PIXIE_LIVE_ENV_IMAGE_SHA` to select it for the `pixie-flash-once` / `pixie-flash-always` / `pixie-inventory` / `pixie-tui` boot modes so they nbdboot this image ephemerally.
             - `pixie-live-env-x86_64.content-sha256` — the raw-image sha256 to set `PIXIE_LIVE_ENV_IMAGE_SHA` to (identical to the `content_sha256` pixie assigns after fetching the `pixie-live-env` catalog entry).
             - `pixie-live-env-catalog.toml` — the catalog fragment (the `pixie-live-env` disk image + its arch-headless netboot bundle) with `content_sha256` filled in; the shipped `catalog.toml` also lists these entries.
-            - `pixie-live-env-x86_64.tar.gz` — the older squashfs live-env trio for pixie's in-app **Fetch live-env** action (the default `PIXIE_LIVE_ENV_SRC`) and the `PIXIE_LIVE_ENV_DIR` staging path.
-            - `pixie-netboot-pc-x86_64-*.{vmlinuz,initrd,squashfs}` — the squashfs live-env (netboot-pc bake) as loose files, if you prefer to stage `PIXIE_LIVE_ENV_DIR` (`data/live-env/`) by hand.
-            - `pixie-usbboot-pc-x86_64-*.iso` — bootable USB / ISO media for the pixie live env (uncompressed; `dd` / Etcher / Ventoy ready).
+            - `pixie-usbboot-pc-x86_64-*.iso` — bootable USB / ISO media for ad-hoc flash-install of images (uncompressed; `dd` / Etcher / Ventoy ready).
             - `*.sha256` — checksums for the above.

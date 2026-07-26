@@ -35,7 +35,6 @@ from pathlib import Path
 # target dir.
 _LIVE_CHROOT = Path("live-build") / "config" / "includes.chroot" / "opt" / "pixie"
 TARGET_DIRS: dict[str, Path] = {
-    "netboot-pc": _LIVE_CHROOT,
     "usbboot-pc": _LIVE_CHROOT,
     "usbboot-rpi": _LIVE_CHROOT,
 }
