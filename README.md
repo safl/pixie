@@ -39,13 +39,18 @@ top nav has Machines, Catalog, Events, and Settings.
 2. Click Fetch on a row to download it. The status pill ticks
    through downloading -> decompressing -> unpacking with a
    `bytes / total` counter so you see progress live.
-3. Power-cycle a target with pixie in its DHCP next-server chain.
+3. For the live-env boot modes (`pixie-inventory` / `pixie-tui` /
+   `pixie-flash-*`), Fetch the `pixie-live-env` image + its netboot
+   bundle, then set the image's `content_sha256` on the Live env page
+   (`/ui/live-env`) or via `PIXIE_LIVE_ENV_IMAGE_SHA`. Those modes
+   nbdboot that image; until it's selected they render `unavailable`.
+4. Power-cycle a target with pixie in its DHCP next-server chain.
    A first contact shows up on `/ui/machines` with the default
    `ipxe-exit` boot mode. Open the row to bind a mode + image.
-4. `pixie-inventory` prompts the live env to POST an inventory
+5. `pixie-inventory` prompts the live env to POST an inventory
    blob; the target's disks + NICs + memory show up on the
    machine detail page.
-5. Flash modes (`pixie-flash-once`, `pixie-flash-always`) require
+6. Flash modes (`pixie-flash-once`, `pixie-flash-always`) require
    a target disk serial that came in on the inventory. The
    binding form disables Save until that prerequisite is met.
 
@@ -57,9 +62,11 @@ event log, settings, NBD-export records, and persistent-overlay
 records. `blobs/<sha>/blob` holds fetched disk images.
 `artifacts/<sha>/{vmlinuz,initrd,manifest.json}` holds unpacked
 netboot bundles. `overlays/<mac>/<image_sha>/<profile>.qcow2` holds
-per-machine writable overlays for the `nbdboot` boot mode.
-`live-env/` holds the pixie live env kernel + initrd + squashfs the
-netboot-pc bake produced.
+per-machine writable overlays for the `nbdboot` boot mode. The live env
+(`pixie-inventory` / `pixie-tui` / `pixie-flash-*`) is the fetched
+`pixie-live-env` disk image, selected by `PIXIE_LIVE_ENV_IMAGE_SHA` /
+the Live env page and nbdbooted like any other image, so it lives in
+`blobs/` + `artifacts/` too - there is no separate live-env directory.
 
 Both admin password and display timezone / strftime pattern have
 env-var overrides plus DB overrides via `/ui/settings`; env wins
