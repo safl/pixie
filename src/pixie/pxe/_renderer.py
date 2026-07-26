@@ -91,12 +91,12 @@ class RenderContext:
     # no-op is a legal value.
     extra_cmdline: str = ""
     # Disk-image content sha the live-env boot modes boot over
-    # ephemeral nbdboot instead of the Debian live-boot squashfs.
-    # Operator-set via PIXIE_LIVE_ENV_IMAGE_SHA / the Live env page.
-    # Empty (default) keeps the squashfs path so existing deploys are
-    # untouched; when set, ``render`` streams this image over NBD for
-    # every LIVE_ENV_MODES machine (the machine's own bind still drives
-    # what GET /pxe/<mac>/plan returns, so the on-target CLI dispatches
+    # ephemeral nbdboot. Operator-set via PIXIE_LIVE_ENV_IMAGE_SHA /
+    # the Live env page. Empty means no live-env image is configured,
+    # so LIVE_ENV_MODES machines degrade to the ``unavailable`` plan;
+    # when set, ``render`` streams this image over NBD for every
+    # LIVE_ENV_MODES machine (the machine's own bind still drives what
+    # GET /pxe/<mac>/plan returns, so the on-target CLI dispatches
     # inventory / interactive / flash correctly).
     live_env_image_sha: str = ""
 
@@ -113,7 +113,6 @@ class PlanRenderer:
         overlays: OverlaysStore,
         nbd: NbdServer,
         overlays_dir: Path,
-        live_env_dir: Path | None = None,
         events: Any = None,
     ) -> None:
         self._catalog = catalog
@@ -128,27 +127,10 @@ class PlanRenderer:
         # booted) land alongside the rest of pixie's audit trail. None
         # for unit tests that don't wire an events sink.
         self._events = events
-        # Where the netboot-pc bake's vmlinuz + initrd + squashfs are
-        # staged on disk. When set + the three files exist, the
-        # ``pixie-*`` boot modes chain into the live env; otherwise
-        # they fall back to the ``unavailable`` plan so a bound
-        # target does not silently boot nothing.
-        self._live_env_dir = live_env_dir
         self._env = Environment(
             loader=FileSystemLoader(str(_TEMPLATES_DIR)),
             autoescape=select_autoescape(disabled_extensions=("j2",)),
             keep_trailing_newline=True,
-        )
-
-    def _live_env_ready(self) -> bool:
-        """True iff the netboot-pc artifacts are staged on disk under
-        ``self._live_env_dir``. Called per-render so an operator
-        dropping the files in without a pixie restart takes effect
-        on the next PXE hit."""
-        if self._live_env_dir is None:
-            return False
-        return all(
-            (self._live_env_dir / name).is_file() for name in ("vmlinuz", "initrd", "live.squashfs")
         )
 
     def render(self, machine: Machine, ctx: RenderContext) -> str:
@@ -341,52 +323,37 @@ class PlanRenderer:
     ) -> str:
         """Render a plan for one of the ``LIVE_ENV_MODES``.
 
-        Two deliveries, picked by ``ctx.live_env_image_sha``
-        (PIXIE_LIVE_ENV_IMAGE_SHA / the Live env page):
+        The live env boots the disk image named by
+        ``ctx.live_env_image_sha`` (PIXIE_LIVE_ENV_IMAGE_SHA / the Live
+        env page) over EPHEMERAL nbdboot, the same code path the
+        ``nbdboot`` mode uses -- proven on hardware to bring the NIC up
+        via dracut where the retired Debian live-boot squashfs hung in
+        the initramfs on some boards. If no image is configured, or the
+        configured image / its netboot bundle isn't fetched, degrade to
+        ``unavailable`` (matching how ``nbdboot`` degrades) rather than
+        booting nothing -- a live-env mode with no bootable image is an
+        operator setup gap worth surfacing.
 
-        * Set -> boot that disk image over EPHEMERAL nbdboot, the same
-          code path the ``nbdboot`` mode uses. Proven on hardware to
-          bring the NIC up via dracut where the squashfs live-boot
-          hangs in the initramfs on some boards. If the configured
-          image or its netboot bundle isn't fetched, degrade to
-          ``unavailable`` (matching how ``nbdboot`` degrades) rather
-          than silently falling back -- a configured-but-broken live
-          env is an operator error worth surfacing.
-        * Unset -> the historical Debian live-boot squashfs
-          (``pixie-live-env.j2``), or ``unavailable`` when the
-          netboot-pc bake artifacts have not been staged.
-
-        Either way the machine's OWN ``boot_mode`` still drives what
+        The machine's OWN ``boot_mode`` still drives what
         ``GET /pxe/<mac>/plan`` returns, so the on-target pixie CLI
-        dispatches inventory / interactive / flash exactly as before."""
+        dispatches inventory / interactive / flash accordingly."""
         live_env_sha = ctx.live_env_image_sha
-        if live_env_sha:
-            resolved = self._resolve_bundle_and_blob(live_env_sha)
-            if isinstance(resolved, str):
-                return self._unavailable(
-                    machine,
-                    f"live-env image {live_env_sha[:12]} not bootable: {resolved}",
-                )
-            bundle_entry, blob = resolved
-            return self._render_ephemeral_nbdboot(
-                machine, ctx, live_env_sha, bundle_entry, blob, extra_cmdline
-            )
-        if not self._live_env_ready():
-            # netboot-pc bake artifacts have not been staged on this
-            # deploy yet; degrade to the readable unavailable plan so a
-            # bound target lands on a legible screen instead of a
-            # bty-media initrd.
+        if not live_env_sha:
             return self._unavailable(
                 machine,
-                f"boot_mode={mode!r} needs pixie live-env media; "
-                f"stage vmlinuz+initrd+squashfs under $PIXIE_LIVE_ENV_DIR",
+                f"boot_mode={mode!r} needs a live-env image; set "
+                "PIXIE_LIVE_ENV_IMAGE_SHA (or the Live env page) to a "
+                "fetched image's content sha",
             )
-        return self._env.get_template("pixie-live-env.j2").render(
-            mac=machine.mac,
-            boot_mode=mode,
-            host=ctx.host,
-            port=ctx.port,
-            extra_cmdline=extra_cmdline,
+        resolved = self._resolve_bundle_and_blob(live_env_sha)
+        if isinstance(resolved, str):
+            return self._unavailable(
+                machine,
+                f"live-env image {live_env_sha[:12]} not bootable: {resolved}",
+            )
+        bundle_entry, blob = resolved
+        return self._render_ephemeral_nbdboot(
+            machine, ctx, live_env_sha, bundle_entry, blob, extra_cmdline
         )
 
     def _unavailable(self, machine: Machine, reason: str) -> str:

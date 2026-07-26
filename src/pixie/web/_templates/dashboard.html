@@ -126,67 +126,45 @@
     </div>
 </div>
 
-{# Live-env media readiness (OUTPUT ONLY). The dashboard reports
-   whether the pixie-* boot modes have their media; the Fetch action +
-   source / cmdline config live on the dedicated /ui/live-env pane. #}
-{% set lfs = stats.live_env_fetch_state or {} %}
+{# Live-env readiness (OUTPUT ONLY). The dashboard reports whether the
+   pixie-* boot modes have a bootable image selected; the image + cmdline
+   config live on the dedicated /ui/live-env pane. #}
 <div class="card shadow-sm mb-4">
     <div class="card-header bg-light d-flex align-items-center gap-2">
-        <h2 class="h5 mb-0"><i class="bi bi-boombox me-2"></i>Live-env media</h2>
+        <h2 class="h5 mb-0"><i class="bi bi-boombox me-2"></i>Live env</h2>
         <div class="ms-auto d-flex align-items-center gap-2">
-            {% if lfs.state == 'fetching' %}
-            <span class="badge text-bg-info"><span class="spinner-border spinner-border-sm me-1" role="status"></span>fetching</span>
-            {% elif stats.live_env_ready %}
+            {% if stats.live_env_ready %}
             <span class="badge text-bg-success"><i class="bi bi-check-circle me-1"></i>ready</span>
             {% else %}
-            <span class="badge text-bg-warning"><i class="bi bi-exclamation-triangle me-1"></i>not staged</span>
+            <span class="badge text-bg-warning"><i class="bi bi-exclamation-triangle me-1"></i>not ready</span>
             {% endif %}
             <a href="/ui/live-env" class="btn btn-sm btn-outline-primary text-nowrap"
-               title="Fetch + configure the live env">
+               title="Select + configure the live env">
                 <i class="bi bi-boombox me-1"></i>Manage
             </a>
         </div>
     </div>
     <div class="card-body">
         {% if stats.live_env_ready %}
-        <p class="small mb-2">
-            Staged at <code>{{ stats.live_env_dir }}</code>;
+        <p class="small mb-0">
+            Image <code>{{ stats.live_env_image_sha[:12] }}</code> selected and fetched;
             <code>pixie-tui</code> / <code>pixie-inventory</code> /
-            <code>pixie-flash-*</code> can serve the live env.
+            <code>pixie-flash-*</code> boot it over ephemeral nbdboot.
+        </p>
+        {% elif stats.live_env_image_sha %}
+        <p class="small text-warning mb-0">
+            Live-env image <code>{{ stats.live_env_image_sha[:12] }}</code> is selected but
+            not fetched. Every <code>pixie-*</code> boot_mode falls back to the "unavailable"
+            iPXE plan until the image is fetched. <a href="/ui/catalog">Fetch it &rarr;</a>
         </p>
         {% else %}
-        <p class="small text-warning mb-2">
-            Live-env media is missing under <code>{{ stats.live_env_dir or '(unset)' }}</code>.
-            Every <code>pixie-*</code> boot_mode falls back to the "unavailable" iPXE
-            plan until it is staged. <a href="/ui/live-env">Fetch it &rarr;</a>
+        <p class="small text-warning mb-0">
+            No live-env image selected. Every <code>pixie-*</code> boot_mode falls back to the
+            "unavailable" iPXE plan until one is set. <a href="/ui/live-env">Select it &rarr;</a>
         </p>
         {% endif %}
-        {% if lfs.state == 'error' %}
-        <p class="small text-danger mb-2">
-            <i class="bi bi-exclamation-triangle me-1"></i>Last fetch failed &mdash; see
-            <a href="/ui/live-env">Live env</a>.
-        </p>
-        {% endif %}
-        <dl class="row small mb-0">
-            {% for name, size in stats.live_env_files.items() %}
-            <dt class="col-sm-3 font-monospace">{{ name }}</dt>
-            <dd class="col-sm-9">
-                {% if size is not none %}
-                <span class="text-success"><i class="bi bi-check-circle me-1"></i>{{ (size / 1024 / 1024) | round(1) }} MiB</span>
-                {% else %}
-                <span class="text-warning"><i class="bi bi-x-circle me-1"></i>missing</span>
-                {% endif %}
-            </dd>
-            {% endfor %}
-        </dl>
     </div>
 </div>
-{% if lfs.state == 'fetching' %}
-{# The fetch runs on the server's thread pool; poll the page so the
-   spinner flips to "ready" (or an error) on its own. A big squashfs
-   download takes a while, so 5 s is frequent enough without hammering. #}
-<script>setTimeout(function () { location.reload(); }, 5000);</script>
-{% endif %}
 
 <div class="card shadow-sm">
     <div class="card-header bg-light d-flex align-items-center">

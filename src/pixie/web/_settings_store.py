@@ -74,29 +74,16 @@ ENV_LIVE_ENV_EXTRA_CMDLINE = "PIXIE_LIVE_ENV_EXTRA_CMDLINE"
 # it never reaches a kernel cmdline.
 _UNEXPANDED_ENV_PLACEHOLDER = re.compile(r"^\$\{[A-Za-z_][A-Za-z0-9_]*(:[-+?=]?[^}]*)?\}$")
 
-# Where the operator "Fetch live-env" action pulls the netboot-pc bake
-# from: a single tarball ``src`` (``https://`` or ``oras://``, the same
-# schemes the catalog fetch speaks) that unpacks to vmlinuz + initrd +
-# live.squashfs. Defaults to the pixie GitHub release's stable-named
-# asset via ``/releases/latest/download/`` so a plain deploy can pull
-# the live env with no config; override for an air-gapped mirror.
-KEY_LIVE_ENV_SRC = "live_env.src"
-ENV_LIVE_ENV_SRC = "PIXIE_LIVE_ENV_SRC"
-DEFAULT_LIVE_ENV_SRC = (
-    "https://github.com/safl/pixie/releases/latest/download/pixie-live-env-x86_64.tar.gz"
-)
-
 # Disk-image content sha the live-env boot modes
 # (pixie-inventory / -tui / -flash-once / -flash-always) boot over
-# EPHEMERAL nbdboot instead of the Debian live-boot squashfs. When set
-# (and the named image + its netboot bundle are fetched) the renderer
-# streams this image over NBD -- proven on hardware to bring the NIC up
-# via dracut where the squashfs live-boot hangs in the initramfs on some
-# boards. Empty (the default) keeps the historical squashfs path so
-# existing deploys are untouched. Resolution: DB override -> env ->
-# empty. A value that is not 64 lowercase hex chars is treated as unset
-# so a fat-fingered setting degrades to the squashfs path rather than
-# sending every live-env boot into the unavailable plan.
+# EPHEMERAL nbdboot. When set (and the named image + its netboot bundle
+# are fetched) the renderer streams this image over NBD -- proven on
+# hardware to bring the NIC up via dracut where the retired squashfs
+# live-boot hung in the initramfs on some boards. Empty (the default)
+# means those modes degrade to the unavailable plan. Resolution: DB
+# override -> env -> empty. A value that is not 64 lowercase hex chars
+# is treated as unset so a fat-fingered setting degrades to unavailable
+# cleanly.
 KEY_LIVE_ENV_IMAGE_SHA = "live_env.image_sha"
 ENV_LIVE_ENV_IMAGE_SHA = "PIXIE_LIVE_ENV_IMAGE_SHA"
 
@@ -215,17 +202,6 @@ class SettingsStore:
         if env and not _UNEXPANDED_ENV_PLACEHOLDER.match(env):
             return env
         return ""
-
-    def resolve_live_env_src(self) -> str:
-        """Effective live-env fetch src: DB override -> env -> default
-        (the pixie GitHub release asset). Never empty; the caller feeds
-        it straight to the live-env fetch, which raises on a bad
-        scheme."""
-        return (
-            self.get(KEY_LIVE_ENV_SRC)
-            or (os.environ.get(ENV_LIVE_ENV_SRC) or "").strip()
-            or DEFAULT_LIVE_ENV_SRC
-        )
 
     def resolve_live_env_image_sha(self) -> str:
         """Effective live-env disk-image content sha: DB override -> env

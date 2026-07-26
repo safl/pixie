@@ -206,10 +206,9 @@ def test_live_env_extra_cmdline_resolution(tmp_path: Path, monkeypatch: pytest.M
 
 
 def test_ui_settings_live_env_edit_persists(client: TestClient) -> None:
-    """POST /ui/live-env/cmdline/edit stores the tokens; a subsequent
-    GET /pxe/<mac> lands them on the kernel line."""
-    from pathlib import Path as _Path
-
+    """POST /ui/live-env/cmdline/edit stores the tokens so the settings
+    store resolves them (the live-env nbdboot kernel line then carries
+    them -- see test_pxe_plan_json's extra-cmdline test)."""
     c = _authed(client)
     r = c.post(
         "/ui/live-env/cmdline/edit",
@@ -217,22 +216,10 @@ def test_ui_settings_live_env_edit_persists(client: TestClient) -> None:
         follow_redirects=False,
     )
     assert r.status_code == 303
-
-    # Stage live-env media + a bound machine so /pxe/<mac> renders
-    # the live-env template rather than the unavailable fallback.
-    live_env = client.app.state.live_env_dir  # type: ignore[attr-defined]
-    assert isinstance(live_env, _Path)
-    live_env.mkdir(parents=True, exist_ok=True)
-    for name in ("vmlinuz", "initrd", "live.squashfs"):
-        (live_env / name).write_bytes(b"stub")
-    try:
-        c.put("/machines/aa:bb:cc:dd:ee:41", json={"boot_mode": "pixie-inventory"})
-        body = c.get("/pxe/aa:bb:cc:dd:ee:41").text
-        kernel_line = next(line for line in body.splitlines() if line.startswith("kernel "))
-        assert "pci=realloc=on,nocrs" in kernel_line
-    finally:
-        for name in ("vmlinuz", "initrd", "live.squashfs"):
-            (live_env / name).unlink(missing_ok=True)
+    assert (
+        client.app.state.settings_store.resolve_live_env_extra_cmdline()  # type: ignore[attr-defined]
+        == "pci=realloc=on,nocrs"
+    )
 
 
 def test_ui_settings_live_env_rejects_newline(client: TestClient) -> None:
