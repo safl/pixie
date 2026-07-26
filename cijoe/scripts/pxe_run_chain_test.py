@@ -128,11 +128,12 @@ def main(args, cijoe) -> int:
         client_log.unlink()
 
     mode = str(cfg.get("mode", "bootstrap")).lower()
-    if mode not in ("bootstrap", "nbdboot", "inventory", "flash", "tui"):
-        log.error(
-            f"unknown [test.pxe] mode={mode!r}; expected "
-            "'bootstrap', 'nbdboot', 'inventory', 'flash', or 'tui'"
-        )
+    # The squashfs-based live-env chain modes (inventory / flash / tui)
+    # were retired with the squashfs live-env; only bootstrap + nbdboot
+    # remain wired. The downstream inventory/flash/tui branches below are
+    # now unreachable and slated for a follow-up gut.
+    if mode not in ("bootstrap", "nbdboot"):
+        log.error(f"unknown [test.pxe] mode={mode!r}; expected 'bootstrap' or 'nbdboot'")
         return errno.EINVAL
 
     container = None

@@ -10,10 +10,7 @@
 #
 # Variants:
 #
-#   - ``netboot-pc`` (default): amd64 kernel + initrd + squashfs
-#     trio for the PXE flow. Server hosts these three files over
-#     HTTP and clients chain into them via iPXE.
-#   - ``usbboot-pc``: amd64 hybrid ISO image bootable from CD or USB
+#   - ``usbboot-pc`` (default): amd64 hybrid ISO image bootable from CD or USB
 #     (BIOS + UEFI). Adds ``--bootloaders syslinux,grub-efi`` for
 #     dual-firmware boot. No ``pixie.*`` cmdline params: USB-local
 #     boot has no pixie-server URL or self-MAC to pin, and
@@ -62,21 +59,9 @@ set -e
 # hiding init output makes operator debugging harder, polish is not
 # worth the opacity.
 
-PIXIE_VARIANT="${PIXIE_VARIANT:-netboot-pc}"
+PIXIE_VARIANT="${PIXIE_VARIANT:-usbboot-pc}"
 
 case "${PIXIE_VARIANT}" in
-    netboot-pc)
-        ARCH=amd64
-        BINARY_IMAGES=netboot
-        BOOTLOADERS_OPTS=""
-        # The PXE-flash chain (server's ipxe_flash.j2 / ipxe_tui.j2)
-        # appends ``pixie.server=...`` + ``pixie.mac=...`` per-client at
-        # render time, so the chroot's static bootappend doesn't carry
-        # them. ``modprobe.blacklist=...`` mirrors the iPXE chain
-        # rationale (see ipxe_flash.j2 for the full story): nouveau
-        # for iGPU wedges, rndis_host for Aspeed BMC USB Virtual NICs.
-        BOOTAPPEND="boot=live components plymouth.enable=0 modprobe.blacklist=nouveau,rndis_host nouveau.modeset=0 systemd.gpt_auto=0 pixie.version=__PIXIE_VERSION__"
-        ;;
     usbboot-pc)
         ARCH=amd64
         BINARY_IMAGES=iso-hybrid
@@ -97,7 +82,7 @@ case "${PIXIE_VARIANT}" in
         ;;
     *)
         echo "auto/config: unknown PIXIE_VARIANT=${PIXIE_VARIANT}" >&2
-        echo "  valid: netboot-pc | usbboot-pc" >&2
+        echo "  valid: usbboot-pc" >&2
         exit 2
         ;;
 esac

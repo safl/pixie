@@ -11,6 +11,21 @@ operator-facing summary.
 
 ## [Unreleased]
 
+### Removed
+
+**The squashfs live-env path is retired.** The live-env boot modes
+(`pixie-inventory` / `pixie-tui` / `pixie-flash-once` / `pixie-flash-always`)
+now boot the disk image selected by `PIXIE_LIVE_ENV_IMAGE_SHA` over
+ephemeral nbdboot, full stop -- the old Debian live-boot squashfs
+delivery is gone. Removed: the `boot=live fetch=<squashfs>` render
+fallback (an unset image sha now degrades to the unavailable plan, so
+select an image on the Live env page), the in-app "Fetch live-env"
+action and `/ui/live-env/src/edit` route, the `PIXIE_LIVE_ENV_SRC` /
+`PIXIE_LIVE_ENV_DIR` settings and the `/boot/pixie-live-env` mount, and
+the `netboot-pc` live-build bake (with its `pixie-live-env-x86_64.tar.gz`
+release asset). The `usbboot-pc` bootable `.iso` -- for ad-hoc
+flash-install of images -- is unchanged.
+
 ## [0.4.2] - 2026-07-26
 
 ### Added
