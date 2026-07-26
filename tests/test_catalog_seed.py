@@ -50,7 +50,7 @@ def test_bundled_catalog_is_netboot_only_subset() -> None:
     assert len(images) == len(bundles)
 
 
-def test_bundled_catalog_matches_the_four_supported_images() -> None:
+def test_bundled_catalog_matches_the_supported_images() -> None:
     entries = parse_catalog_toml(bundled_catalog_bytes())
     images = {e.name for e in entries if e.is_bindable()}
     assert images == {
@@ -58,6 +58,8 @@ def test_bundled_catalog_matches_the_four_supported_images() -> None:
         "nosi ubuntu-2404-headless",
         "nosi ubuntu-2604-headless",
         "nosi fedora-44-headless",
+        # pixie's own live-env image (arch-headless + injected CLI/service).
+        "pixie-live-env",
     }
 
 
@@ -72,7 +74,7 @@ def test_default_catalog_url_points_at_pixie_not_nosi() -> None:
 def test_seed_populates_empty_catalog(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     app = _build_app(monkeypatch, tmp_path, seed="1")
     entries = app.state.catalog_store.list_entries()
-    assert len(entries) == 8
+    assert len(entries) == 10
     assert app.state.settings_store.get(CATALOG_SEEDED_KEY) == "1"
 
 
@@ -86,7 +88,7 @@ def test_seed_disabled_leaves_catalog_empty(
 
 def test_seed_is_one_shot(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     app1 = _build_app(monkeypatch, tmp_path, seed="1")
-    assert len(app1.state.catalog_store.list_entries()) == 8
+    assert len(app1.state.catalog_store.list_entries()) == 10
     # Operator curates the catalog down to nothing.
     for e in list(app1.state.catalog_store.list_entries()):
         app1.state.catalog_store.delete(e.name)

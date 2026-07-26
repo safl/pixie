@@ -79,3 +79,27 @@ src = "oras://ghcr.io/safl/nosi/fedora-44-headless-netboot:latest"
 format = "tar.gz"
 arch = "x86_64"
 description = "Netboot bundle for fedora-44-headless: vmlinuz + initrd so pixie can nbdboot it over NBD."
+
+# pixie-live-env -- pixie's OWN image (not a nosi subset entry): the
+# nosi arch-headless base with the pixie CLI + pixie-on-tty1 service
+# injected. This is what the live-env boot modes (pixie-flash-once /
+# -always / pixie-inventory / pixie-tui) nbdboot ephemerally. Fetch it
+# from the Catalog tab, then set PIXIE_LIVE_ENV_IMAGE_SHA to the
+# content_sha256 pixie assigns after the fetch (the same sha the build
+# pipeline publishes as the pixie-live-env-x86_64.content-sha256 release
+# sidecar). Its netboot_src is arch-headless's own bundle: the transform
+# only touches userspace, so the kernel/initrd are reused unchanged.
+[[images]]
+name = "pixie-live-env"
+src = "https://github.com/safl/pixie/releases/latest/download/pixie-live-env-x86_64.img.gz"
+format = "img.gz"
+arch = "x86_64"
+description = "pixie live-env (nosi arch-headless + the pixie CLI + pixie-on-tty1 service). nbdbooted ephemerally for the live-env boot modes; set PIXIE_LIVE_ENV_IMAGE_SHA to its content_sha256."
+netboot_src = "oras://ghcr.io/safl/nosi/arch-headless-netboot:latest"
+
+[[images]]
+name = "nosi arch-headless netboot bundle"
+src = "oras://ghcr.io/safl/nosi/arch-headless-netboot:latest"
+format = "tar.gz"
+arch = "x86_64"
+description = "Netboot bundle for arch-headless: vmlinuz + initrd so pixie can nbdboot the pixie-live-env image over NBD."

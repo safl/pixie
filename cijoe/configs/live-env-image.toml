@@ -1,0 +1,34 @@
+# pixie live-env image - build configuration
+#
+# Drives the transform that turns the nosi ``arch-headless`` base disk
+# image into the ``pixie-live-env`` image pixie nbdboots ephemerally for
+# the live-env boot modes. See cijoe/tasks/live-env-image.yaml.
+#
+# Usage:
+#   cijoe tasks/live-env-image.yaml --config configs/live-env-image.toml --monitor
+# (or via the Makefile dispatcher: ``make live-env-image``)
+
+[pixie]
+variant = "live-env-image"
+
+[cijoe.workflow]
+fail_fast = true
+
+[live-env-image]
+# The nosi base disk image + its netboot bundle (kernel + initrd). The
+# transform only mutates userspace, so the pixie-live-env image reuses
+# arch-headless's own kernel/initrd unchanged -- ``netboot_src`` points
+# straight at the arch-headless netboot bundle.
+base_src = "oras://ghcr.io/safl/nosi/arch-headless:latest"
+netboot_src = "oras://ghcr.io/safl/nosi/arch-headless-netboot:latest"
+
+# The stable release-asset URL the shipped catalog entry references
+# (``.../releases/latest/download/pixie-live-env-x86_64.img.gz``), so a
+# fresh pixie can Fetch it from the Catalog tab like any nosi image.
+catalog_src = "https://github.com/safl/pixie/releases/latest/download/pixie-live-env-x86_64.img.gz"
+
+image_name = "pixie-live-env"
+
+# Where the published asset + sidecars + catalog fragment land. Mirrors
+# the netboot-pc / usbboot-pc variants so all media live under one tree.
+publish.dir = "{{ local.env.HOME }}/system_imaging/disk"
