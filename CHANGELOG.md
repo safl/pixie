@@ -11,6 +11,33 @@ operator-facing summary.
 
 ## [Unreleased]
 
+## [0.4.2] - 2026-07-26
+
+### Added
+
+**The live-env boots as an ephemeral-nbdboot disk image, not a
+live-boot squashfs.** The inventory / tui / flash boot modes now
+nbdboot a normal disk image (nosi `arch-headless` with the pixie CLI +
+`pixie-on-tty1` service injected) with a tmpfs overlay, instead of
+fetching a live-boot squashfs. This fixes boxes whose NIC never came up
+under the old Debian live-boot initramfs (dual-NIC Intel `igb` among
+them): the image rides the same dracut ramboot path that nbdboot
+already uses, which brings those NICs up. Point pixie at it by fetching
+the `pixie-live-env` catalog entry and setting `PIXIE_LIVE_ENV_IMAGE_SHA`
+(or the `live_env.image_sha` setting) to its content sha; the image ships
+as a release asset (`pixie-live-env-x86_64.img.gz`, under 2 GB) built and
+published by CI.
+
+### Fixed
+
+**Rootfs extraction picks the Linux root partition by GPT type.** The
+fetcher extracted partition 1 as `rootfs.raw`, correct for the
+ubuntu/debian cloud images (root at p1) but not for arch/fedora, whose
+images place BIOS-boot + ESP first and root at p3 -- there it produced a
+1 MiB stub that could not mount. It now selects by type (Linux-root GUID,
+then the largest Linux filesystem, then the largest non-firmware/boot/swap
+partition), so every nosi image extracts its real root.
+
 ## [0.4.1] - 2026-07-25
 
 ### Changed
