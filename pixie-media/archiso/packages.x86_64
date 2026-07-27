@@ -49,7 +49,10 @@ curl
 # stock python3 + stdlib urllib; rich + tomlkit are vendored alongside).
 python
 
-# shell + base operator UX.
+# shell + base operator UX. inetutils provides /usr/bin/hostname, which
+# Arch's base (unlike Debian's) omits -- the cijoe transport readiness
+# probe runs `hostname`, and tooling/operators expect it present.
+inetutils
 sudo
 zsh
 grml-zsh-config
