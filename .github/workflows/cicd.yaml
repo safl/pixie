@@ -109,8 +109,24 @@ jobs:
       # rather than buried in a pytest skip.
       - name: Build pixie container
         run: podman build -t pixie:integration-test -f Containerfile .
+      # Coverage is tracked here too: the loop-device flash tests
+      # (tests/integration/test_flash.py) exercise flash.py's destructive
+      # write path IN-PROCESS, so pytest-cov measures it -- unlike the
+      # container-based tests, whose code runs in the container and can't
+      # be instrumented. This is where flash.py (the low anchor in the
+      # unit run) actually gets covered. GHA runners have passwordless
+      # sudo + losetup; the tests skip cleanly if a runner ever lacks them.
       - name: Run integration tests
-        run: uv run pytest -v -m integration -o addopts=
+        run: >
+          uv run pytest -v -m integration -o addopts=
+          --cov=src/pixie --cov-report=term-missing --cov-report=xml
+      - name: Upload integration coverage report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: coverage-integration
+          path: coverage.xml
+          if-no-files-found: warn
 
   build-container:
     name: Build container (smoke)
