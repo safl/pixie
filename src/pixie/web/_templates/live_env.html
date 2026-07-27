@@ -99,12 +99,24 @@
                         {% if live_env_image_sha.override %}override{% elif live_env_image_sha.effective %}env{% else %}unset{% endif %}
                     </span>
                 </label>
-                <input type="text" id="live_env_image_sha" name="live_env_image_sha"
-                       class="form-control font-monospace"
-                       value="{{ live_env_image_sha.override }}"
-                       placeholder="(unset - live-env modes render the unavailable plan)"
-                       pattern="[0-9a-fA-F]{64}">
+                {# Pick from fetched bindable images (sha -> name) rather
+                   than pasting a 64-hex sha. Only fetched images are
+                   usefully selectable; an arbitrary not-yet-fetched sha
+                   renders the unavailable plan anyway. A current override
+                   that isn't in the fetched list (e.g. a $PIXIE_..._SHA
+                   env value) stays selectable via the fallback option. #}
+                <select id="live_env_image_sha" name="live_env_image_sha"
+                        class="form-select font-monospace">
+                    <option value="">(unset - live-env modes render the unavailable plan)</option>
+                    {% for sha, name in fetched_images.items() %}
+                    <option value="{{ sha }}" {% if sha == live_env_image_sha.override %}selected{% endif %}>{{ name }} - {{ sha[:12] }}</option>
+                    {% endfor %}
+                    {% if live_env_image_sha.override and live_env_image_sha.override not in fetched_images %}
+                    <option value="{{ live_env_image_sha.override }}" selected>{{ live_env_image_sha.override[:12] }} (not in catalog)</option>
+                    {% endif %}
+                </select>
                 <div class="form-text">
+                    {% if not fetched_images %}No fetched images yet -- use <strong>Set up live env</strong> above, or Fetch one on the Catalog page.{% endif %}
                     Blank falls back to <code>{{ live_env_image_sha.env }}</code> then unset.
                     Effective:
                     {% if live_env_image_sha.effective %}<code>{{ live_env_image_sha.effective }}</code>{% else %}<em class="text-muted">(none)</em>{% endif %}.

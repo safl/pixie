@@ -25,6 +25,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from pixie.images import is_sha256_hex
+
 # One shared table for every future key -> value. ``updated_at`` is
 # free debugging telemetry; the Settings page shows it next to each
 # overridden row.
@@ -86,9 +88,6 @@ _UNEXPANDED_ENV_PLACEHOLDER = re.compile(r"^\$\{[A-Za-z_][A-Za-z0-9_]*(:[-+?=]?[
 # cleanly.
 KEY_LIVE_ENV_IMAGE_SHA = "live_env.image_sha"
 ENV_LIVE_ENV_IMAGE_SHA = "PIXIE_LIVE_ENV_IMAGE_SHA"
-
-# 64 lowercase hex chars: a catalog entry's ``content_sha256``.
-_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 
 
 class SettingValueError(ValueError):
@@ -219,10 +218,10 @@ class SettingsStore:
         Settings / Live env form validates the shape at set time, so a
         bad value can only reach here from a stray env-var."""
         override = self.get(KEY_LIVE_ENV_IMAGE_SHA)
-        if override and _SHA256_RE.match(override.strip()):
+        if override and is_sha256_hex(override.strip()):
             return override.strip()
         env = (os.environ.get(ENV_LIVE_ENV_IMAGE_SHA) or "").strip()
-        if env and _SHA256_RE.match(env):
+        if env and is_sha256_hex(env):
             return env
         return ""
 

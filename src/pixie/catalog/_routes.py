@@ -14,7 +14,6 @@ routes (``POST`` / ``DELETE``) require a valid pixie session.
 from __future__ import annotations
 
 import asyncio
-import re
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
@@ -32,12 +31,12 @@ from pixie.events._kinds import (
     CATALOG_FETCH_FAILED,
     CATALOG_FETCH_STARTED,
 )
+from pixie.images import is_sha256_hex
 from pixie.web._auth import require_auth
 
 # Named field-safety regex for the content sha URL segment. iPXE fires
 # at ``/artifacts/<sha>/vmlinuz``; a bad sha is a client bug + we 404
 # rather than let a caller poke around the artifacts tree.
-_SHA_RE = re.compile(r"^[0-9a-f]{64}$")
 
 # Filenames the netboot bundle carries + we serve. iPXE templates
 # reference these; keep the allowlist tight so ``/artifacts/<sha>/../..``
@@ -100,7 +99,7 @@ def _fetch_states(request: Request) -> dict[str, dict[str, Any]]:
 
 
 def _decode_sha(seg: str) -> str:
-    if not _SHA_RE.match(seg):
+    if not is_sha256_hex(seg):
         raise HTTPException(status_code=404, detail="not found")
     return seg
 
