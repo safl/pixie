@@ -76,13 +76,17 @@ list=$(lsblk -lnpo NAME,TYPE,FSTYPE 2>/dev/null || true)
 #     the operator's files (catalog.toml + pixie-images/) that sit
 #     on the data partition outside the .iso.
 #
-# ``blkid`` enumerates dm devices directly. We append any
-# ``/dev/dm-*`` that has a filesystem to the candidate list so the
-# loop below probes them with the same vfat/exfat + pixie-images/
-# content checks as the lsblk-sourced entries.
+# ``blkid`` enumerates dm devices directly. We append any dm device
+# that has a filesystem to the candidate list so the loop below probes
+# it with the same vfat/exfat + pixie-images/ content checks as the
+# lsblk-sourced entries. blkid names dm devices as ``/dev/dm-N`` on some
+# distros and ``/dev/mapper/<name>`` on others (Arch reports the latter),
+# so match both -- otherwise the Ventoy exFAT passthrough goes unprobed
+# and the direct ``mount /dev/sda1`` (held busy by the ``ventoy`` dm) is
+# the only attempt, which fails.
 for _dev in $(blkid -o device 2>/dev/null); do
     case "$_dev" in
-        /dev/dm-*) ;;
+        /dev/dm-*|/dev/mapper/*) ;;
         *) continue ;;
     esac
     _ft=$(blkid -o value -s TYPE "$_dev" 2>/dev/null || true)
