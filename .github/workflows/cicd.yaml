@@ -102,6 +102,14 @@ jobs:
           # documents what we got and fails loud if podman disappears
           # from the runner image later.
           podman --version
+      - name: Install flash-test tooling
+        # The loop-device flash tests drive real images through every
+        # supported format. zstd/xz/bzip2 ship on the runner; qemu-img
+        # (qcow2 convert) does not, so install it -- without it the
+        # qcow2 flash paths silently skip and go uncovered.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y qemu-utils
       - run: uv sync --all-extras --group dev
       # The integration suite's ``container`` fixture builds
       # ``pixie:integration-test`` on demand, but running the build
