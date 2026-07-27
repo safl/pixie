@@ -166,9 +166,12 @@ modes render the `unavailable` plan. Overridable live on the Live env
 page (see [Select the live env](#select-the-live-env)).
 
 **`PIXIE_SEED_CATALOG`** (default: `1`) - seed a fresh (empty) catalog
-from the bundled curated catalog (the netboot-capable nosi subset) on
-first start. Set to `0` to start with an empty catalog. Runs once and
-never overwrites an operator-populated catalog.
+from the bundled curated catalog (the nbdboot-tested nosi distros, the
+flash-only freebsd images, and pixie's `pixie-live-env`) on first start.
+Set to `0` to start with an empty catalog. Runs once and never
+overwrites an operator-populated catalog. For the full upstream set, use
+**Fetch latest catalog** on the Catalog page (imports the whole nosi
+catalog on demand).
 
 ### NBD supervisor
 

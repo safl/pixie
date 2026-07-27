@@ -20,7 +20,9 @@ so a fresh deploy lists them without any import. A **Fetch latest
 catalog** button on the Catalog page imports the full upstream nosi
 catalog (every flashable variant -- all distros + desktop / proxmox /
 rpios + freebsd, rolling tags) on one click, so you can pull the whole
-set on demand without pixie hand-maintaining a copy that drifts.
+set on demand without pixie hand-maintaining a copy that drifts. The
+on-target live-env wizard's image-source screen gains a matching
+`[n] nosi (full)` choice alongside `[d] default` (pixie's curated set).
 
 ## [0.4.5] - 2026-07-27
 
