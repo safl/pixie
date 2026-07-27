@@ -11,6 +11,8 @@ operator-facing summary.
 
 ## [Unreleased]
 
+## [0.4.6] - 2026-07-27
+
 ### Added
 
 **More nosi images out of the box + a "Fetch latest catalog" button.**
