@@ -11,6 +11,17 @@ operator-facing summary.
 
 ## [Unreleased]
 
+### Added
+
+**More nosi images out of the box + a "Fetch latest catalog" button.**
+The seeded catalog now also carries `nosi arch-headless` (nbdboot via
+the shared arch bundle) and `nosi freebsd-14/15-headless` (flash-only),
+so a fresh deploy lists them without any import. A **Fetch latest
+catalog** button on the Catalog page imports the full upstream nosi
+catalog (every flashable variant -- all distros + desktop / proxmox /
+rpios + freebsd, rolling tags) on one click, so you can pull the whole
+set on demand without pixie hand-maintaining a copy that drifts.
+
 ## [0.4.5] - 2026-07-27
 
 ### Fixed
