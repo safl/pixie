@@ -1187,6 +1187,7 @@ def create_app() -> FastAPI:
     def ui_machine_detail(
         request: Request,
         mac: str,
+        bind_error: str = "",
         _auth: None = Depends(_require_ui_auth),
     ) -> HTMLResponse | RedirectResponse:
         """Per-machine detail: telemetry + boot-mode binding form +
@@ -1264,6 +1265,7 @@ def create_app() -> FastAPI:
                 "global_live_env_extra_cmdline": (
                     request.app.state.settings_store.resolve_live_env_extra_cmdline()
                 ),
+                "bind_error": bind_error,
                 "authed": True,
                 "page": "machines",
             },
@@ -1285,10 +1287,13 @@ def create_app() -> FastAPI:
         own row (see ``/ui/machines/{mac}/labels/edit``) so a bind
         does not risk clobbering the operator's tagging.
 
-        UI-side: silently redirect back on invalid input; a full
-        field-error flash chain lands in a follow-up. Labels on
-        the row survive the bind untouched via ``upsert_binding``
-        pulling them off the current row.
+        UI-side: a bad MAC falls back to the machines list; any bind
+        rejection (e.g. an overlay alias held single-writer by another
+        machine, raised as ValueError) redirects back to the machine
+        detail with ``?bind_error=`` so the operator sees WHY the Save
+        did not apply instead of a silent no-op. Labels on the row
+        survive the bind untouched via ``upsert_binding`` pulling them
+        off the current row.
 
         ``overlay_alias`` carries the picker's chosen value; a magic
         ``__new`` sentinel says "take ``overlay_alias_new`` as a new
@@ -1300,7 +1305,7 @@ def create_app() -> FastAPI:
         dropped); the operator must detach it there first. Blank / a
         ``__new`` without a name / a new alias with no base image all
         fold back to ephemeral."""
-        import contextlib as _contextlib
+        from urllib.parse import quote
 
         from pixie.machines._store import BadMac, normalise_mac
         from pixie.web._overlay_bind import overlay_state, resolve_overlay_bind
@@ -1308,7 +1313,7 @@ def create_app() -> FastAPI:
         choice = overlay_alias.strip()
         if choice == "__new":
             choice = overlay_alias_new.strip()
-        with _contextlib.suppress(BadMac, ValueError):
+        try:
             canon = normalise_mac(mac)
             store = request.app.state.machines_store
             overlays, overlays_dir = overlay_state(request.app.state)
@@ -1317,8 +1322,8 @@ def create_app() -> FastAPI:
 
             # Single-writer + alias-implies-image + lazy row-create all
             # live in the shared resolver so the JSON API behaves the
-            # same. A held-elsewhere alias raises ValueError (suppressed
-            # here -> silent redirect, no partial state).
+            # same. A held-elsewhere alias raises ValueError -> surfaced
+            # back on the detail page (no partial state is written).
             image_sha, resolved = resolve_overlay_bind(
                 overlays=overlays,
                 overlays_dir=overlays_dir,
@@ -1335,6 +1340,14 @@ def create_app() -> FastAPI:
                 target_disk_serial=target_disk_serial,
                 extra_cmdline=extra_cmdline,
                 overlay_alias=resolved,
+            )
+        except BadMac:
+            # No valid per-machine URL to redirect to; fall back to the list.
+            return RedirectResponse(url="/ui/machines", status_code=status.HTTP_303_SEE_OTHER)
+        except ValueError as exc:
+            return RedirectResponse(
+                url=f"/ui/machines/{quote(mac, safe='')}?bind_error={quote(str(exc), safe='')}",
+                status_code=status.HTTP_303_SEE_OTHER,
             )
         return RedirectResponse(url="/ui/machines", status_code=status.HTTP_303_SEE_OTHER)
 

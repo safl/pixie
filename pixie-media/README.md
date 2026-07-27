@@ -17,6 +17,12 @@ linux-firmware carry the NIC / GPU drivers in-tree, so it needs no DKMS
 (this replaced the earlier Debian live-build ISO, which built an r8125
 DKMS module to get 2.5G Realtek NICs up).
 
+Target needs **at least 2 GiB of RAM** to boot it: the live env runs
+from a RAM-backed overlay, and the ~1.3 GiB full-firmware image starved
+a 1 GiB guest before it reached the wizard (the older ~200 MiB Debian
+ISO fit in less). Any real server or PC target has plenty; a
+memory-constrained box may not reach the pixie TUI.
+
 This directory holds the **content** baked into the image; the cijoe
 **orchestration** (configs, tasks, scripts) that consumes it lives at
 `cijoe/` at the repo root. Operators drive everything via the top-level

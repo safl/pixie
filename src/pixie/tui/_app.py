@@ -1008,6 +1008,8 @@ class BtyTui:
             Panel(
                 f"[{_ACCENT}]d[/]  load pixie's [bold]default[/] catalog "
                 "(published with pixie as a release artifact)\n"
+                f"[{_ACCENT}]n[/]  load the full [bold]nosi[/] catalog "
+                "(every upstream variant: distros + desktop / proxmox / rpios)\n"
                 f"[{_ACCENT}]c[/]  provide a [bold]custom[/] http(s):// or oras:// URL "
                 "to a catalog that you host\n"
                 f"[{_ACCENT}]l[/]  [bold]local only[/] -- skip remote catalog, "

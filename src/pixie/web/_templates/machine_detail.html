@@ -19,6 +19,19 @@
 {% endblock %}
 {% block content %}
 {{ page_description('pc-display-horizontal', 'Everything pixie knows about one target: telemetry, current binding, inventory the live env posts back, and events scoped to this MAC. Editing the binding changes what pixie serves on this target\'s next PXE; labels and inventory are stored independently of the binding.') }}
+{# Bind failure surfaced from POST /ui/machines/bind (e.g. an overlay
+   alias held single-writer by another machine). The message is the
+   caught exception text, passed back via the ?bind_error= redirect;
+   Jinja auto-escapes it. Nothing rendered on the happy path. #}
+{% if bind_error %}
+<div class="alert alert-danger d-flex align-items-start gap-2" role="alert">
+    <i class="bi bi-exclamation-octagon-fill mt-1"></i>
+    <div>
+        <strong>Save didn't apply.</strong>
+        {{ bind_error }}
+    </div>
+</div>
+{% endif %}
 <div class="card shadow-sm mb-4">
     <div class="card-header bg-light d-flex align-items-center">
         <h2 class="h5 mb-0"><i class="bi bi-pc-display me-2"></i><code>{{ machine.mac }}</code></h2>

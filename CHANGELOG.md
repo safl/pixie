@@ -11,6 +11,39 @@ operator-facing summary.
 
 ## [Unreleased]
 
+### Added
+
+**A first-run checklist on the dashboard.** A "Get started" panel tracks
+the three setup steps in order -- set up the live env, point DHCP at
+pixie, boot and bind a target -- with a live done/todo state for each,
+and hides once all three are complete. It gives a new operator the
+ordering the individual pages otherwise left implicit.
+
+### Changed
+
+**Bind failures are shown instead of silently dropped.** Saving a machine
+binding that can't apply (most often an overlay alias already held
+single-writer by another machine) now redirects back to the machine page
+with the reason, rather than a silent no-op that read as "Save did
+nothing."
+
+**A target with no live env set up says so on its console.** When a
+`pixie-*` boot mode has no live-env image selected/fetched, the target
+used to fall through to the next boot device with nothing on screen; it
+now prints the reason and a pointer to the Live env page before iPXE
+exits, so an operator watching the console (or SoL / IP-KVM) sees why.
+
+**`pixie-lab init` flags the default admin password.** `init` bakes the
+well-known default into its editable template (unlike `deploy`, which
+generates a random one), and now says so loudly so the hand-bringup path
+doesn't ship the public password unnoticed.
+
+### Fixed
+
+**Trimmed the PyPI source distribution.** It no longer ships the
+`.github/`, `docs/`, or local `.claude/` trees -- none are needed to
+build or install `pixie-lab`.
+
 ## [0.4.7] - 2026-07-27
 
 ### Changed

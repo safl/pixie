@@ -10,6 +10,49 @@
 {% endblock %}
 {% block content %}
 {{ page_description('speedometer2', 'Status across pixie, following the model: machines you manage, Catalog sources you can fetch, the Images those sources materialise (with on-disk footprint + how much is reclaimable), the alias-keyed overlay volumes, and events. Output-only - each tile links to its page for actions. Refreshes every 5 s.') }}
+{# First-run checklist: the three setup steps in order, each with a live
+   done-signal read from the same stats the tiles use (live-env ready ->
+   a target has checked in -> a target is bound). The whole card hides
+   once all three are done so a running deployment isn't nagged. Server-
+   rendered only (not wired to the 5 s poller); it reflects state on page
+   load, which is enough for a one-time getting-started aid. #}
+{% set _s_live = stats.live_env_ready %}
+{% set _s_dhcp = stats.machines_total > 0 %}
+{% set _s_bind = stats.machines_bound > 0 %}
+{% if not (_s_live and _s_dhcp and _s_bind) %}
+<div class="card shadow-sm mb-4 border-primary">
+    <div class="card-header bg-primary-subtle d-flex align-items-center flex-wrap gap-2">
+        <h2 class="h5 mb-0"><i class="bi bi-signpost-split me-2"></i>Get started</h2>
+        <span class="ms-auto small text-muted">Finish these to boot your first target. This panel hides once they're done.</span>
+    </div>
+    <ul class="list-group list-group-flush">
+        <li class="list-group-item d-flex align-items-start gap-2">
+            <span class="fs-5 lh-1">{% if _s_live %}<i class="bi bi-check-circle-fill text-success"></i>{% else %}<i class="bi bi-circle text-secondary"></i>{% endif %}</span>
+            <div class="flex-grow-1">
+                <div class="fw-semibold">Set up the live env</div>
+                <div class="small text-muted">The <code>pixie-inventory</code> / <code>pixie-tui</code> / <code>pixie-flash-*</code> boot modes need a bootable image. On the Live env page, one click fetches + selects it.</div>
+            </div>
+            {% if _s_live %}<span class="badge text-bg-success align-self-center">done</span>{% else %}<a href="/ui/live-env" class="btn btn-sm btn-primary text-nowrap align-self-center">Set it up &rarr;</a>{% endif %}
+        </li>
+        <li class="list-group-item d-flex align-items-start gap-2">
+            <span class="fs-5 lh-1">{% if _s_dhcp %}<i class="bi bi-check-circle-fill text-success"></i>{% else %}<i class="bi bi-circle text-secondary"></i>{% endif %}</span>
+            <div class="flex-grow-1">
+                <div class="fw-semibold">Point DHCP + TFTP at pixie</div>
+                <div class="small text-muted">Chain your DHCP server through pixie's TFTP + iPXE bootstrap so targets PXE into pixie. Copy-paste dnsmasq snippets (BIOS + UEFI) are on the Settings page. {% if not _s_dhcp %}<span class="text-body-secondary">Marked done when a target first checks in.</span>{% endif %}</div>
+            </div>
+            {% if _s_dhcp %}<span class="badge text-bg-success align-self-center">done</span>{% else %}<a href="/ui/settings#deployment" class="btn btn-sm btn-outline-primary text-nowrap align-self-center">DHCP guide &rarr;</a>{% endif %}
+        </li>
+        <li class="list-group-item d-flex align-items-start gap-2">
+            <span class="fs-5 lh-1">{% if _s_bind %}<i class="bi bi-check-circle-fill text-success"></i>{% else %}<i class="bi bi-circle text-secondary"></i>{% endif %}</span>
+            <div class="flex-grow-1">
+                <div class="fw-semibold">Boot + bind your first target</div>
+                <div class="small text-muted">Once a target PXEs it appears on Machines (auto-registered to non-destructive <code>pixie-inventory</code>). Open it, pick a boot mode + image, and Save.</div>
+            </div>
+            {% if _s_bind %}<span class="badge text-bg-success align-self-center">done</span>{% else %}<a href="/ui/machines" class="btn btn-sm btn-outline-primary text-nowrap align-self-center">Machines &rarr;</a>{% endif %}
+        </li>
+    </ul>
+</div>
+{% endif %}
 {# Tiles mirror the storage/lifecycle model + the nav: Machines,
    Catalog (sources you can fetch), Images (the materialised entities
    with footprint + reclaimable refcount), Overlays (alias-keyed

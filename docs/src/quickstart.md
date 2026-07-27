@@ -33,6 +33,11 @@ Host prerequisite: podman + a compose provider. Then log in at
 pixie is up; the rest is day-to-day operation. Point DHCP at it once,
 then drive everything from the web UI at `http://<LAN-IP>:8080/`.
 
+The dashboard shows a **Get started** checklist that tracks the three
+setup steps below (set up the live env, point DHCP at pixie, boot and
+bind a target) and their live status; it hides once all three are done.
+The rest of this section is those steps in detail.
+
 ### Point DHCP at pixie
 
 Set your DHCP server to chain PXE targets through pixie's TFTP and

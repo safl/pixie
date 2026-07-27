@@ -228,6 +228,18 @@ def _cmd_init(args: argparse.Namespace) -> int:
         return 1
     for p in written:
         print(f"  {p.relative_to(dest.parent) if dest.parent != Path() else p}", file=sys.stderr)
+    if args.admin_password is None:
+        # init writes an editable template, so it bakes the well-known
+        # default rather than a random token you'd have to copy out of a
+        # file. Say so loudly -- unlike ``deploy`` (random password), the
+        # hand-bringup path here ships the public default unless the
+        # operator edits it.
+        print(
+            f"\n  ! admin password is the well-known default '{DEFAULT_ADMIN_PASSWORD}'.\n"
+            f"    Change PIXIE_ADMIN_PASSWORD in envvars before exposing pixie beyond\n"
+            f"    localhost. (``pixie-lab deploy`` generates a random one instead.)",
+            file=sys.stderr,
+        )
     print(
         f"\nNext:\n"
         f"  cd {dest}\n"
