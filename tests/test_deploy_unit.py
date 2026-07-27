@@ -238,3 +238,33 @@ def test_purge_all_reports_gracefully_when_dir_cannot_be_removed(
     err = capsys.readouterr().err
     assert "could not remove the directory itself" in err
     assert "Traceback" not in err
+
+
+def test_pull_image_streams_when_tool_present(monkeypatch: pytest.MonkeyPatch) -> None:
+    """``deploy`` pulls the image with visible progress before compose
+    up so a cold first deploy does not sit silent (reads as a hang).
+    The pull must NOT capture output -- it streams to the terminal."""
+    from pixie.deploy import _main
+
+    monkeypatch.setattr(
+        _main.shutil, "which", lambda t: "/usr/bin/podman" if t == "podman" else None
+    )
+    calls: list = []
+    monkeypatch.setattr(_main.subprocess, "run", lambda cmd, **kw: calls.append((cmd, kw)))
+    _main._pull_image("ghcr.io/safl/pixie:0.4.4")
+    assert calls, "expected a pull invocation"
+    cmd, kw = calls[0]
+    assert cmd == ["/usr/bin/podman", "pull", "ghcr.io/safl/pixie:0.4.4"]
+    assert not kw.get("capture_output")  # streamed, not hidden
+
+
+def test_pull_image_noop_without_container_tool(monkeypatch: pytest.MonkeyPatch) -> None:
+    """No podman/docker on PATH -> the pull is a best-effort no-op (the
+    compose up still runs and surfaces any real error)."""
+    from pixie.deploy import _main
+
+    monkeypatch.setattr(_main.shutil, "which", lambda t: None)
+    called: list = []
+    monkeypatch.setattr(_main.subprocess, "run", lambda *a, **k: called.append(a))
+    _main._pull_image("x:1")
+    assert not called

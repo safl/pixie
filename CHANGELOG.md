@@ -11,6 +11,17 @@ operator-facing summary.
 
 ## [Unreleased]
 
+## [0.4.5] - 2026-07-27
+
+### Fixed
+
+**`pixie-lab deploy` no longer looks like it hangs.** `deploy` captured
+`podman compose`'s output, so a first deploy sat silent for a minute or
+two while podman pulled the image cold. It now pulls the image with
+visible progress before the compose up (and prints a "starting the
+container..." line while it waits on `/healthz`), so you can see it
+working instead of guessing whether it wedged.
+
 ## [0.4.4] - 2026-07-27
 
 ### Added

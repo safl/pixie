@@ -109,6 +109,29 @@ def _compose_cmd() -> list[str] | None:
     return None
 
 
+def _pull_image(image: str) -> None:
+    """Pull the container image with VISIBLE progress before the compose
+    up. A first deploy fetches ~hundreds of MB cold, and ``_compose_up``
+    captures compose's output -- so without this the deploy sits silent
+    for a minute or two and reads as a hang. Streams podman/docker's
+    pull progress straight to the terminal.
+
+    Best-effort: a failed / skipped pull is not fatal here. If no
+    container tool is on PATH, or the pull errors (air-gapped, private
+    registry), ``compose up`` still runs and surfaces the real problem;
+    a mirror that already has the image just makes the pull a no-op."""
+    tool = shutil.which("podman") or shutil.which("docker")
+    if tool is None:
+        return
+    print(
+        f"pixie-lab deploy: pulling {image} (first run can take a minute)...",
+        file=sys.stderr,
+        flush=True,
+    )
+    # No capture: the pull's layer-progress goes straight to the terminal.
+    subprocess.run([tool, "pull", image], check=False)
+
+
 def _compose_up(dest: Path, envvars: Path) -> None:
     cmd = _compose_cmd()
     if cmd is None:
@@ -245,6 +268,8 @@ def _cmd_deploy(args: argparse.Namespace) -> int:
     )
 
     try:
+        _pull_image(image)
+        print("pixie-lab deploy: starting the container + waiting for /healthz...", file=sys.stderr)
         _compose_up(dest, envvars)
         _wait_healthz("127.0.0.1", 8080, time.monotonic() + _HEALTHZ_TIMEOUT)
     except RuntimeError as exc:
