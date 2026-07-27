@@ -268,3 +268,150 @@ def test_pull_image_noop_without_container_tool(monkeypatch: pytest.MonkeyPatch)
     monkeypatch.setattr(_main.subprocess, "run", lambda *a, **k: called.append(a))
     _main._pull_image("x:1")
     assert not called
+
+
+def _which_only(monkeypatch: pytest.MonkeyPatch, present: set[str]) -> None:
+    from pixie.deploy import _main
+
+    monkeypatch.setattr(_main.shutil, "which", lambda t: f"/usr/bin/{t}" if t in present else None)
+
+
+def test_compose_cmd_prefers_podman_compose(monkeypatch: pytest.MonkeyPatch) -> None:
+    from pixie.deploy import _main
+
+    _which_only(monkeypatch, {"podman-compose", "podman", "docker"})
+    assert _main._compose_cmd() == ["podman-compose"]
+
+
+def test_compose_cmd_podman_when_no_docker_compose(monkeypatch: pytest.MonkeyPatch) -> None:
+    from pixie.deploy import _main
+
+    _which_only(monkeypatch, {"podman"})
+    assert _main._compose_cmd() == ["podman", "compose"]
+
+
+def test_compose_cmd_docker_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
+    from pixie.deploy import _main
+
+    # docker-compose present blocks the ``podman compose`` branch; with
+    # no podman-compose and no podman, fall through to docker compose.
+    _which_only(monkeypatch, {"docker", "docker-compose"})
+    assert _main._compose_cmd() == ["docker", "compose"]
+
+
+def test_compose_cmd_none_when_no_runner(monkeypatch: pytest.MonkeyPatch) -> None:
+    from pixie.deploy import _main
+
+    _which_only(monkeypatch, set())
+    assert _main._compose_cmd() is None
+
+
+def test_compose_image_reads_image_line(tmp_path: Path) -> None:
+    from pixie.deploy import _main
+
+    (tmp_path / "compose.yml").write_text(
+        "services:\n  pixie:\n    image: ghcr.io/safl/pixie:1.2.3\n", encoding="utf-8"
+    )
+    assert _main._compose_image(tmp_path) == "ghcr.io/safl/pixie:1.2.3"
+
+
+def test_compose_image_none_when_absent(tmp_path: Path) -> None:
+    from pixie.deploy import _main
+
+    assert _main._compose_image(tmp_path) is None
+
+
+def test_compose_up_no_runner_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+    from pixie.deploy import _main
+
+    monkeypatch.setattr(_main, "_compose_cmd", lambda: None)
+    with pytest.raises(RuntimeError, match="no compose runner"):
+        _main._compose_up(Path("/x"), Path("/x/envvars"))
+
+
+def test_cmd_deploy_success_flow(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from pixie.deploy import _main
+
+    dest = tmp_path / "d"
+    monkeypatch.setattr(_main, "detect_host_addr", lambda: "10.0.0.5")
+    monkeypatch.setattr(_main, "_pull_image", lambda image: None)
+    monkeypatch.setattr(_main, "_compose_up", lambda dest, envvars: None)
+    monkeypatch.setattr(_main, "_wait_healthz", lambda h, p, d: None)
+    args = _build_parser().parse_args(["deploy", str(dest), "--admin-password", "sekret"])
+    assert _main._cmd_deploy(args) == 0
+    envvars = (dest / "envvars").read_text(encoding="utf-8")
+    assert "PIXIE_HOST_ADDR=10.0.0.5" in envvars
+    assert "PIXIE_ADMIN_PASSWORD=sekret" in envvars
+
+
+def test_cmd_deploy_autofills_host_and_password(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from pixie.deploy import _main
+
+    dest = tmp_path / "d"
+    monkeypatch.setattr(_main, "detect_host_addr", lambda: "192.0.2.9")
+    monkeypatch.setattr(_main, "gen_admin_password", lambda: "RANDOMTOKEN")
+    monkeypatch.setattr(_main, "_pull_image", lambda image: None)
+    monkeypatch.setattr(_main, "_compose_up", lambda dest, envvars: None)
+    monkeypatch.setattr(_main, "_wait_healthz", lambda h, p, d: None)
+    args = _build_parser().parse_args(["deploy", str(dest)])  # no flags -> auto-fill
+    assert _main._cmd_deploy(args) == 0
+    envvars = (dest / "envvars").read_text(encoding="utf-8")
+    assert "PIXIE_HOST_ADDR=192.0.2.9" in envvars
+    assert "PIXIE_ADMIN_PASSWORD=RANDOMTOKEN" in envvars
+
+
+def test_cmd_deploy_compose_failure_returns_1(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from pixie.deploy import _main
+
+    dest = tmp_path / "d"
+    monkeypatch.setattr(_main, "detect_host_addr", lambda: "127.0.0.1")
+    monkeypatch.setattr(_main, "_pull_image", lambda image: None)
+
+    def boom(dest: Path, envvars: Path) -> None:
+        raise RuntimeError("compose up failed (rc=1)")
+
+    monkeypatch.setattr(_main, "_compose_up", boom)
+    args = _build_parser().parse_args(["deploy", str(dest)])
+    assert _main._cmd_deploy(args) == 1
+
+
+def test_cmd_deploy_refuses_existing_without_force(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from pixie.deploy import _main
+
+    dest = tmp_path / "d"
+    dest.mkdir()
+    (dest / "compose.yml").write_text("x", encoding="utf-8")
+    monkeypatch.setattr(_main, "detect_host_addr", lambda: "127.0.0.1")
+    args = _build_parser().parse_args(["deploy", str(dest)])
+    assert _main._cmd_deploy(args) == 1  # FileExistsError -> exit 1
+
+
+def test_wait_healthz_returns_on_200(monkeypatch: pytest.MonkeyPatch) -> None:
+    from pixie.deploy import _main
+
+    class _Resp:
+        status = 200
+
+        def __enter__(self) -> _Resp:
+            return self
+
+        def __exit__(self, *a: object) -> bool:
+            return False
+
+    monkeypatch.setattr(_main.urllib.request, "urlopen", lambda url, timeout=0: _Resp())
+    _main._wait_healthz("127.0.0.1", 8080, _main.time.monotonic() + 5)  # no raise
+
+
+def test_wait_healthz_timeout_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+    from pixie.deploy import _main
+
+    # Deadline already in the past -> the poll loop never runs, so it
+    # raises immediately without sleeping.
+    with pytest.raises(RuntimeError, match="healthz timeout"):
+        _main._wait_healthz("127.0.0.1", 8080, _main.time.monotonic() - 1)

@@ -69,7 +69,23 @@ jobs:
       - run: uv run ruff check .
       - run: uv run ruff format --check .
       - run: uv run mypy src
-      - run: uv run pytest -v
+      - name: pytest + coverage
+        # ``--cov-fail-under`` is a regression FLOOR, not a target: it
+        # fails the build if coverage drops below the line, so a PR that
+        # removes tests or adds a big untested surface is caught. Ratchet
+        # it up as coverage improves. term-missing prints the uncovered
+        # lines in the job log; coverage.xml is uploaded for tooling.
+        run: >
+          uv run pytest -v
+          --cov=src/pixie --cov-report=term-missing --cov-report=xml
+          --cov-fail-under=55
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: coverage-${{ matrix.python-version }}
+          path: coverage.xml
+          if-no-files-found: warn
 
   integration:
     name: Integration (real container + real nbdkit)
