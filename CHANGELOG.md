@@ -11,6 +11,8 @@ operator-facing summary.
 
 ## [Unreleased]
 
+## [0.4.10] - 2026-07-27
+
 ### Fixed
 
 **`pixie-lab` was broken on PyPI (0.4.7-0.4.9).** A too-broad sdist
