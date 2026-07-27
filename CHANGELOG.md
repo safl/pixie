@@ -19,11 +19,17 @@ reachable through the containerised boot chain, which coverage can't
 measure, so it sat at ~16%. A new in-process integration suite
 (`tests/integration/test_flash.py`) flashes real images to a loop-device
 target for every supported format (raw + gz/zst/xz/bz2/qcow2), over both
-the local-file and URL streaming paths, and verifies on-the-wire sha256
-integrity; the integration CI job now runs under coverage too. This
-lifts measured `flash.py` coverage to ~67% (the remainder is UEFI NVRAM
-boot-order rewriting, which needs real firmware). Pure plan/validate
-branches also gained unit tests.
+the local-file and URL streaming paths; it verifies on-the-wire sha256
+integrity, operator cancel, the target-vanished race, and the
+out-of-space / corrupt-source / fetch-failure error paths. The UEFI
+boot-entry registration path is driven deterministically in
+`tests/test_flash_unit.py` with a fake `efibootmgr` and canned `lsblk`,
+alongside the oras resolver, HEAD-probe, and compressed-size parsers. The
+integration CI job now runs under coverage too. Together these lift
+measured `flash.py` coverage from ~16% to ~96%; the small remainder is
+mid-pipeline subprocess-fault branches (a failing `tee`/`sha256sum`) and
+the mounted-target guard, which the end-to-end `test-pxe-flash*` and
+`verify-usbboot` boot chains exercise on real hardware.
 
 ## [0.4.11] - 2026-07-27
 
