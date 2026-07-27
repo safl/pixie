@@ -11,6 +11,8 @@ operator-facing summary.
 
 ## [Unreleased]
 
+## [0.4.11] - 2026-07-27
+
 ### Changed
 
 **Live env: pick the image from a dropdown.** The Advanced "Image
