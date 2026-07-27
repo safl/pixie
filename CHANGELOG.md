@@ -11,6 +11,18 @@ operator-facing summary.
 
 ## [Unreleased]
 
+### Fixed
+
+**`pixie-lab` was broken on PyPI (0.4.7-0.4.9).** A too-broad sdist
+`exclude` pattern (`"deploy"`, meant for a non-existent top-level build
+tree) also matched `src/pixie/deploy`, and since `uv build` builds the
+wheel from the sdist, the published wheel shipped without the deploy
+module -- `uv tool run pixie-lab` failed with `ModuleNotFoundError: No
+module named 'pixie.deploy'`. The sdist now uses an explicit `include`
+whitelist that can't collide with a nested directory, and CI runs both
+`pixie-lab` and `pixie` from the freshly built wheel so a missing
+entry-point module fails the build instead of shipping.
+
 ## [0.4.9] - 2026-07-27
 
 ### Added

@@ -65,12 +65,19 @@ build-backend = "hatchling.build"
 packages = ["src/pixie"]
 
 [tool.hatch.build.targets.sdist]
-# Ship the installable package + tests, not the media / deploy build,
-# CI, site, or agent trees. pixie-media/archiso carries an airootfs with
-# absolute symlinks (e.g. etc/localtime -> /usr/share/zoneinfo/UTC) that
-# uv's sdist round-trip rejects, and none of these are needed to build
-# or install pixie-lab.
-exclude = ["pixie-media", "cijoe", "deploy", "docs", ".github", ".claude"]
+# Whitelist what the sdist ships: the installable package + tests (plus
+# the metadata hatchling always adds -- pyproject, README, LICENSE).
+#
+# This MUST be an ``include``, not an ``exclude``. An exclude list of
+# bare names is a footgun: hatchling matches a pattern like ``deploy``
+# against ANY path component, so ``exclude = [..., "deploy", ...]``
+# silently dropped ``src/pixie/deploy`` and -- because ``uv build``
+# builds the wheel from the sdist -- shipped a wheel with no
+# ``pixie-lab`` CLI (broken on PyPI in 0.4.7-0.4.9). An ``include`` can
+# only add matching paths, so it can't collide with a nested dir. It
+# also keeps pixie-media/archiso's absolute symlinks (which uv's sdist
+# round-trip rejects) out, since they simply aren't listed.
+include = ["src", "tests"]
 
 [dependency-groups]
 dev = [

@@ -463,6 +463,19 @@ jobs:
         with:
           python-version: "3.12"
       - run: uv build
+      - name: Verify the wheel ships the console-script modules
+        # A bad sdist exclude once dropped src/pixie/deploy and -- since
+        # ``uv build`` builds the wheel from the sdist -- shipped a wheel
+        # with no ``pixie-lab`` CLI (broken on PyPI in 0.4.7-0.4.9).
+        # Install the freshly built wheel into a throwaway env and run
+        # BOTH console scripts so a missing entry-point module fails CI
+        # here, not on a user's ``uv tool run pixie-lab``.
+        run: |
+          set -eu
+          WHL=$(ls dist/*.whl | head -1)
+          uvx --from "$WHL" pixie-lab --help >/dev/null
+          uvx --from "$WHL" pixie --help >/dev/null
+          echo "console scripts run from the built wheel: OK"
       - uses: actions/upload-artifact@v7
         with:
           name: dist
