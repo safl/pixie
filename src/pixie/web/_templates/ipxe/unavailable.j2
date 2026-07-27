@@ -8,7 +8,20 @@
 #
 # We deliberately do NOT chain-load anything else here (no bty-media
 # fallback, no generic "keep trying" loop). ``exit`` unloads iPXE so
-# the firmware's next boot device fires; the operator sees the reason
-# in ``/ui/machines/<mac>`` and on pixie's event log.
+# the firmware's next boot device fires. Before that, print the reason
+# on the target console so an operator watching the screen (or SoL /
+# IP-KVM) sees WHY nothing booted instead of a silent firmware
+# fall-through -- the same reason is on ``/ui/machines/<mac>`` + the
+# event log. ``sleep`` holds it on screen long enough to read.
 
+echo
+echo ================================================================
+echo  pixie: no bootable plan for {{ mac }}
+echo    reason: {{ reason }}
+echo
+echo  Fix it in pixie's web UI (Live env page -> Set up live env),
+echo  or check this target at Machines -> {{ mac }}, then power-cycle.
+echo ================================================================
+echo
+sleep 8
 exit
