@@ -11,6 +11,8 @@ operator-facing summary.
 
 ## [Unreleased]
 
+## [0.4.9] - 2026-07-27
+
 ### Added
 
 **Action feedback banners.** Mutating actions that redirect (catalog
