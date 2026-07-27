@@ -64,6 +64,7 @@ from pixie.events._routes import router as events_router
 from pixie.exports._routes import router as exports_router
 from pixie.exports._store import ExportsStore, OverlaysStore
 from pixie.exports._supervisor import DEFAULT_PORT_BASE, NbdServer
+from pixie.machines._bind_events import emit_bind_event
 from pixie.machines._routes import router as machines_router
 from pixie.machines._store import (
     BOOT_MODES,
@@ -81,6 +82,7 @@ from pixie.web._auth import (
     require_auth,
     using_default_password,
 )
+from pixie.web._flash import flash_context, set_flash
 from pixie.web._settings_store import (
     KEY_DATETIME_FORMAT,
     KEY_DISPLAY_TZ,
@@ -778,7 +780,13 @@ def create_app() -> FastAPI:
         https_only=False,
     )
 
-    templates = Jinja2Templates(directory=str(_TEMPLATES_DIR))
+    templates = Jinja2Templates(directory=str(_TEMPLATES_DIR), context_processors=[flash_context])
+    # Friendly boot-mode labels (mode -> {icon, short, desc}) available to
+    # every template + the machines-list poller JS, so raw mode strings
+    # like ``pixie-flash-once`` render as "Flash once" with a tooltip.
+    from pixie.machines._store import BOOT_MODE_META as _BOOT_MODE_META
+
+    templates.env.globals["boot_mode_meta_map"] = dict(_BOOT_MODE_META)
     # Register the table-helpers query-string builder as a Jinja
     # global so the pagination + search macros can compose links
     # without every template having to reach into ``request.url``.
@@ -1332,7 +1340,7 @@ def create_app() -> FastAPI:
                 image_sha=image_content_sha256.strip().lower(),
                 alias=choice,
             )
-            store.upsert_binding(
+            row = store.upsert_binding(
                 canon,
                 boot_mode=boot_mode,
                 image_content_sha256=image_sha,
@@ -1349,6 +1357,11 @@ def create_app() -> FastAPI:
                 url=f"/ui/machines/{quote(mac, safe='')}?bind_error={quote(str(exc), safe='')}",
                 status_code=status.HTTP_303_SEE_OTHER,
             )
+        # Same audit trail as the JSON API's PUT /machines/{mac}: emit
+        # machine.bound / machine.binding.changed so a UI bind isn't
+        # invisible in /ui/events.
+        emit_bind_event(getattr(request.app.state, "events_log", None), current, row)
+        set_flash(request, f"Bound {canon} to {boot_mode}.", "success")
         return RedirectResponse(url="/ui/machines", status_code=status.HTTP_303_SEE_OTHER)
 
     @app.post("/ui/machines/{mac}/overlay/reset")
@@ -1470,6 +1483,11 @@ def create_app() -> FastAPI:
                 summary=f"pruned {pruned} reclaimable overlay(s)",
                 details={"pruned": pruned},
             )
+        set_flash(
+            request,
+            f"Reclaimed {pruned} overlay(s)." if pruned else "Nothing to reclaim.",
+            "success" if pruned else "info",
+        )
         return RedirectResponse(url="/ui/overlays", status_code=status.HTTP_303_SEE_OTHER)
 
     # ---------- ui: images (materialised catalog content) -----------
@@ -2330,6 +2348,7 @@ def create_app() -> FastAPI:
 
         target_url = (url or "").strip()
         if not target_url:
+            set_flash(request, "Enter a catalog URL to import.", "warning")
             return RedirectResponse(url="/ui/catalog", status_code=status.HTTP_303_SEE_OTHER)
         try:
             r = httpx.get(target_url, timeout=15.0, follow_redirects=True)
@@ -2345,6 +2364,7 @@ def create_app() -> FastAPI:
                     summary=f"import from {target_url} failed",
                     details={"error": str(exc)[:200]},
                 )
+            set_flash(request, f"Import failed: {str(exc)[:200]}", "danger")
             return RedirectResponse(url="/ui/catalog", status_code=status.HTTP_303_SEE_OTHER)
         store = request.app.state.catalog_store
         added = 0
@@ -2361,6 +2381,12 @@ def create_app() -> FastAPI:
                 summary=f"imported {len(entries)} entries from {target_url} ({added} new)",
                 details={"url": target_url, "count": len(entries), "new": added},
             )
+        set_flash(
+            request,
+            f"Imported {len(entries)} source(s) ({added} new). "
+            "Hit Fetch on a row to download its bytes.",
+            "success",
+        )
         return RedirectResponse(url="/ui/catalog", status_code=status.HTTP_303_SEE_OTHER)
 
     # ---------- settings pane ---------------------------------------
@@ -2463,6 +2489,7 @@ def create_app() -> FastAPI:
             store.set_value(KEY_DATETIME_FORMAT, fmt_raw)
         else:
             store.clear(KEY_DATETIME_FORMAT)
+        set_flash(request, "Display settings saved.", "success")
         return RedirectResponse(url="/ui/settings", status_code=status.HTTP_303_SEE_OTHER)
 
     def _live_env_context(request: Request, flash_error: str | None = None) -> dict[str, Any]:
@@ -2541,6 +2568,7 @@ def create_app() -> FastAPI:
             store.set_value(KEY_LIVE_ENV_EXTRA_CMDLINE, raw)
         else:
             store.clear(KEY_LIVE_ENV_EXTRA_CMDLINE)
+        set_flash(request, "Live-env cmdline saved.", "success")
         return RedirectResponse(url="/ui/live-env", status_code=status.HTTP_303_SEE_OTHER)
 
     @app.post("/ui/live-env/image/edit", response_model=None)
@@ -2578,6 +2606,11 @@ def create_app() -> FastAPI:
             store.set_value(KEY_LIVE_ENV_IMAGE_SHA, raw)
         else:
             store.clear(KEY_LIVE_ENV_IMAGE_SHA)
+        set_flash(
+            request,
+            "Live-env image updated." if raw else "Live-env image cleared.",
+            "success",
+        )
         return RedirectResponse(url="/ui/live-env", status_code=status.HTTP_303_SEE_OTHER)
 
     @app.post("/ui/live-env/setup")

@@ -184,12 +184,12 @@ loose-parses `netboot_ref` (accepted with a warning) and tight-emits
 
 ## Open
 
-- **End-to-end validation on matx-bmc.** The netboot-pc initrd bakes
-  r8125 + r8169 + igb + e1000e drivers (PR safl/pixie#32) but the
-  target still stalls before Debian live-boot fetches its squashfs.
-  Blocks memory notes [[project_pixie_transition]] +
-  [[project_ramboot_architecture]] from graduating out of "in
-  progress".
+- (Resolved) End-to-end validation on the lab BMCs. The old Debian
+  live-boot/netboot-pc stall was retired entirely: the live env is now
+  the nbdboot'd nosi `arch-headless` image (in-tree drivers, no DKMS),
+  validated on real hardware, and the usbboot `.iso` is an Arch archiso
+  build that mounts + boots via Redfish virtual media. No open blocker
+  here.
 - **Backup / export / import for state.db.** Bty-web has this; pixie
   does not yet. A tarball of `state.db` + selective `blobs/` +
   `artifacts/` would let an operator migrate between hosts without

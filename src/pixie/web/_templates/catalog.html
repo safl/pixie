@@ -35,8 +35,8 @@
         <form method="post" action="/ui/catalog/import" class="subnav-actions m-0">
             <input type="hidden" name="url" value="{{ nosi_catalog_url }}">
             <button type="submit" class="btn btn-sm btn-outline-light flex-shrink-0 text-nowrap"
-                    title="Import the full nosi catalog ({{ nosi_catalog_url }}): every flashable variant incl freebsd, rolling tags.">
-                <i class="bi bi-cloud-arrow-down me-1"></i>Fetch latest catalog
+                    title="Import the full nosi catalog ({{ nosi_catalog_url }}): stages every flashable variant incl freebsd (rolling tags) as sources. Doesn't download bytes -- hit Fetch on a row for that.">
+                <i class="bi bi-cloud-arrow-down me-1"></i>Import full nosi catalog
             </button>
         </form>
     </div>

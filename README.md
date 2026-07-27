@@ -46,7 +46,9 @@ top nav has Machines, Catalog, Events, and Settings.
    nbdboot that image; until it's selected they render `unavailable`.
 4. Power-cycle a target with pixie in its DHCP next-server chain.
    A first contact shows up on `/ui/machines` with the default
-   `ipxe-exit` boot mode. Open the row to bind a mode + image.
+   `pixie-inventory` boot mode (non-destructive, one-shot; it posts
+   inventory then self-exits to `ipxe-exit`). Open the row to bind a
+   mode + image.
 5. `pixie-inventory` prompts the live env to POST an inventory
    blob; the target's disks + NICs + memory show up on the
    machine detail page.
@@ -61,8 +63,8 @@ Everything writable lives under `PIXIE_DATA_DIR` (default
 event log, settings, NBD-export records, and persistent-overlay
 records. `blobs/<sha>/blob` holds fetched disk images.
 `artifacts/<sha>/{vmlinuz,initrd,manifest.json}` holds unpacked
-netboot bundles. `overlays/<mac>/<image_sha>/<profile>.qcow2` holds
-per-machine writable overlays for the `nbdboot` boot mode. The live env
+netboot bundles. `overlays/<alias>.qcow2` holds globally-named
+single-writer overlay volumes for the `nbdboot` boot mode. The live env
 (`pixie-inventory` / `pixie-tui` / `pixie-flash-*`) is the fetched
 `pixie-live-env` disk image, selected by `PIXIE_LIVE_ENV_IMAGE_SHA` /
 the Live env page and nbdbooted like any other image, so it lives in

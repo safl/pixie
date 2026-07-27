@@ -337,12 +337,12 @@ def pxe_plan_json(request: Request, mac: str) -> dict[str, Any]:
                               disk on the machine row).
 
     The mapping mirrors bty's shape so the ported pixie CLI needs
-    zero cmdline changes. For the minimal live-env slice landing
-    here we only surface ``inventory`` + ``exit`` -- the flash path
-    lands with a follow-up PR that adds the target-disk fields on
-    the machine row + the ``POST /pxe/{mac}/done`` endpoint that
-    flips ``pixie-flash-once`` observers to see the machine as
-    flashed."""
+    zero cmdline changes. The full mode set is live: ``inventory``
+    (post + reboot), ``exit``, ``interactive`` (drop into the wizard),
+    and ``flash`` (auto-write the bound image to the target disk).
+    ``pixie-flash-once`` observers are flipped to "flashed" via
+    ``POST /pxe/{mac}/done`` so a re-PXE after a successful flash exits
+    instead of re-flashing."""
     try:
         canon = normalise_mac(mac)
     except BadMac as exc:

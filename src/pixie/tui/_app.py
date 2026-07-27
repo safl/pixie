@@ -1131,17 +1131,18 @@ class BtyTui:
                 )
             )
 
-        # ``[r]`` is not advertised here: Enter re-runs
-        # ``_refresh_disks`` (called on every screen entry), so an
-        # explicit refresh key is redundant. Hot-plugged disks show
-        # up on the next Enter.
+        # Enter re-enters this screen, which re-runs ``_refresh_disks``.
+        # With disks present that's an implicit refresh (not advertised,
+        # to keep the line short). With NO disks there's nothing to pick,
+        # so advertise ``[Enter] rescan`` explicitly rather than dead-end
+        # the operator on a ``[#] pick`` prompt with no numbers.
+        if self._state._disks:
+            extras = (("#", "pick"), ("b", "back"), ("q", "quit"))
+        else:
+            extras = (("Enter", "rescan"), ("b", "back"), ("q", "quit"))
         prompt_text = self._render_prompt_line(
             title="Pick a target disk",
-            extras=(
-                ("#", "pick"),
-                ("b", "back"),
-                ("q", "quit"),
-            ),
+            extras=extras,
         )
         choice = self._ask(prompt_text)
         if choice in ("q", "quit"):
