@@ -11,17 +11,40 @@ integrity verify against silent breakage.
 from __future__ import annotations
 
 import hashlib
+from pathlib import Path
 
 import pytest
 
 from pixie.flash import (
     FlashIntegrityError,
+    ImageInfo,
+    TargetInfo,
     _normalize_digest,
     _parse_compressed_listing,
     _parse_gzip_listing,
     _sha256_file,
     _verify_digest,
+    make_plan,
+    probe_image,
+    probe_target,
+    validate_plan,
 )
+
+
+def _block_target(size: int | None, mountpoints: list[str] | None = None) -> TargetInfo:
+    """A plausible block-device target, built directly so the pure
+    validate/plan branches are testable without root or a real device."""
+    return TargetInfo(
+        path=Path("/dev/fake"),
+        exists=True,
+        is_block_device=True,
+        size_bytes=size,
+        mountpoints=mountpoints or [],
+    )
+
+
+def _img(path: str, fmt: str | None, vsize: int | None) -> ImageInfo:
+    return ImageInfo(path=Path(path), format=fmt, size_bytes=vsize or 1, virtual_size_bytes=vsize)
 
 
 def test_normalize_digest_none() -> None:
@@ -97,3 +120,100 @@ def test_sha256_file_matches_hashlib(tmp_path) -> None:
     p = tmp_path / "blob"
     p.write_bytes(data)
     assert _sha256_file(p) == "sha256:" + hashlib.sha256(data).hexdigest()
+
+
+# ---- probe + plan + validate (pure; no root or real block device) -----
+
+
+def test_probe_image_raw_img_reports_format_and_size(tmp_path) -> None:
+    p = tmp_path / "disk.img"
+    p.write_bytes(b"\0" * 4096)
+    info = probe_image(p)
+    assert info.format == "img"
+    assert info.size_bytes == 4096
+    assert info.virtual_size_bytes == 4096  # raw: on-disk size == bytes written
+
+
+def test_probe_image_missing_raises(tmp_path) -> None:
+    with pytest.raises(FileNotFoundError):
+        probe_image(tmp_path / "nope.img")
+
+
+def test_probe_image_unrecognized_extension_has_no_format(tmp_path) -> None:
+    p = tmp_path / "mystery.bin"
+    p.write_bytes(b"x")
+    assert probe_image(p).format is None
+
+
+def test_probe_target_missing_path(tmp_path) -> None:
+    t = probe_target(tmp_path / "absent")
+    assert not t.exists and not t.is_block_device and t.size_bytes is None
+
+
+def test_probe_target_regular_file_is_not_a_block_device(tmp_path) -> None:
+    p = tmp_path / "regular"
+    p.write_bytes(b"x")
+    t = probe_target(p)
+    assert t.exists and not t.is_block_device
+
+
+def test_validate_ok_when_image_fits_block_target() -> None:
+    plan = make_plan(_img("d.img", "img", 100), _block_target(1000))
+    assert validate_plan(plan) == []
+
+
+def test_validate_rejects_unrecognized_format() -> None:
+    errs = validate_plan(make_plan(_img("mystery.bin", None, None), _block_target(1000)))
+    assert any("format not recognised" in e for e in errs)
+
+
+def test_validate_rejects_tarball_with_extract_hint() -> None:
+    errs = validate_plan(make_plan(_img("bundle.tar.gz", None, None), _block_target(1000)))
+    assert any("tarball" in e and "Extract first" in e for e in errs)
+
+
+def test_validate_rejects_missing_target() -> None:
+    tgt = TargetInfo(
+        path=Path("/dev/gone"),
+        exists=False,
+        is_block_device=False,
+        size_bytes=None,
+        mountpoints=[],
+    )
+    errs = validate_plan(make_plan(_img("d.img", "img", 1), tgt))
+    assert any("does not exist" in e for e in errs)
+
+
+def test_validate_rejects_non_block_target() -> None:
+    tgt = TargetInfo(
+        path=Path("/some/file"),
+        exists=True,
+        is_block_device=False,
+        size_bytes=None,
+        mountpoints=[],
+    )
+    errs = validate_plan(make_plan(_img("d.img", "img", 1), tgt))
+    assert any("not a block device" in e for e in errs)
+
+
+def test_validate_rejects_mounted_target() -> None:
+    tgt = _block_target(1000, mountpoints=["/mnt/data"])
+    errs = validate_plan(make_plan(_img("d.img", "img", 1), tgt))
+    assert any("mounted partitions" in e for e in errs)
+
+
+def test_validate_rejects_image_larger_than_target() -> None:
+    errs = validate_plan(make_plan(_img("big.img", "img", 2000), _block_target(1000)))
+    assert any("larger than target" in e for e in errs)
+
+
+def test_make_plan_notes_unknown_virtual_size() -> None:
+    img = ImageInfo(
+        path=None,
+        url="http://x/i.img.gz",
+        format="img.gz",
+        size_bytes=10,
+        virtual_size_bytes=None,
+    )
+    plan = make_plan(img, _block_target(1000))
+    assert any("size-fits-target check skipped" in n for n in plan.notes)
