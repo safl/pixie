@@ -183,7 +183,7 @@ def main(args, cijoe):
     err, _ = cijoe.run_local(
         f"sudo {runtime} run --rm --privileged --network=host "
         f"-v {build_dir}:/build {ARCH_IMAGE} "
-        f"bash /build/mkarchiso-in-container.sh /build/profile /build/out"
+        f"bash /build/profile/mkarchiso-in-container.sh /build/profile /build/out"
     )
     if err:
         log.error("mkarchiso failed; see the container output above")

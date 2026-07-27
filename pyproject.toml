@@ -64,6 +64,14 @@ build-backend = "hatchling.build"
 [tool.hatch.build.targets.wheel]
 packages = ["src/pixie"]
 
+[tool.hatch.build.targets.sdist]
+# Ship the installable package + tests, not the media / deploy build
+# trees. pixie-media/archiso carries an airootfs with absolute symlinks
+# (e.g. etc/localtime -> /usr/share/zoneinfo/UTC) that uv's sdist
+# round-trip rejects, and none of these trees are needed to build or
+# install pixie-lab.
+exclude = ["pixie-media", "cijoe", "deploy"]
+
 [dependency-groups]
 dev = [
     "pytest>=8",
