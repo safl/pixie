@@ -333,6 +333,11 @@ def collect_lshw(*, timeout: float = 30.0) -> object | None:
 # live-env wizard defaults to the same known-good set the appliance
 # seeds -- not the full upstream nosi catalog.
 _BTY_DEFAULT_CATALOG_URL = "https://github.com/safl/pixie/releases/latest/download/catalog.toml"
+# The full upstream nosi catalog (every flashable variant incl freebsd +
+# the desktop/proxmox/rpios shapes). Mirrors NOSI_CATALOG_URL in
+# pixie.catalog + the appliance's "Fetch latest catalog" button;
+# hardcoded here to keep the on-target wizard self-contained.
+_NOSI_CATALOG_URL = "https://github.com/safl/nosi/releases/latest/download/catalog-latest.toml"
 
 
 # ---------------------------------------------------------------------------
@@ -1015,6 +1020,7 @@ class BtyTui:
             title="Pick an image source",
             extras=(
                 ("d", "default"),
+                ("n", "nosi (full)"),
                 ("c", "custom"),
                 ("l", "local only"),
                 ("q", "quit"),
@@ -1025,6 +1031,10 @@ class BtyTui:
             return "quit"
         if choice in ("d", "default"):
             self._state.catalog_source = _BTY_DEFAULT_CATALOG_URL
+            self._state.catalog_chosen = True
+            return "continue"
+        if choice in ("n", "nosi"):
+            self._state.catalog_source = _NOSI_CATALOG_URL
             self._state.catalog_chosen = True
             return "continue"
         if choice in ("c", "custom"):
@@ -1040,7 +1050,7 @@ class BtyTui:
             self._state.catalog_source = None
             self._state.catalog_chosen = True
             return "continue"
-        self._console.print(f"[{_DANGER}]Unrecognised choice {choice!r}; type d, c, l, or q.[/]")
+        self._console.print(f"[{_DANGER}]Unrecognised choice {choice!r}; type d, n, c, l, or q.[/]")
         self._pause_for_ack()
         return "continue"
 

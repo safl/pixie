@@ -41,11 +41,16 @@ dnsmasq recipes.
 
 ### Add a catalog entry
 
-Open `http://<PIXIE_HOST_ADDR>:8080/ui/catalog` in a browser, log in
-with your admin password, and add a catalog entry with a source URL.
-Hit Fetch. Pixie pulls the bytes to disk (and for `img.gz` / `img.zst`
-inputs, decompresses on the way in). The row flips to `fetched` when
-the pipeline lands.
+Open `http://<PIXIE_HOST_ADDR>:8080/ui/catalog` and log in. A fresh
+deploy already seeds a curated set of nosi images (debian / ubuntu /
+fedora / arch headless, freebsd-14/15, and the `pixie-live-env` image)
+plus the netboot bundles -- these are pointers, so nothing is
+downloaded until you Fetch. For the full upstream set (every nosi
+variant incl the desktop / proxmox / rpios shapes), click **Fetch latest
+catalog**; to add anything else, paste a `catalog.toml` URL in the
+Import bar. Then hit **Fetch** on a row: pixie pulls the bytes to disk
+(decompressing `img.gz` / `img.zst` on the way in), and the row flips to
+`fetched` when the pipeline lands.
 
 ### Select the live env
 
