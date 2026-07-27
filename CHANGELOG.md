@@ -11,6 +11,8 @@ operator-facing summary.
 
 ## [Unreleased]
 
+## [0.4.8] - 2026-07-27
+
 ### Added
 
 **A first-run checklist on the dashboard.** A "Get started" panel tracks
