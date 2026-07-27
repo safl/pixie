@@ -1,0 +1,28 @@
+name: "Configure a Docker Hub mirror for podman"
+description: >
+  Route docker.io pulls through mirror.gcr.io (Google's pull-through
+  cache of Docker Hub -- anonymous, no rate limits, reliable) so CI
+  podman builds/pulls stop failing on Docker Hub "dial tcp
+  registry-1.docker.io: i/o timeout" flakes. Falls back to docker.io if
+  the mirror lacks a tag. Writes a system registries.conf.d drop-in, so
+  it also covers ``sudo podman`` (root's config).
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      run: |
+        set -eu
+        sudo mkdir -p /etc/containers/registries.conf.d
+        sudo tee /etc/containers/registries.conf.d/99-dockerhub-mirror.conf >/dev/null <<'EOF'
+        # Pull docker.io images through Google's mirror first; fall back
+        # to docker.io if the mirror doesn't have the tag. See
+        # memory/pixie-packaging-ci-tests: this fixes the recurring PXE /
+        # media job flake where Docker Hub i/o-timed-out on the runner.
+        [[registry]]
+        prefix = "docker.io"
+        location = "docker.io"
+
+        [[registry.mirror]]
+        location = "mirror.gcr.io"
+        EOF
+        echo "podman: docker.io pulls now go through mirror.gcr.io"

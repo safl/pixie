@@ -92,6 +92,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
+      - uses: ./.github/actions/podman-registry-mirror
       - uses: astral-sh/setup-uv@v7.2.1
         with:
           python-version: "3.13"
@@ -116,6 +117,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
+      - uses: ./.github/actions/podman-registry-mirror
       - run: podman build -t pixie:ci -f Containerfile .
 
   build-media:
@@ -135,6 +137,7 @@ jobs:
         variant: [usbboot-pc]
     steps:
       - uses: actions/checkout@v6
+      - uses: ./.github/actions/podman-registry-mirror
 
       - name: Install build dependencies
         # The pixie usbboot .iso is built by mkarchiso inside a
@@ -251,6 +254,7 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v6
+      - uses: ./.github/actions/podman-registry-mirror
 
       - name: Install host tools (qemu, dnsmasq, ipxe, bridge)
         run: |
@@ -313,6 +317,7 @@ jobs:
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v6
+      - uses: ./.github/actions/podman-registry-mirror
 
       - name: Install host tools (qemu, dnsmasq, ipxe, bridge)
         run: |
@@ -369,6 +374,7 @@ jobs:
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v6
+      - uses: ./.github/actions/podman-registry-mirror
 
       - name: Install host tools (qemu, dnsmasq, ipxe, bridge)
         run: |
@@ -563,6 +569,7 @@ jobs:
       packages: write
     steps:
       - uses: actions/checkout@v6
+      - uses: ./.github/actions/podman-registry-mirror
       - name: Log in to ghcr.io
         run: |
           echo "${{ secrets.GITHUB_TOKEN }}" \
