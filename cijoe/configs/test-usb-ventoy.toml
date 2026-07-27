@@ -26,7 +26,11 @@ bin = "qemu-system-x86_64"
 [qemu.guests.usb-ventoy]
 path = "{{ local.env.HOME }}/system_imaging/usb-ventoy"
 system_label = "x86_64"
-system_args.kwa = { cpu = "host", smp = 2, m = "1G", accel = "kvm" }
+# 4 GiB: the archiso live env (a ~1.3 GiB ISO with full linux-firmware)
+# needs more RAM to boot than the old ~200 MiB Debian ISO -- 1 GiB
+# starved it (the guest never reached sshd); 3 GiB boots cleanly, 4 GiB
+# leaves headroom. GHA runners have ~16 GiB.
+system_args.kwa = { cpu = "host", smp = 2, m = "4G", accel = "kvm" }
 # IDE-hd: Ventoy's bootloader (a chainloaded GRUB) reads via BIOS
 # INT13 -- virtio-blk is invisible to it. Present the Ventoy stick as
 # an IDE hard disk so the BIOS sees a bootable disk. ``-no-reboot`` so
