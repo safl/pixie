@@ -31,8 +31,8 @@
 #      PYTHONPATH=/opt/pixie/lib. Verify the import under the image's
 #      own python3.
 #   3. Port pixie-on-tty1.service + /usr/local/sbin/{pixie-on-tty1,
-#      pixie-trace} from the pixie-media live-build tree; enable via a
-#      multi-user.target.wants symlink.
+#      pixie-trace} from the pixie-media archiso airootfs tree; enable
+#      via a multi-user.target.wants symlink.
 #   4. Conservative slim (docs/man/locale/pkg-cache/__pycache__), then
 #      fstrim to reclaim the freed blocks.
 #
@@ -228,7 +228,7 @@ in_chroot /usr/bin/env PYTHONPATH=/opt/pixie/lib python3 -c \
 # ----------------------------------------------------------------------
 # 3. Port the boot service trio; enable it via the wants symlink.
 # ----------------------------------------------------------------------
-INCLUDES="$MEDIA/live-build/config/includes.chroot"
+INCLUDES="$MEDIA/archiso/airootfs"
 svc_src="$INCLUDES/etc/systemd/system/pixie-on-tty1.service"
 wrap_src="$INCLUDES/usr/local/sbin/pixie-on-tty1"
 trace_src="$INCLUDES/usr/local/sbin/pixie-trace"

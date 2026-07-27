@@ -1,0 +1,3 @@
+# The pixie CLI vendored tree (pip install --target of pixie-lab + rich +
+# tomlkit) is staged here by cijoe/scripts/archiso_build.py before
+# mkarchiso runs. Committed empty; the build populates it.

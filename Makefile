@@ -50,7 +50,7 @@ help:
 	@echo "                  (needs a prior VARIANT=usbboot-pc bake + qemu/KVM/OVMF + ventoy deps)"
 	@echo ""
 	@echo "Variant: $(VARIANT)"
-	@echo "  usbboot-pc    - bootable USB live ISO via live-build (.iso, x86_64)"
+	@echo "  usbboot-pc    - bootable USB live ISO via archiso/mkarchiso (.iso, x86_64)"
 	@echo ""
 	@echo "Cleanup:"
 	@echo "  clean         remove build artifacts (dist/, cijoe-output, _build, caches)"
@@ -86,13 +86,12 @@ media-deps:
 	pipx install cijoe
 	pipx ensurepath
 
-# Build a media image. Pick the variant via ``VARIANT=...``:
+# Build a media image (VARIANT=usbboot-pc, the only variant):
 #   make build VARIANT=usbboot-pc     - bootable USB live ISO (.iso, x86_64)
-#   make build VARIANT=netboot-pc     - kernel + initrd + squashfs for PXE clients
 #
-# Both variants use live-build (cijoe/tasks/netboot-pc.yaml,
-# cijoe/tasks/usbboot-pc.yaml) and need ``live-build`` on the host
-# plus passwordless sudo.
+# usbboot-pc runs mkarchiso (cijoe/tasks/usbboot-pc.yaml) inside a
+# privileged archlinux container (podman or docker) and needs
+# passwordless sudo + exfatprogs on the host for the PIXIE_IMGS append.
 build:
 	cd cijoe && cijoe $(MEDIA_TASK) --monitor -c configs/$(VARIANT).toml
 

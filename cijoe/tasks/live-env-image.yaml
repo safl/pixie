@@ -5,8 +5,8 @@ doc: |
   Builds the ``pixie-live-env`` disk image that pixie nbdboots
   ephemerally for the live-env boot modes (``pixie-flash-once`` /
   ``pixie-flash-always`` / ``pixie-inventory`` / ``pixie-tui``). Unlike
-  the ``netboot-pc`` live-build bake (kernel + initrd + squashfs), this
-  starts from the nosi ``arch-headless`` base disk image and injects the
+  the usbboot .iso (a self-contained archiso live image), this starts
+  from the nosi ``arch-headless`` base disk image and injects the
   pixie CLI + the ``pixie-on-tty1`` service into its rootfs, then serves
   the whole disk over NBD -- the design proven on hardware where a
   dual-NIC igb box that could never inventory over the old squashfs did

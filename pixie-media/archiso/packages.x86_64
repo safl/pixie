@@ -1,0 +1,59 @@
+# pixie usbboot-pc live env -- trimmed from archiso releng's set to the
+# flash / inventory / operator tooling. No dkms / headers / build tools:
+# the Arch kernel + full linux-firmware carry the NIC + GPU drivers
+# in-tree (this is why the pixie .iso moved off Debian live-build's
+# r8125 DKMS stack). Networking is distro-native: systemd-networkd +
+# systemd-resolved for wired DHCP (enabled via the releng airootfs), iwd
+# for wifi (iwctl). Keep this list in sync with profiledef.sh
+# file_permissions + the airootfs service wants-symlinks.
+
+# base system + kernel + firmware (full firmware: boots on whatever
+# bare-metal NIC/GPU the operator points it at).
+base
+linux
+linux-firmware
+amd-ucode
+intel-ucode
+
+# archiso boot machinery (initramfs + the archiso mkinitcpio hook +
+# the BIOS bootloader; systemd-boot for UEFI ships with systemd).
+mkinitcpio
+mkinitcpio-archiso
+syslinux
+efibootmgr
+
+# filesystem + disk tooling for the flash / inventory flows.
+dosfstools
+e2fsprogs
+exfatprogs
+gptfdisk
+parted
+nvme-cli
+smartmontools
+qemu-img
+zstd
+
+# hardware inventory.
+lshw
+pciutils
+usbutils
+ethtool
+
+# networking (distro-native).
+iwd
+wireless-regdb
+openssh
+curl
+
+# pixie CLI runtime (the vendored tree under /opt/pixie/lib runs on
+# stock python3 + stdlib urllib; rich + tomlkit are vendored alongside).
+python
+
+# shell + base operator UX.
+sudo
+zsh
+grml-zsh-config
+less
+nano
+vim
+git

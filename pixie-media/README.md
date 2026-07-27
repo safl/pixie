@@ -1,133 +1,99 @@
 # pixie-media
 
-Source content for the pixie media images. Two variants:
+Source content for the pixie USB live image.
 
-- **USB live image** (`VARIANT=usbboot-pc`) - bootable USB carrying the
-  pixie runtime + a writable exFAT `PIXIE_IMGS` partition for pre-built
-  images, for ad-hoc flash-install of images. Built via Debian's
-  live-build (`iso-hybrid` output); shipped gzip-compressed as
-  `pixie-usbboot-pc-x86_64.iso.gz` (Etcher / Rufus / Raspberry Pi
-  Imager all decompress `.gz` natively; xz tripped Etcher's bundled
-  handler regardless of preset).
-- **Raspberry-Pi USB flasher** (`VARIANT=usbboot-rpi`) - arm64 image that
-  boots a Pi 4 / CM4 / Pi 5 / CM5 from a USB stick into the same pixie
-  TUI as `usbboot-pc`, sized for in-situ flashing of local eMMC / NVMe.
-  Unlike the x86 variants this is NOT a live image: it customizes the
-  official Raspberry Pi OS Lite (arm64) image in place (download +
-  loop-mount + chroot), so it inherits every Pi kernel + `bcm*.dtb`
-  (incl. the CM5 / CM5IO device trees) + firmware and boots every
-  supported board with no per-board branching. Shipped gzip-compressed
-  as `pixie-usbboot-rpi-arm64.img.gz`.
+**USB live image** (`VARIANT=usbboot-pc`) - a bootable x86_64 ISO
+carrying the pixie runtime plus a writable exFAT `PIXIE_IMGS` partition
+for pre-built images, for ad-hoc flash-install and inventory. It boots
+from CD media, a USB stick (BIOS + UEFI), and BMC virtual media
+(Redfish / PiKVM / JetKVM). Built via **archiso** (`mkarchiso`) from the
+`archiso/` profile and shipped uncompressed as
+`pixie-usbboot-pc-x86_64.iso` (every flasher reads a plain `.iso`
+directly; at ~1.3 GiB with full linux-firmware it stays under GitHub's
+2 GiB per-release-asset limit).
 
-This directory holds the **content** baked into the images: the rootfs
-trees that live-build folds in and the live-build config tree. The cijoe
-**orchestration** (configs, tasks, scripts) that consumes this
-content lives at `cijoe/` at the repo root.
+The image is an Arch Linux live env: the Arch kernel + full
+linux-firmware carry the NIC / GPU drivers in-tree, so it needs no DKMS
+(this replaced the earlier Debian live-build ISO, which built an r8125
+DKMS module to get 2.5G Realtek NICs up).
 
-Operators drive everything via the top-level Makefile:
-`make build VARIANT=usbboot-pc|usbboot-rpi`.
+This directory holds the **content** baked into the image; the cijoe
+**orchestration** (configs, tasks, scripts) that consumes it lives at
+`cijoe/` at the repo root. Operators drive everything via the top-level
+Makefile: `make build VARIANT=usbboot-pc`.
 
 ## Layout
 
-- `auxiliary/cloudinit-metadata.meta` - shared cloud-init metadata.
-- `rootfs/common/` - files baked into every variant.
-- `live-build/` - live-build config tree used by the x86 usbboot-pc
-  variant. The ``PIXIE_VARIANT`` env var selects the shape:
-  ``usbboot-pc`` -> amd64 iso-hybrid. (``usbboot-rpi`` does not use live-build; it reuses this tree's
-  ``includes.chroot/`` + ``config/hooks/`` inside an RPiOS chroot.)
+- `archiso/` - the mkarchiso profile, forked from archiso's `releng`.
+  - `profiledef.sh` - ISO metadata, `bootmodes` (bios.syslinux +
+    uefi.systemd-boot), and `file_permissions` (exec bits for the pixie
+    scripts).
+  - `packages.x86_64` - the trimmed package set (flash / inventory
+    tooling; no DKMS / headers / build tools).
+  - `airootfs/` - the pixie userspace overlaid onto the live env's root:
+    the operator CLI launcher (`usr/local/bin/pixie` + the vendored tree
+    staged into `opt/pixie/lib` at build time), the boot service trio
+    and support units (`pixie-on-tty1`, `pixie-images-discover`,
+    `var-lib-pixie-images.mount`, `pixie-usb-grow`, the banners), the
+    realtek offload udev rule, `motd` / `issue`, and `root:pixie` for
+    ssh diagnostics.
+  - `efiboot/` + `syslinux/` - the UEFI (systemd-boot) and BIOS
+    (syslinux) bootloader configs, patched for a serial console
+    (`console=ttyS0,115200`), immediate boot, and pixie branding.
+  - `mkarchiso-in-container.sh` - runs `mkarchiso` inside the privileged
+    build container (mirror pin + serialized downloads).
+- `auxiliary/` - iPXE embed script + headers consumed by
+  `cijoe/scripts/pixie_ipxe_build.py` (not part of the ISO build).
 
 ## Pipeline
 
 From the repo root:
 
 ```
-make build VARIANT=usbboot-pc|usbboot-rpi
+make build VARIANT=usbboot-pc
 ```
 
-dispatches to one of two cijoe task files. The Makefile picks the
-right one based on the variant:
+runs `cijoe tasks/usbboot-pc.yaml`, whose single `archiso_build` step:
 
-- `usbboot-pc` -> `cijoe tasks/usbboot-pc.yaml`. Drives Debian's `live-build`
-  with `PIXIE_VARIANT=usbboot-pc` selecting `iso-hybrid` output, then
-  post-processes the pre-built ISO to append a writable exFAT
-  `PIXIE_IMGS` partition (`sfdisk --append`, `losetup -fP`,
-  `mkfs.exfat`) and gzip-compresses it. Output is
-  `pixie-usbboot-pc-x86_64.iso.gz`. No QEMU full-system bake.
+1. Copies `archiso/` into a working dir and vendors the pixie-lab CLI
+   (`uv build --wheel` -> `pip install --target`, plus rich + tomlkit)
+   into its `airootfs/opt/pixie/lib` so the live env's stock python3
+   runs it. Stamps the pixie version into the profile.
+2. Runs `mkarchiso` inside a privileged, host-networked **archlinux
+   container** (podman on the lab / dev host, docker on CI). mkarchiso
+   needs root + `mount --bind /dev` for pacstrap, which a
+   rootless/unprivileged container can't provide.
+3. Appends a writable exFAT `PIXIE_IMGS` partition to the trailing edge
+   of the isohybrid ISO (`sfdisk`, `losetup -fP`, `mkfs.exfat`; the
+   32 MiB stub auto-grows to fill the stick on first boot via
+   `pixie-usb-grow.service`), then verifies the structure and writes a
+   sha256 manifest.
 
-- `usbboot-rpi` -> `cijoe tasks/usbboot-rpi.yaml`. Does NOT use live-build.
-  `scripts/rpios_image_build.py` downloads Raspberry Pi OS Lite
-  (arm64) on a native arm64 builder, grows the root for headroom,
-  loop-mounts + chroots, installs the pixie runtime + flash tooling,
-  drops in this tree's `includes.chroot/` and runs the pixie
-  `config/hooks/` verbatim, masks RPiOS's first-boot user wizard so
-  the box boots straight into the pixie TUI, then gzips the raw image.
-  Output is `pixie-usbboot-rpi-arm64.img.gz`. Operator dd's it to a USB
-  stick and boots a Pi 4 / CM4 / Pi 5 / CM5 from it.
-
-The x86 variants stage the pixie-lab wheel via `pixie_wheel_stage` into
-the live-build chroot includes, then drive live-build via
-`live_build` (usbboot-pc additionally runs `usb_iso_build` for the
-exFAT `PIXIE_IMGS` post-processing). usbboot-rpi also runs
-`pixie_wheel_stage` first, then `rpios_image_build` consumes the same
-staged wheel inside the RPiOS chroot.
+Output: `~/system_imaging/disk/pixie-usbboot-pc-x86_64-v<version>.iso`
+(+ `.sha256`). Write it with `dd if=... of=/dev/sdX bs=4M`, open it in
+Etcher / Rufus DD-mode, or drop it onto a Ventoy stick.
 
 ## Build prerequisites
 
-All three variants (live-build):
-- `live-build` (`sudo apt install live-build`)
-- `debootstrap`, `squashfs-tools`, `xorriso` (pulled in by
-  `live-build`'s recommends, or install explicitly)
-- `exfatprogs` for the usbboot-pc post-build PIXIE_IMGS exFAT step
-  (`mkfs.exfat`)
-- `xz-utils` for compressing the final usbboot-pc artifact (always
-  present on Ubuntu/Debian; listed for completeness)
-- `uv` for `pixie_wheel_stage` to build the pixie-lab wheel; install
-  with `pipx install uv` if needed
-- Passwordless `sudo` - live-build's chroot operations are
-  privileged; CI runners have NOPASSWD by default
+- A container runtime able to run `--privileged --network=host`
+  (`podman` on the lab / dev host, `docker` preinstalled on CI).
+- `exfatprogs` on the host for the `PIXIE_IMGS` exFAT append
+  (`mkfs.exfat`); `sfdisk` / `losetup` / `blkid` come from util-linux.
+- `uv` on PATH to build + vendor the pixie-lab CLI.
+- Passwordless `sudo` for the container run + the loop-device append.
+- `cijoe` (install via `make media-deps`).
 
-All variants:
-- `cijoe` (install via `make media-deps`, which runs `pipx install cijoe`)
+## Verify
 
-## Output
-
-usbboot-pc:
-- `~/system_imaging/disk/pixie-usbboot-pc-x86_64.iso.gz` - final artifact.
-  Open in Balena Etcher / Raspberry Pi Imager / Rufus DD-mode
-  (those tools decompress `.gz` natively), or pipe via CLI:
-  `gunzip -d --stdout pixie-usbboot-pc-x86_64.iso.gz | sudo dd of=/dev/sdX bs=4M`.
-  Decompress to `.iso` first (`gunzip ...`) before dropping onto a
-  Ventoy stick; Ventoy doesn't auto-decompress.
+`make test-usb-ventoy` runs the structural check (`usb_iso_verify`:
+ISO 9660 + isohybrid MBR + El Torito BIOS **and** UEFI boot images +
+sha256) and a QEMU/Ventoy boot that asserts `pixie-on-tty1` renders on
+tty1 and the image-discovery mount lands. CI's `verify-usbboot` job runs
+the same against the freshly built artifact.
 
 ## Status
 
-Both variants ship on every tagged release at
+The usbboot-pc ISO ships on every tagged release at
 [the GitHub releases page](https://github.com/safl/pixie/releases).
-The end-to-end PXE chain test (``make test-pxe``) gates each release
-on usbboot-pc building cleanly and the chain working end to end. Most operators never run this build pipeline themselves -
-``pixie-media/`` exists for contributors who want to modify the image.
-
-- **usbboot-pc.** Hybrid ISO that boots into a Debian live environment
-  with the `pixie` wizard installed into `/opt/pixie/venv`, and an
-  exFAT `PIXIE_IMGS` partition for pre-built images. live-boot's
-  SquashFS + tmpfs overlay provides the ephemeral rootfs (no
-  `overlayroot` package needed). End-to-end use case in
-  [`docs/src/tutorials/pixie-usbboot-pc.md`](../docs/src/tutorials/pixie-usbboot-pc.md).
-- **usbboot-rpi.** arm64 Pi-bootable raw image (FAT32 firmware + ext4
-  live squashfs + auto-growing exFAT `PIXIE_IMGS`). Boots a CM5 /
-  Pi5 / Pi4 from a USB stick into the same pixie TUI as usbboot-pc;
-  the headline use case is reflashing a CM5 in a closed IO-case
-  (eMMC) without the jumper-rpiboot-Etcher disassembly dance.
-  End-to-end use case in
-  [`docs/src/tutorials/pixie-usbboot-rpi.md`](../docs/src/tutorials/pixie-usbboot-rpi.md).
-
-  The end-to-end PXE chain (server hands a per-MAC iPXE plan, client
-  loads the live trio, flashes a target disk, signals done) is
-  exercised by `make test-pxe` and runs in CI on every push.
-
-## Running pixie-web
-
-The supported way to set up a long-running pixie-web is the
-container deploy (`deploy/compose.yml` / `deploy/quadlet/`); see
-[`deploy/README.md`](../deploy/README.md) and
-[walkthrough-server-docker.md](../docs/src/walkthrough-server-docker.md).
+Most operators never run this build pipeline themselves; `pixie-media/`
+exists for contributors who want to modify the image.

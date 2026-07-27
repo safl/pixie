@@ -1,0 +1,9 @@
+#!/bin/sh
+# pixie: launch the vendored operator CLI with the image's stock
+# python3. The tree under /opt/pixie/lib is a ``pip install --target``
+# of pixie-lab + its pure-Python CLI runtime deps (rich + tomlkit),
+# staged into the airootfs at image-build time by
+# cijoe/scripts/archiso_build.py. The CLI reaches the pixie server over
+# stdlib urllib, so no httpx / fastapi base deps are needed here.
+export PYTHONPATH=/opt/pixie/lib${PYTHONPATH:+:$PYTHONPATH}
+exec python3 -c 'from pixie.tui import main; main()' "$@"
