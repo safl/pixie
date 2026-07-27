@@ -205,6 +205,16 @@ to pixie's HTTP endpoint. The user-class re-DHCP dance lets one
 DHCP config serve both PXE ROM firmware (first pass) and iPXE
 firmware (second pass).
 
+```{note}
+**Secure Boot must be disabled on PXE targets.** Pixie's iPXE binary,
+the nosi kernels/initrds it netboots, and the archiso live env are not
+signed by a key in the firmware's trust store, so a Secure-Boot-enabled
+target silently refuses to boot the chain. Disable Secure Boot in the
+target's firmware (or its BMC). The same applies to booting the usbboot
+`.iso` via BMC virtual media. Signing the chain (shim + a signed
+bootloader/kernel) is not yet supported.
+```
+
 ### Legacy BIOS / PXE
 
 ```

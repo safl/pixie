@@ -17,10 +17,10 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
-from pixie.events._kinds import MACHINE_BINDING_CHANGED, MACHINE_BOUND, MACHINE_DELETED
+from pixie.events._kinds import MACHINE_DELETED
+from pixie.machines._bind_events import emit_bind_event
 from pixie.machines._store import (
     BOOT_MODES,
-    UNCOMMITTED_BOOT_MODES,
     BadMac,
     MachinesStore,
     normalise_mac,
@@ -160,43 +160,7 @@ def upsert_machine(
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    log = getattr(request.app.state, "events_log", None)
-    if log is not None:
-        details: dict[str, Any] = {"boot_mode": row.boot_mode}
-        if row.image_content_sha256:
-            details["image_content_sha256"] = row.image_content_sha256
-        # ``machine.bound`` on a fresh MAC or on a row that was only
-        # auto-registered (an uncommitted mode -- ipxe-exit or
-        # pixie-inventory -- with no bound image, including a machine
-        # that auto-inventoried then flipped back to ipxe-exit);
-        # ``machine.binding.changed`` when the mode or image actually
-        # shifted from a real prior operator bind.
-        was_bound = previous is not None and (
-            bool(previous.image_content_sha256) or previous.boot_mode not in UNCOMMITTED_BOOT_MODES
-        )
-        changed = previous is not None and (
-            previous.boot_mode != row.boot_mode
-            or previous.image_content_sha256 != row.image_content_sha256
-        )
-        if previous is not None and was_bound and changed:
-            details["previous_boot_mode"] = previous.boot_mode
-            if previous.image_content_sha256:
-                details["previous_image_content_sha256"] = previous.image_content_sha256
-            log.emit(
-                MACHINE_BINDING_CHANGED,
-                subject_kind="machine",
-                subject_id=row.mac,
-                summary=f"{row.mac}: {previous.boot_mode} -> {row.boot_mode}",
-                details=details,
-            )
-        else:
-            log.emit(
-                MACHINE_BOUND,
-                subject_kind="machine",
-                subject_id=row.mac,
-                summary=f"{row.mac} -> {row.boot_mode}",
-                details=details,
-            )
+    emit_bind_event(getattr(request.app.state, "events_log", None), previous, row)
     return row.to_dict()
 
 

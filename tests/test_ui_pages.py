@@ -372,6 +372,22 @@ def test_ui_machine_detail_lists_recent_events(client: TestClient) -> None:
     assert "machine.bound" in body
 
 
+def test_ui_html_bind_emits_event(client: TestClient) -> None:
+    """Binding via the HTML form (POST /ui/machines/bind) emits the same
+    machine.bound audit event the JSON API does -- the UI bind used to be
+    invisible in /ui/events."""
+    c = _authed(client)
+    r = c.post(
+        "/ui/machines/bind",
+        data={"mac": "aa:bb:cc:dd:ee:06", "boot_mode": "ipxe-exit"},
+        follow_redirects=False,
+    )
+    assert r.status_code == 303
+    body = c.get("/ui/events?subject_kind=machine").text
+    assert "machine.bound" in body
+    assert "aa:bb:cc:dd:ee:06" in body
+
+
 def test_ui_machines_list_shows_inventory_summary(client: TestClient) -> None:
     """Per-row summary column indicates disk count + whether lshw
     was included."""

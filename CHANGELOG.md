@@ -11,6 +11,44 @@ operator-facing summary.
 
 ## [Unreleased]
 
+### Added
+
+**Action feedback banners.** Mutating actions that redirect (catalog
+import, overlay prune, settings + live-env saves) now show a one-shot
+success/error banner instead of a silent page reload -- so "imported 12
+sources", "reclaimed 3 overlays", or "import failed: 404" is visible
+without digging in the event log. Catalog Import in particular was fully
+silent on both success and failure.
+
+**Friendly boot-mode labels.** The machines list + machine detail render
+boot modes as their friendly name (e.g. "Flash once" for
+`pixie-flash-once`) with the raw mode + description in a tooltip, instead
+of a bare mode string.
+
+**New docs: a Concepts primer** (how Catalog -> Images -> Overlays ->
+boot modes relate) and a **usbboot `.iso`** page (booting via BMC virtual
+media / dd / Ventoy, the `PIXIE_IMGS` partition, the >=2 GiB RAM floor),
+plus a Secure Boot note (the PXE + live-env chain is unsigned; disable
+it on targets).
+
+### Fixed
+
+**UI machine binds are now audited.** Binding a machine through the web
+form emitted no event, while the JSON API did; both now emit the same
+`machine.bound` / `machine.binding.changed` via a shared helper.
+
+**Login page stops advertising the default password** once it's been
+changed (the hint now honours the same flag as the warning banner).
+
+**Renamed "Fetch latest catalog" to "Import full nosi catalog"** -- it
+stages source rows, it doesn't download bytes (that's the per-row
+Fetch), and the old label collided with that verb.
+
+Also: the TUI disk picker now advertises `[Enter] rescan` when no disks
+are detected instead of a dead-end `[#] pick` prompt; and corrected the
+README (overlay path + default boot mode) and a stale "flash path is
+unimplemented" docstring.
+
 ## [0.4.8] - 2026-07-27
 
 ### Added

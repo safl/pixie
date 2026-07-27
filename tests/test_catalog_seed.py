@@ -130,13 +130,13 @@ def test_import_form_prefills_pixie_default(client: TestClient) -> None:
 
 
 def test_catalog_page_has_fetch_latest_nosi_button(client: TestClient) -> None:
-    """The Catalog page offers a one-click 'Fetch latest catalog' that
-    imports the full upstream nosi catalog (separate from the pixie
-    default in the URL bar)."""
+    """The Catalog page offers a one-click button that imports the full
+    upstream nosi catalog (separate from the pixie default in the URL
+    bar)."""
     from pixie.catalog import NOSI_CATALOG_URL
 
     c = authed(client)
     body = c.get("/ui/catalog").text
-    assert "Fetch latest catalog" in body
+    assert "Import full nosi catalog" in body
     assert NOSI_CATALOG_URL in body
     assert "safl/nosi" in NOSI_CATALOG_URL

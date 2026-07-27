@@ -38,7 +38,9 @@ should serve next time each target PXEs.
 :maxdepth: 2
 
 quickstart
+concepts
 boot-modes
 deployment
+usb-boot
 hardware-quirks
 ```
