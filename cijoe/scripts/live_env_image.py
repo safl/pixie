@@ -58,7 +58,7 @@ from pathlib import Path
 
 # Reuse the pyproject version reader so the published asset + catalog
 # fragment carry the same stamped version as the other bakes.
-from usb_iso_build import _read_pixie_version
+from media_common import _read_pixie_version
 
 # GitHub's per-file release-asset hard limit. The gzipped image must
 # land under this or the release upload is rejected downstream, so we

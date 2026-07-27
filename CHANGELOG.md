@@ -11,6 +11,23 @@ operator-facing summary.
 
 ## [Unreleased]
 
+### Changed
+
+**The usbboot `.iso` is now an Arch (archiso) live image, not Debian.**
+The bootable USB / BMC-virtual-media ISO
+(`pixie-usbboot-pc-x86_64.iso`) is now built with `mkarchiso` from an
+Arch `releng` fork (`pixie-media/archiso/`) instead of Debian
+live-build. The Arch kernel + full linux-firmware carry the NIC drivers
+in-tree, so the r8125 DKMS module the Debian ISO built (to bring up
+2.5G Realtek NICs) is gone, along with the whole live-build tree. The
+image is proven to mount + boot via a real BMC's Redfish virtual media
+(PiKVM / JetKVM / Redfish). The operator-facing live env is unchanged:
+the same `pixie` TUI on tty1, the same flash / inventory / wizard flow,
+and the same writable `PIXIE_IMGS` exFAT partition, written with `dd` /
+Etcher / Rufus DD-mode / Ventoy exactly as before. The ISO grew from
+~200 MiB to ~1.3 GiB (full linux-firmware), still under GitHub's 2 GiB
+release-asset limit.
+
 ## [0.4.6] - 2026-07-27
 
 ### Added

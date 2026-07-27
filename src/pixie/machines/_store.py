@@ -38,8 +38,8 @@ LIVE_ENV_MODES: frozenset[str] = frozenset(
         "pixie-tui",
     }
 )
-"""Boot modes that chain the target into pixie's own netboot-pc live
-env. Extracted as its own set so ``pxe/_renderer.py`` and the store
+"""Boot modes that chain the target into pixie's own live env.
+Extracted as its own set so ``pxe/_renderer.py`` and the store
 share one source of truth: if a mode is added on one side only, the
 renderer silently falls through the plan-render match and the bound
 target boots into ``unavailable.j2``. Kept close to :data:`BOOT_MODES`

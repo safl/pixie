@@ -1,23 +1,19 @@
 # pixie USB live appliance - build configuration
 #
-# Drives Debian's live-build to produce a hybrid ISO that boots both
-# from CD media and from a USB stick (BIOS + UEFI). The ISO ships
-# uncompressed (``pixie-usbboot-pc-x86_64.iso``) at ~200 MiB: PIXIE_IMGS is
-# just 32 MiB at bake time (auto-grows to fill the stick on first boot
-# via ``pixie-usb-grow.service``), so the artifact is comfortably under
-# GitHub's 2 GiB per-release-asset limit without compression.
+# Drives ``mkarchiso`` (via cijoe/scripts/archiso_build.py) to produce a
+# hybrid ISO from the ``pixie-media/archiso`` profile that boots from CD
+# media, a USB stick (BIOS + UEFI), and BMC virtual media. The ISO ships
+# uncompressed (~1.3 GiB with full linux-firmware): PIXIE_IMGS is just
+# 32 MiB at bake time (auto-grows to fill the stick on first boot via
+# ``pixie-usb-grow.service``), so the artifact stays under GitHub's 2 GiB
+# per-release-asset limit without compression.
 #
 # Operators on a GUI flasher (Etcher / RPi Imager / Rufus DD-mode)
 # open the .iso directly -- no decompress step. CLI:
 #
 #     dd if=pixie-usbboot-pc-x86_64.iso of=/dev/sdX bs=4M
 #
-# Ventoy users: drop the .iso onto the Ventoy data partition; no
-# decompress step needed since v0.25.4.
-#
-# This is the live-build replacement for an earlier cloud-init bake
-# of the ``usbboot-pc`` variant; the cloud-init path was retired in
-# favour of live-build's iso-hybrid output.
+# Ventoy users: drop the .iso onto the Ventoy data partition.
 #
 # Usage:
 #   cijoe tasks/usbboot-pc.yaml --config configs/usbboot-pc.toml --monitor
@@ -25,8 +21,6 @@
 
 [pixie]
 variant = "usbboot-pc"
-hostname = "pixie-usb"
-timezone = "UTC"
 
 [cijoe.workflow]
 fail_fast = true
