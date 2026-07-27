@@ -31,6 +31,13 @@ from importlib.resources import files
 # this is just the convenience default.
 DEFAULT_CATALOG_URL = "https://github.com/safl/pixie/releases/latest/download/catalog.toml"
 
+# The full upstream nosi catalog (every flashable variant: all distros +
+# desktop / proxmox / rpios + freebsd, rolling ``:latest`` tags). The
+# Catalog page's "Fetch latest catalog" button imports this so an
+# operator can pull the whole nosi set on demand without pixie
+# hand-maintaining a copy that drifts each week.
+NOSI_CATALOG_URL = "https://github.com/safl/nosi/releases/latest/download/catalog-latest.toml"
+
 # The same curated catalog shipped INSIDE the package, used to seed a
 # fresh (empty) catalog on first start so a plain deploy comes up with
 # the known-good set offline -- no network, no release dependency.

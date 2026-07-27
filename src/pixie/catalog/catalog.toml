@@ -103,3 +103,31 @@ src = "oras://ghcr.io/safl/nosi/arch-headless-netboot:latest"
 format = "tar.gz"
 arch = "x86_64"
 description = "Netboot bundle for arch-headless: vmlinuz + initrd so pixie can nbdboot the pixie-live-env image over NBD."
+
+# Additional nosi flashable images. arch-headless reuses the netboot
+# bundle above, so it nbdboots too; freebsd-14/15 are image-only (nosi
+# publishes no netboot bundle for them) -- flash them to a target disk
+# with the pixie-flash-* modes; they cannot nbdboot. For the full nosi
+# set (desktop / proxmox / rpios / weekly-pinned tags) use "Fetch latest
+# catalog" on the Catalog page.
+[[images]]
+name = "nosi arch-headless"
+src = "oras://ghcr.io/safl/nosi/arch-headless:latest"
+format = "img.gz"
+arch = "x86_64"
+description = "Arch Linux headless (rolling) -- the lean nosi netboot base (no dev toolchain). nbdboot-capable via the arch-headless netboot bundle."
+netboot_src = "oras://ghcr.io/safl/nosi/arch-headless-netboot:latest"
+
+[[images]]
+name = "nosi freebsd-14-headless"
+src = "oras://ghcr.io/safl/nosi/freebsd-14-headless:latest"
+format = "img.gz"
+arch = "x86_64"
+description = "FreeBSD 14 headless. Flash-only (nosi ships no netboot bundle): write it to a target disk with the pixie-flash-* modes."
+
+[[images]]
+name = "nosi freebsd-15-headless"
+src = "oras://ghcr.io/safl/nosi/freebsd-15-headless:latest"
+format = "img.gz"
+arch = "x86_64"
+description = "FreeBSD 15 headless. Flash-only (nosi ships no netboot bundle): write it to a target disk with the pixie-flash-* modes."

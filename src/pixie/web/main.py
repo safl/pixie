@@ -36,7 +36,7 @@ from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
 
 import pixie
-from pixie.catalog import DEFAULT_CATALOG_URL
+from pixie.catalog import DEFAULT_CATALOG_URL, NOSI_CATALOG_URL
 from pixie.catalog._routes import router as catalog_router
 from pixie.catalog._store import CatalogStore
 from pixie.events import EventsLog
@@ -1002,6 +1002,7 @@ def create_app() -> FastAPI:
                 "preserved": preserved,
                 "catalog_events": catalog_events,
                 "default_catalog_url": DEFAULT_CATALOG_URL,
+                "nosi_catalog_url": NOSI_CATALOG_URL,
                 "authed": True,
                 "page": "catalog",
             },
