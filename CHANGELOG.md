@@ -11,6 +11,8 @@ operator-facing summary.
 
 ## [Unreleased]
 
+## [0.4.7] - 2026-07-27
+
 ### Changed
 
 **The usbboot `.iso` is now an Arch (archiso) live image, not Debian.**
