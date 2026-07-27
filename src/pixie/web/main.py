@@ -64,6 +64,7 @@ from pixie.events._routes import router as events_router
 from pixie.exports._routes import router as exports_router
 from pixie.exports._store import ExportsStore, OverlaysStore
 from pixie.exports._supervisor import DEFAULT_PORT_BASE, NbdServer
+from pixie.images import is_sha256_hex
 from pixie.machines._bind_events import emit_bind_event
 from pixie.machines._routes import router as machines_router
 from pixie.machines._store import (
@@ -2527,6 +2528,9 @@ def create_app() -> FastAPI:
                 "env": "PIXIE_LIVE_ENV_IMAGE_SHA",
                 "updated_at": store.updated_at(KEY_LIVE_ENV_IMAGE_SHA) or "",
             },
+            # Fetched bindable images (sha -> name) so the Advanced sha
+            # field can be a dropdown instead of a raw 64-hex paste.
+            "fetched_images": _bindable_image_names(state.catalog_store),
             "flash_error": flash_error,
         }
 
@@ -2585,11 +2589,9 @@ def create_app() -> FastAPI:
         plan. Rejects anything that is not 64 lowercase hex chars so a
         fat-fingered sha doesn't quietly send every live-env boot into
         the unavailable plan."""
-        import re as _re
-
         store: SettingsStore = request.app.state.settings_store
         raw = (live_env_image_sha or "").strip().lower()
-        if raw and not _re.match(r"^[0-9a-f]{64}$", raw):
+        if raw and not is_sha256_hex(raw):
             return templates.TemplateResponse(
                 request,
                 "live_env.html",

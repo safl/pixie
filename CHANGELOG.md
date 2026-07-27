@@ -11,6 +11,14 @@ operator-facing summary.
 
 ## [Unreleased]
 
+### Changed
+
+**Live env: pick the image from a dropdown.** The Advanced "Image
+content sha" field on the Live env page is now a dropdown of fetched
+images (name + short sha) instead of a raw 64-hex paste; a current value
+that isn't in the catalog (e.g. a `$PIXIE_LIVE_ENV_IMAGE_SHA` override)
+stays selectable.
+
 ## [0.4.10] - 2026-07-27
 
 ### Fixed

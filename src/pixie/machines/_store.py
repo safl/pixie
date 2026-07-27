@@ -10,6 +10,7 @@ before rendering the plan.
 from __future__ import annotations
 
 import contextlib
+import json
 import re
 import sqlite3
 import threading
@@ -19,6 +20,7 @@ from pathlib import Path
 from typing import Any
 
 from pixie._util import now_iso
+from pixie.images import is_sha256_hex
 
 _DB_WRITE_LOCK = threading.Lock()
 
@@ -403,7 +405,7 @@ class MachinesStore:
         canon = normalise_mac(mac)
         if boot_mode not in BOOT_MODES:
             raise ValueError(f"unknown boot_mode {boot_mode!r}; valid: {sorted(BOOT_MODES)}")
-        if image_content_sha256 and not re.match(r"^[0-9a-f]{64}$", image_content_sha256):
+        if image_content_sha256 and not is_sha256_hex(image_content_sha256):
             raise ValueError("image_content_sha256 must be 64 lowercase hex chars")
         labels_json = _labels_to_json(list(labels or []))
         target_serial = (target_disk_serial or "").strip()
@@ -575,11 +577,10 @@ class MachinesStore:
         """Store a fresh inventory blob against the machine row. Creates
         the row on first contact (mirrors touch_seen shape) so a bare
         POST from a live env's first boot lands correctly."""
-        import json as _json
 
         canon = normalise_mac(mac)
         now = now_iso()
-        blob = _json.dumps(inventory)
+        blob = json.dumps(inventory)
         with _DB_WRITE_LOCK, self._conn() as conn:
             existing = conn.execute("SELECT * FROM machines WHERE mac = ?", (canon,)).fetchone()
             if existing is None:
@@ -612,7 +613,6 @@ def _inventory_disk_serials(row: sqlite3.Row | None) -> set[str]:
     hardware at bind time. Returns an empty set when the row is
     missing, the inventory blob is empty / malformed, or none of the
     disks report a serial."""
-    import json as _json
 
     if row is None:
         return set()
@@ -621,7 +621,7 @@ def _inventory_disk_serials(row: sqlite3.Row | None) -> set[str]:
         if not raw:
             return set()
         try:
-            parsed = _json.loads(raw)
+            parsed = json.loads(raw)
         except ValueError:
             return set()
         if not isinstance(parsed, dict):
@@ -643,9 +643,8 @@ def _inventory_disk_serials(row: sqlite3.Row | None) -> set[str]:
 def _labels_to_json(labels: list[str]) -> str:
     """Serialise a validated label list to a JSON array string. Empty
     list -> ``''`` so the DB stores a single trivially-checkable form."""
-    import json as _json
 
-    return _json.dumps(list(labels)) if labels else ""
+    return json.dumps(list(labels)) if labels else ""
 
 
 def _labels_from_json(raw: str) -> list[str]:
@@ -653,12 +652,11 @@ def _labels_from_json(raw: str) -> list[str]:
     an empty list -- the migration path may leave a legacy row with
     unexpected shape and pre-1.0 pixie tolerates it rather than 500'ing
     the machines page."""
-    import json as _json
 
     if not raw:
         return []
     try:
-        parsed = _json.loads(raw)
+        parsed = json.loads(raw)
     except ValueError:
         return []
     if not isinstance(parsed, list):
@@ -667,7 +665,6 @@ def _labels_from_json(raw: str) -> list[str]:
 
 
 def _row(r: sqlite3.Row) -> Machine:
-    import json as _json
 
     inv: dict[str, Any] = {}
     inv_at = ""
@@ -679,7 +676,7 @@ def _row(r: sqlite3.Row) -> Machine:
         raw = r["inventory_json"] or ""
         if raw:
             try:
-                parsed = _json.loads(raw)
+                parsed = json.loads(raw)
             except ValueError:
                 parsed = None
             if isinstance(parsed, dict):
