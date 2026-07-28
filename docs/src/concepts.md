@@ -55,6 +55,18 @@ selects it); until then those modes render an `unavailable` plan. The
 usbboot `.iso` (see [](usb-boot.md)) is the same live env on removable
 media instead of over the network.
 
+## Events
+
+Every action pixie takes (a fetch, a bind, an export spawn, a flash
+result posted back by a target) lands in an append-only **event log**,
+browsable on the Events page (`/ui/events`) and filterable by kind,
+subject, and free text. Each event has a dotted `kind` (e.g.
+`catalog.fetch.started`) operators can grep on. The dashboard shows an
+error counter over the log; **Acknowledge** moves the "seen" cursor so
+only newer errors count, and **Clear** wipes the log (recording the
+clear itself as an event). The log is the first place to look when
+something misbehaves.
+
 ## How it fits together
 
 ```
