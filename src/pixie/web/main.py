@@ -27,8 +27,9 @@ from contextlib import suppress as contextlib_suppress
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
-from fastapi import Depends, FastAPI, Form, HTTPException, Request, status
+from fastapi import Depends, FastAPI, Form, Request, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
@@ -662,6 +663,35 @@ def _seed_catalog_at_startup(app: FastAPI) -> None:
         )
 
 
+def _resolve_session_secret(state_dir: Path) -> str:
+    """Return a STABLE session-cookie signing key.
+
+    ``PIXIE_SESSION_SECRET`` wins if set. Otherwise a generated key is
+    persisted under the state dir and reused, because a fresh key on
+    every ``create_app()`` logs every operator out on each container
+    recreate and hands each uvicorn worker a different key (cookies then
+    fail to verify mid-session). Falls back to an in-process key if the
+    state dir isn't writable -- still stable for the life of the process.
+    """
+    env = os.environ.get("PIXIE_SESSION_SECRET")
+    if env:
+        return env
+    secret_path = state_dir / "session_secret"
+    try:
+        existing = secret_path.read_text(encoding="utf-8").strip()
+        if existing:
+            return existing
+    except OSError:
+        pass
+    secret = secrets.token_urlsafe(32)
+    try:
+        secret_path.write_text(secret, encoding="utf-8")
+        secret_path.chmod(0o600)
+    except OSError:
+        pass
+    return secret
+
+
 def create_app() -> FastAPI:
     """Build the FastAPI app. Factory shape so tests can construct a
     fresh app per fixture without global state."""
@@ -774,7 +804,7 @@ def create_app() -> FastAPI:
     # LAN-only by design; operators front with TLS if they want it.
     app.add_middleware(
         SessionMiddleware,
-        secret_key=secrets.token_urlsafe(32),
+        secret_key=_resolve_session_secret(Path(str(app.state.catalog_store.db_path)).parent),
         session_cookie=SESSION_COOKIE,
         max_age=60 * 60 * 24 * 7,
         same_site="strict",
@@ -821,7 +851,23 @@ def create_app() -> FastAPI:
         return RedirectResponse(url="/ui/login", status_code=status.HTTP_303_SEE_OTHER)
 
     @app.exception_handler(RequestValidationError)
-    async def _validation_error(_request: Request, exc: RequestValidationError) -> JSONResponse:
+    async def _validation_error(
+        request: Request, exc: RequestValidationError
+    ) -> JSONResponse | RedirectResponse:
+        # A bad/missing form field on a ``/ui/*`` POST should land the
+        # operator back on the page with a flash banner, not a raw JSON
+        # 422 that ejects them out of the HTML UI with only the browser
+        # Back button to recover. The JSON API paths keep the
+        # machine-readable 422.
+        if request.url.path.startswith("/ui/"):
+            set_flash(
+                request,
+                "That form was invalid or incomplete; nothing was changed.",
+                "danger",
+            )
+            ref = urlparse(request.headers.get("referer", "")).path
+            back = ref if ref.startswith("/ui/") else "/ui/machines"
+            return RedirectResponse(url=back, status_code=status.HTTP_303_SEE_OTHER)
         return JSONResponse(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             content={"detail": exc.errors()},
@@ -1627,10 +1673,14 @@ def create_app() -> FastAPI:
         try:
             parsed = parse_labels(labels)
             request.app.state.machines_store.set_labels(mac, parsed)
-        except BadMac as exc:
-            raise HTTPException(status_code=400, detail=f"invalid MAC: {exc}") from exc
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except (BadMac, ValueError) as exc:
+            # Flash + redirect back to the machine page rather than a raw
+            # 400 JSON that would eject the operator out of the HTML UI.
+            set_flash(request, f"Label update rejected: {exc}", "danger")
+            return RedirectResponse(
+                url=f"/ui/machines/{mac}", status_code=status.HTTP_303_SEE_OTHER
+            )
+        set_flash(request, "Labels updated.", "success")
         return RedirectResponse(url=f"/ui/machines/{mac}", status_code=status.HTTP_303_SEE_OTHER)
 
     @app.post("/ui/machines/delete")
@@ -1640,6 +1690,7 @@ def create_app() -> FastAPI:
         _auth: None = Depends(_require_ui_auth),
     ) -> RedirectResponse:
         request.app.state.machines_store.delete(mac)
+        set_flash(request, f"Deleted machine {mac}.", "success")
         return RedirectResponse(url="/ui/machines", status_code=status.HTTP_303_SEE_OTHER)
 
     @app.get("/ui/events", response_class=HTMLResponse)

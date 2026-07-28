@@ -152,6 +152,7 @@ class ExportsStore:
     @contextlib.contextmanager
     def _conn(self) -> Generator[sqlite3.Connection]:
         conn = sqlite3.connect(str(self.db_path))
+        conn.execute("PRAGMA busy_timeout = 5000")  # wait out a concurrent writer, don't error
         conn.row_factory = sqlite3.Row
         try:
             yield conn
@@ -283,6 +284,7 @@ class OverlaysStore:
     @contextlib.contextmanager
     def _conn(self) -> Generator[sqlite3.Connection]:
         conn = sqlite3.connect(str(self.db_path))
+        conn.execute("PRAGMA busy_timeout = 5000")  # wait out a concurrent writer, don't error
         conn.row_factory = sqlite3.Row
         try:
             yield conn
@@ -354,6 +356,24 @@ class OverlaysStore:
         refuse a hand-off to a different mac); this just records it."""
         with _DB_WRITE_LOCK, self._conn() as conn:
             conn.execute("UPDATE overlays SET attached_mac = ? WHERE alias = ?", (mac, alias))
+
+    def try_claim(self, alias: str, mac: str) -> bool:
+        """Atomically claim ``alias`` for ``mac`` iff it is free or
+        already ``mac``'s; return True on success, False if another mac
+        holds it.
+
+        Closes the check-then-write race the bind route otherwise has
+        between ``get()`` and ``attach()``: two machines binding the same
+        free alias could both pass the "is it free?" guard and then both
+        write, last-one-wins. The conditional ``UPDATE`` makes the claim
+        a single atomic step so exactly one wins.
+        """
+        with _DB_WRITE_LOCK, self._conn() as conn:
+            cur = conn.execute(
+                "UPDATE overlays SET attached_mac = ? WHERE alias = ? AND attached_mac IN ('', ?)",
+                (mac, alias, mac),
+            )
+            return cur.rowcount == 1
 
     def detach(self, alias: str) -> None:
         """Release the writer hold on ``alias`` (attached_mac -> '')."""

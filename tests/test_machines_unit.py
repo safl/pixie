@@ -464,10 +464,9 @@ def test_ui_labels_edit_form_persists_and_independent_of_bind(
 
 def test_ui_labels_edit_rejects_malformed_label(client: TestClient) -> None:
     """A label that violates :data:`_LABEL_RE` (leading punctuation,
-    chars outside ``[A-Za-z0-9 ._-]``, over 64 chars) surfaces as
-    400 with the parser's message in ``detail``. Silent-suppress
-    was the previous shape and made "why did my label edit not
-    take" a real debug ratdance on the operator side."""
+    chars outside ``[A-Za-z0-9 ._-]``, over 64 chars) is rejected with a
+    flash + 303 back to the machine page -- NOT a raw 400 JSON, which
+    would eject the operator out of the HTML UI. State must not apply."""
     c = _authed(client)
     mac = "aa:bb:cc:dd:ee:30"
 
@@ -476,8 +475,8 @@ def test_ui_labels_edit_rejects_malformed_label(client: TestClient) -> None:
         data={"labels": "@bad"},
         follow_redirects=False,
     )
-    assert r.status_code == 400
-    assert "alphanumeric-leading" in r.json()["detail"]
+    assert r.status_code == 303
+    assert r.headers["location"] == f"/ui/machines/{mac}"
     # State must not have partially applied: the machine row still
     # has no labels field.
     row = c.get(f"/machines/{mac}").json()
@@ -608,3 +607,35 @@ def test_inventory_post_does_not_flip_a_non_inventory_mode(client: TestClient) -
     c.put(f"/machines/{mac}", json={"boot_mode": "nbdboot"})
     client.post(f"/pxe/{mac}/inventory", json={"lshw": {}, "disks": []})
     assert client.get(f"/machines/{mac}").json()["boot_mode"] == "nbdboot"
+
+
+def test_session_secret_is_stable_and_persisted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The session signing key must be stable across create_app() calls
+    (a fresh key each time logs every operator out on every restart).
+    It persists under the state dir and an env override wins."""
+    from pixie.web.main import _resolve_session_secret
+
+    monkeypatch.delenv("PIXIE_SESSION_SECRET", raising=False)
+    first = _resolve_session_secret(tmp_path)
+    assert first  # non-empty
+    assert _resolve_session_secret(tmp_path) == first  # stable via the persisted file
+    assert (tmp_path / "session_secret").read_text(encoding="utf-8").strip() == first
+
+    monkeypatch.setenv("PIXIE_SESSION_SECRET", "operator-supplied-key")
+    assert _resolve_session_secret(tmp_path) == "operator-supplied-key"  # env wins
+
+
+def test_ui_form_missing_field_redirects_not_json(client: TestClient) -> None:
+    """A missing required Form field on a /ui/* POST comes back as a 303
+    redirect (with a flash), not a raw 422 JSON that ejects the operator
+    out of the HTML UI."""
+    c = _authed(client)
+    r = c.post(
+        "/ui/machines/aa:bb:cc:dd:ee:42/labels/edit",
+        data={},  # missing the required ``labels`` field
+        follow_redirects=False,
+    )
+    assert r.status_code == 303
+    assert r.headers["location"].startswith("/ui/")
