@@ -292,3 +292,31 @@ def test_live_env_image_sha_resolution(tmp_path: Path, monkeypatch: pytest.Monke
     assert store.resolve_live_env_image_sha() == other
     store.clear(KEY_LIVE_ENV_IMAGE_SHA)
     assert store.resolve_live_env_image_sha() == good
+
+
+def test_ui_live_env_image_edit_persists_and_validates(client: TestClient) -> None:
+    """POST /ui/live-env/image/edit (the programmatic image-select
+    endpoint) stores a 64-hex sha, rejects a malformed one with a 400 +
+    inline error, and clears the override on a blank submit."""
+    from pixie.web._settings_store import KEY_LIVE_ENV_IMAGE_SHA
+
+    c = _authed(client)
+    store = c.app.state.settings_store  # type: ignore[attr-defined]
+    sha = "c" * 64
+    r = c.post(
+        "/ui/live-env/image/edit",
+        data={"live_env_image_sha": sha},
+        follow_redirects=False,
+    )
+    assert r.status_code == 303
+    assert store.get(KEY_LIVE_ENV_IMAGE_SHA) == sha
+
+    # Malformed -> 400 + error, override unchanged.
+    bad = c.post("/ui/live-env/image/edit", data={"live_env_image_sha": "xyz"})
+    assert bad.status_code == 400
+    assert "64 hex" in bad.text
+    assert store.get(KEY_LIVE_ENV_IMAGE_SHA) == sha
+
+    # Blank clears the override.
+    c.post("/ui/live-env/image/edit", data={"live_env_image_sha": ""})
+    assert store.get(KEY_LIVE_ENV_IMAGE_SHA) is None
