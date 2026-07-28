@@ -11,6 +11,50 @@ operator-facing summary.
 
 ## [Unreleased]
 
+## [0.4.13] - 2026-07-28
+
+### Fixed
+
+**Operators stay logged in across restarts.** The session-cookie signing
+key was regenerated on every container start, so a recreate logged
+everyone out, and multi-worker uvicorn handed each worker a different key
+(cookies then failed mid-session). It is now stable: `PIXIE_SESSION_SECRET`
+if set, otherwise a key persisted under the state dir.
+
+**Form errors stay inside the UI.** An invalid label, or a missing/bad
+field on any `/ui/*` form, used to render a raw JSON 400/422 that ejected
+the operator out of the HTML UI. Those now flash the error and return to
+the page; the JSON API keeps its machine-readable status.
+
+**The on-target `pixie` TUI no longer crash-loops on a flaky network.** A
+transient error while probing a URL image used to escape and exit the
+process, which `pixie-on-tty1.service` restarted in a loop; it now
+degrades to a soft "probe failed" message.
+
+**No more `database is locked` under concurrent access.** Every state.db
+connection now waits briefly for a competing writer instead of erroring
+out immediately.
+
+**Overlay binding is race-free.** Two machines binding the same free
+overlay alias at once can no longer both win; the single-writer claim is
+now atomic.
+
+### Changed
+
+**Flashing a disk spells out the danger.** The `pixie` TUI's flash
+confirmation now names the disk being erased (its model + serial, not
+just the `/dev` path), warns in red that it ERASES ALL DATA, and requires
+typing the full word `yes` rather than a single keystroke. The web
+overlay Reset actions now confirm with a success banner.
+
+**Docs corrected and expanded.** Fixed drifted documentation (the upgrade
+recipe that silently no-op'd against the ghcr-pinned compose, the
+`PIXIE_HOST_ADDR` vs app-read `PIXIE_PUBLIC_HOST` confusion, TFTP
+described as in-process rather than a supervised `in.tftpd` subprocess,
+the non-existent "Fetch latest catalog" button, the stale nav list) and
+added Back-up/restore, Troubleshooting, and Events sections. pixie also
+has a mascot now (a bat face) in the README and docs sidebar.
+
 ## [0.4.12] - 2026-07-28
 
 ### Changed
