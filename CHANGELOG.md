@@ -31,6 +31,16 @@ mid-pipeline subprocess-fault branches (a failing `tee`/`sha256sum`) and
 the mounted-target guard, which the end-to-end `test-pxe-flash*` and
 `verify-usbboot` boot chains exercise on real hardware.
 
+**A mutation gate on the flash core's safety-critical predicates.**
+Coverage proves a line ran, not that a wrong value would be caught.
+`tests/test_flash_mutation_guard.py` flips a curated set of the
+predicates that decide whether a disk gets clobbered, whether a corrupt
+download is caught, and whether the right partition is made bootable
+(the size-fits check, the on-the-wire integrity compare, the ESP-type
+and boot-entry-label matches, ...), and asserts the suite goes red for
+each. It runs in the normal fast test job, so a change that weakens a
+test until one of those predicates is no longer guarded fails the PR.
+
 ## [0.4.11] - 2026-07-27
 
 ### Changed
