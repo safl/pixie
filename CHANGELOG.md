@@ -11,6 +11,28 @@ operator-facing summary.
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-07-28
+
+### Removed
+
+**BREAKING: the `bty.*` netboot-cmdline backward-compat is gone.** The
+nbdboot kernel cmdline used to carry duplicate `bty.nbd` / `bty.image` /
+`bty.overlay_size` / `bty.server` / `bty.mac` (and `bty.persist`) tokens
+next to `pixie.*`, so a netboot bundle whose initrd still grepped for
+`bty.*` (a nosi bundle baked before the pixie rename) could still boot.
+pixie now emits `pixie.*` only. A pre-rename bundle will no longer nbdboot
+until it is rebuilt to read `pixie.*`; current pixie and nosi bundles
+already do.
+
+### Changed
+
+**Finished the bty -> pixie rename.** The last legacy internal symbols
+that still carried the bty name were renamed (`BtyTui` -> `PixieTui`, the
+default catalog-URL constant, the image-ref concept, a stale `bty.flash`
+doc reference), and the rendered iPXE plans no longer mention bty. A few
+one-line heritage comments (pixie forked from bty; shared operator colour
+palette) remain in the source as accurate provenance.
+
 ## [0.4.15] - 2026-07-28
 
 ### Changed
