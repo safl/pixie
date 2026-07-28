@@ -68,6 +68,8 @@
                            style="max-width: 32rem;"
                            value="{{ machine.labels | join(', ') }}"
                            placeholder="rack-3, noisy, gmktec-g5"
+                           maxlength="1039"
+                           title="Comma-separated. Each label: alphanumeric-leading, then a-z / 0-9 / space / . _ - (up to 64 chars); 16 labels max."
                            aria-label="Comma-separated labels">
                     <button type="submit" class="btn btn-sm btn-outline-primary">
                         <i class="bi bi-check2 me-1"></i>Save labels
@@ -511,11 +513,13 @@
                 <div class="d-flex gap-1 flex-wrap mt-2" role="list" aria-label="DIMM slots">
                     {% for d in memory.dimms %}
                     {% if d.empty %}
-                    <span class="border border-secondary-subtle rounded" style="width: 1.25rem; height: 1.25rem;"
-                          title="{{ d.slot or 'slot' }}: empty"></span>
+                    <span class="border border-secondary-subtle rounded d-inline-flex align-items-center justify-content-center text-secondary"
+                          style="width: 1.25rem; height: 1.25rem; font-size: 0.7rem;"
+                          title="{{ d.slot or 'slot' }}: empty"><i class="bi bi-dash"></i></span>
                     {% else %}
-                    <span class="rounded text-bg-primary" style="width: 1.25rem; height: 1.25rem;"
-                          title="{{ d.slot or 'slot' }}: {{ d.size_bytes | humanize_bytes }}{% if d.type %} {{ d.type }}{% endif %}{% if d.speed_hz %} @ {{ (d.speed_hz / 1000000) | round | int }} MHz{% endif %}"></span>
+                    <span class="rounded text-bg-primary d-inline-flex align-items-center justify-content-center"
+                          style="width: 1.25rem; height: 1.25rem; font-size: 0.7rem;"
+                          title="{{ d.slot or 'slot' }}: {{ d.size_bytes | humanize_bytes }}{% if d.type %} {{ d.type }}{% endif %}{% if d.speed_hz %} @ {{ (d.speed_hz / 1000000) | round | int }} MHz{% endif %}"><i class="bi bi-check2"></i></span>
                     {% endif %}
                     {% endfor %}
                 </div>
