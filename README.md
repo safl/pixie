@@ -5,8 +5,9 @@
 # pixie
 
 Bare-metal netboot appliance in one container. Catalog + fetch + NBD
-serving + PXE plan renderer + TFTP + operator UI, on one FastAPI
-process with one state.db and one admin password.
+serving + PXE plan renderer + TFTP + operator UI: one FastAPI process
+(plus a supervised `in.tftpd` subprocess for the PXE first hop), one
+state.db, and one admin password.
 
 Pixie folds into a single service what bty (operator UI + machine
 registry + PXE plan renderer + Rich TUI), nbdmux (NBD-export
@@ -27,14 +28,15 @@ README:
     "$EDITOR" /opt/pixie/envvars.example    # set PIXIE_HOST_ADDR + PIXIE_ADMIN_PASSWORD
     mv /opt/pixie/envvars.example /opt/pixie/envvars
     cd /opt/pixie
-    podman compose --env-file envvars up -d
+    COMPOSE_ENV_FILES=envvars podman compose up -d
 
 `pixie-lab deploy` fills in an admin password + host address + waits
 for `/healthz` in one shot, useful for a fresh lab machine.
 
 Log in at http://<host>:8080/. First landing after login is a
 dashboard summarising machines, catalog, and NBD-serving state; the
-top nav has Machines, Catalog, Events, and Settings.
+top nav has Machines, Catalog, Images, Overlays, Live env, Events, and
+Settings.
 
 ## Operator workflow
 

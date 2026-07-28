@@ -25,8 +25,8 @@ Host prerequisite: podman + a compose provider. Then log in at
 > Prefer to review the generated files first? `uv tool run pixie-lab
 > init /opt/pixie` writes the same `compose.yml` + `envvars` without
 > starting anything; edit `envvars` (`PIXIE_HOST_ADDR` +
-> `PIXIE_ADMIN_PASSWORD`), then `cd /opt/pixie && podman compose
-> --env-file envvars up -d`.
+> `PIXIE_ADMIN_PASSWORD`), then `cd /opt/pixie && COMPOSE_ENV_FILES=envvars
+> podman compose up -d`.
 
 ## Usage
 
@@ -51,8 +51,8 @@ deploy already seeds a curated set of nosi images (debian / ubuntu /
 fedora / arch headless, freebsd-14/15, and the `pixie-live-env` image)
 plus the netboot bundles -- these are pointers, so nothing is
 downloaded until you Fetch. For the full upstream set (every nosi
-variant incl the desktop / proxmox / rpios shapes), click **Fetch latest
-catalog**; to add anything else, paste a `catalog.toml` URL in the
+variant incl the desktop / proxmox / rpios shapes), click **Import full
+nosi catalog**; to add anything else, paste a `catalog.toml` URL in the
 Import bar. Then hit **Fetch** on a row: pixie pulls the bytes to disk
 (decompressing `img.gz` / `img.zst` on the way in), and the row flips to
 `fetched` when the pipeline lands.
