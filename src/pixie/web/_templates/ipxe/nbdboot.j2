@@ -23,14 +23,14 @@
 # - URLs are content-addressed. A rename of the catalog entry does
 #   not silently point the target at different bytes; a redeploy of
 #   pixie serves the same URL for the same content.
-# - No fallback to a bty-media-baked kernel. If the netboot bundle
+# - No fallback to a media-baked kernel. If the netboot bundle
 #   is missing or corrupt the target lands on the pixie-media
 #   diagnostic screen (a later PR); the plan renderer refuses to
 #   render an image-mismatched fallback that would kernel-panic
 #   on a bad module.
 #
 # Console + modprobe blacklist encode hardware lessons pulled from
-# bty/nbdmux 2026-06/07 field runs; keep them as-is unless the
+# earlier 2026-06/07 field runs; keep them as-is unless the
 # behaviour is being explicitly re-litigated.
 
 set pixie-base http://{{ host }}:{{ port }}
@@ -44,7 +44,7 @@ set nbd-name {{ nbd_name }}
 #
 # Cmdline carries the ``pixie.*`` tokens the netboot initrd's nbdboot
 # script greps for (server / mac / nbd / image / overlay_size). The
-# netboot bundle must read ``pixie.*``; there is no ``bty.*`` fallback.
+# netboot bundle must read ``pixie.*``; there is no legacy fallback prefix.
 #
 # On persist renders, pixie spawns qemu-nbd with
 # ``--offset=<partition_1_start_bytes>`` so ``/dev/nbd0`` on the
