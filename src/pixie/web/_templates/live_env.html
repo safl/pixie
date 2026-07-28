@@ -7,7 +7,6 @@
     <div class="container">
         <span class="subnav-jumps d-flex align-items-center flex-wrap">
             <a href="#setup">Setup</a>
-            <a href="#advanced">Advanced</a>
             <a href="#options">Options</a>
         </span>
     </div>
@@ -75,60 +74,6 @@
                 {% endif %}
             </button>
             <span class="text-muted small ms-2">Fetch + select in one step.</span>
-        </form>
-    </div>
-</div>
-
-{# ---- Advanced: select by content sha ---------------------------- #}
-<div class="card shadow-sm mb-4" id="advanced">
-    <div class="card-header bg-light fw-semibold">
-        <i class="bi bi-sliders me-1"></i>Advanced: select by content sha
-    </div>
-    <div class="card-body">
-        <p class="small text-muted mb-3">
-            Manual override of what Set up above does automatically: point the live env
-            at a specific fetched image by its <code>content_sha256</code> (from its
-            <a href="/ui/catalog">Catalog</a> row). The image plus its netboot bundle
-            (via the entry's <code>netboot_src</code>) must both be fetched.
-        </p>
-        <form method="post" action="/ui/live-env/image/edit" class="row g-3">
-            <div class="col-12">
-                <label for="live_env_image_sha" class="form-label">
-                    Image content sha
-                    <span class="badge text-bg-{% if live_env_image_sha.override %}primary{% else %}secondary{% endif %} ms-1">
-                        {% if live_env_image_sha.override %}override{% elif live_env_image_sha.effective %}env{% else %}unset{% endif %}
-                    </span>
-                </label>
-                {# Pick from fetched bindable images (sha -> name) rather
-                   than pasting a 64-hex sha. Only fetched images are
-                   usefully selectable; an arbitrary not-yet-fetched sha
-                   renders the unavailable plan anyway. A current override
-                   that isn't in the fetched list (e.g. a $PIXIE_..._SHA
-                   env value) stays selectable via the fallback option. #}
-                <select id="live_env_image_sha" name="live_env_image_sha"
-                        class="form-select font-monospace">
-                    <option value="">(unset - live-env modes render the unavailable plan)</option>
-                    {% for sha, name in fetched_images.items() %}
-                    <option value="{{ sha }}" {% if sha == live_env_image_sha.override %}selected{% endif %}>{{ name }} - {{ sha[:12] }}</option>
-                    {% endfor %}
-                    {% if live_env_image_sha.override and live_env_image_sha.override not in fetched_images %}
-                    <option value="{{ live_env_image_sha.override }}" selected>{{ live_env_image_sha.override[:12] }} (not in catalog)</option>
-                    {% endif %}
-                </select>
-                <div class="form-text">
-                    {% if not fetched_images %}No fetched images yet -- use <strong>Set up live env</strong> above, or Fetch one on the Catalog page.{% endif %}
-                    Blank falls back to <code>{{ live_env_image_sha.env }}</code> then unset.
-                    Effective:
-                    {% if live_env_image_sha.effective %}<code>{{ live_env_image_sha.effective }}</code>{% else %}<em class="text-muted">(none)</em>{% endif %}.
-                    {% if live_env_image_sha.updated_at %}<br>Last updated: <code>{{ live_env_image_sha.updated_at | fmt_ts }}</code>.{% endif %}
-                </div>
-            </div>
-            <div class="col-12">
-                <button type="submit" class="btn btn-outline-secondary"><i class="bi bi-check2 me-1"></i>Save</button>
-                <span class="text-muted small ms-2">
-                    Takes effect on the NEXT <code>GET /pxe/&lt;mac&gt;</code>; a target already mid-boot must be power-cycled.
-                </span>
-            </div>
         </form>
     </div>
 </div>

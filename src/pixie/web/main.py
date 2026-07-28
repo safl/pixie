@@ -64,7 +64,6 @@ from pixie.events._routes import router as events_router
 from pixie.exports._routes import router as exports_router
 from pixie.exports._store import ExportsStore, OverlaysStore
 from pixie.exports._supervisor import DEFAULT_PORT_BASE, NbdServer
-from pixie.images import is_sha256_hex
 from pixie.machines._bind_events import emit_bind_event
 from pixie.machines._routes import router as machines_router
 from pixie.machines._store import (
@@ -2609,46 +2608,6 @@ def create_app() -> FastAPI:
         else:
             store.clear(KEY_LIVE_ENV_EXTRA_CMDLINE)
         set_flash(request, "Live-env cmdline saved.", "success")
-        return RedirectResponse(url="/ui/live-env", status_code=status.HTTP_303_SEE_OTHER)
-
-    @app.post("/ui/live-env/image/edit", response_model=None)
-    def ui_live_env_image_edit(
-        request: Request,
-        live_env_image_sha: str = Form(""),
-        _auth: None = Depends(_require_ui_auth),
-    ) -> HTMLResponse | RedirectResponse:
-        """Persist the live-env disk-image content sha. When set (and the
-        image + its netboot bundle are fetched) the live-env boot modes
-        nbdboot this image ephemerally. Blank clears the override so the
-        value falls back to $PIXIE_LIVE_ENV_IMAGE_SHA then empty, in
-        which case the live-env boot modes degrade to the unavailable
-        plan. Rejects anything that is not 64 lowercase hex chars so a
-        fat-fingered sha doesn't quietly send every live-env boot into
-        the unavailable plan."""
-        store: SettingsStore = request.app.state.settings_store
-        raw = (live_env_image_sha or "").strip().lower()
-        if raw and not is_sha256_hex(raw):
-            return templates.TemplateResponse(
-                request,
-                "live_env.html",
-                _live_env_context(
-                    request,
-                    flash_error=(
-                        "Live-env image sha must be 64 hex chars "
-                        "(a fetched disk-image's content_sha256)."
-                    ),
-                ),
-                status_code=400,
-            )
-        if raw:
-            store.set_value(KEY_LIVE_ENV_IMAGE_SHA, raw)
-        else:
-            store.clear(KEY_LIVE_ENV_IMAGE_SHA)
-        set_flash(
-            request,
-            "Live-env image updated." if raw else "Live-env image cleared.",
-            "success",
-        )
         return RedirectResponse(url="/ui/live-env", status_code=status.HTTP_303_SEE_OTHER)
 
     @app.post("/ui/live-env/setup")
