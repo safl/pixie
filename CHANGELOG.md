@@ -11,6 +11,22 @@ operator-facing summary.
 
 ## [Unreleased]
 
+## [0.4.15] - 2026-07-28
+
+### Changed
+
+**UX/UI polish.** The operator TUI on the serial console no longer shows
+literal backtick clutter, points the empty-catalog screen at the key that
+actually works (`b` back), labels the post-flash UEFI-entry warning as
+non-fatal ("warning (flash OK)") instead of relying on colour, and stops
+showing a misleading `0%` / ETA on the indeterminate disk-write bar. In
+the web UI, the catalog-import URL field gets an accessible name, the
+labels input gets a length cap plus a format hint, the "Import full nosi
+catalog" button now asks for confirmation, and the DIMM slot map
+distinguishes populated from empty with a glyph rather than colour alone.
+Internally, Settings writes now take the same write-lock as the other
+state.db stores.
+
 ## [0.4.14] - 2026-07-28
 
 ### Changed
