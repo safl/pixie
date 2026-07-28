@@ -125,7 +125,7 @@ _SIDECAR_SUFFIXES = (
 # layer carries one of these is a Helm chart, a Cosign signature, an
 # in-toto attestation, a SPDX SBOM, etc. Without this filter
 # ``pick_image_layer`` would happily pick the Helm tarball or the
-# signature blob and downstream consumers (e.g. ``bty.flash``) would
+# signature blob and downstream consumers (e.g. ``pixie.flash``) would
 # write its bytes onto an operator's target disk (tar headers /
 # signature bytes into the MBR). An operator typing ``oras://`` at a
 # non-image artifact deserves a clear error, not corruption.

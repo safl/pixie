@@ -336,8 +336,8 @@ def test_ipxe_plan_live_env_appends_extra_cmdline(
     """PIXIE_LIVE_ENV_EXTRA_CMDLINE lets an operator pin hardware
     workarounds (e.g. pci=nommconf for the GIGABYTE MC12-LE0's Intel
     i210 NICs) without rebaking the live-env image. The tokens land on
-    the live-env nbdboot kernel line verbatim, after the pixie.mac= /
-    bty.mac= tail (last-token-wins); an empty env is a legal no-op."""
+    the live-env nbdboot kernel line verbatim, after the pixie.mac=
+    tail (last-token-wins); an empty env is a legal no-op."""
     live_env_sha = "e" * 64
     bundle_sha = "f" * 64
     _authed(client)
@@ -360,8 +360,8 @@ def test_ipxe_plan_live_env_appends_extra_cmdline(
     assert "pci=nommconf" in kernel_line
     assert "amd_iommu=off" in kernel_line
     assert "pcie_aspm=off" in kernel_line
-    # Tokens land AFTER the bty.mac= tail (last-token-wins).
-    assert kernel_line.index("pci=nommconf") > kernel_line.index("bty.mac=")
+    # Tokens land AFTER the pixie.mac= tail (last-token-wins).
+    assert kernel_line.index("pci=nommconf") > kernel_line.index("pixie.mac=")
 
 
 def test_ipxe_plan_live_env_image_configured_but_missing_degrades(
