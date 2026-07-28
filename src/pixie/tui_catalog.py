@@ -356,7 +356,7 @@ def default_manifest_path() -> Path | None:
 # ---------------------------------------------------------------------------
 # Image-ref derivation
 #
-# Every catalog entry has a stable identifier ``bty_image_ref`` derived from
+# Every catalog entry has a stable identifier ``image_ref`` derived from
 # its ``src`` URL. The same canonicalisation rules apply to all source
 # schemes so trivial variations don't produce phantom-duplicate entries.
 # See ``docs/src/reference.md`` for the locked rule tables; tests in
@@ -483,7 +483,7 @@ def canonicalise_src(src: str) -> str:
 
 
 def image_ref_for_src(src: str) -> str:
-    """Compute the ``bty_image_ref`` for a catalog ``src``.
+    """Compute the ``image_ref`` for a catalog ``src``.
 
     Returns a 64-character lowercase hex string -- the SHA-256 of
     the canonical form of ``src`` (see :func:`canonicalise_src`).

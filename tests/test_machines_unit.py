@@ -112,7 +112,7 @@ def test_put_machine_rejects_bad_mac(client: TestClient) -> None:
 def test_put_machine_rejects_unknown_boot_mode(client: TestClient) -> None:
     r = _authed(client).put(
         "/machines/aa:bb:cc:dd:ee:02",
-        json={"boot_mode": "bty-tui"},
+        json={"boot_mode": "legacy-tui"},
     )
     assert r.status_code == 422
 

@@ -21,7 +21,7 @@ import pixie
 # canonical LAN-DNS / mDNS hostname operators are encouraged to point
 # at their pixie server, so ``pixie --mac X`` against a fresh box Just
 # Works without any flags. Owned here (the [tui]-extra-free entry
-# module) so the argparse default and ``BtyTui``'s constructor default
+# module) so the argparse default and ``PixieTui``'s constructor default
 # can both depend on it without the import dragging in Rich.
 DEFAULT_SERVER = "pixie"
 
@@ -108,12 +108,12 @@ def main(argv: list[str] | None = None, *, prog: str = "pixie") -> None:
     # Lifecycle progress -- the launch path has two slow phases an
     # operator stares at without feedback otherwise:
     #
-    #   1. ``from pixie.tui._app import BtyTui`` (1-3s): pulls Rich
+    #   1. ``from pixie.tui._app import PixieTui`` (1-3s): pulls Rich
     #      + pixie.catalog + pixie.flash + pixie.oras into the
     #      interpreter. On slower hardware (low-end mini-PCs, EPYC
     #      bringup boxes) this is several seconds of "blinking
     #      cursor".
-    #   2. ``BtyTui(...).run()`` -> the wizard prints its first
+    #   2. ``PixieTui(...).run()`` -> the wizard prints its first
     #      header (Rich is no-alt-screen, so prior stderr output
     #      stays visible above the header). On the live env's
     #      framebuffer console first print is typically under a
@@ -138,7 +138,7 @@ def main(argv: list[str] | None = None, *, prog: str = "pixie") -> None:
     _progress(f"v{pixie.__version__} starting...")
     _progress("loading UI dependencies (Rich)...")
     try:
-        from pixie.tui._app import BtyTui
+        from pixie.tui._app import PixieTui
     except ImportError as exc:
         print(
             f"{prog} {pixie.__version__}: required dependency is not installed "
@@ -171,7 +171,7 @@ def main(argv: list[str] | None = None, *, prog: str = "pixie") -> None:
 
     _emit_console_marker(f"pixie: entered v{pixie.__version__}")
     try:
-        BtyTui(server=args.server, mac=args.mac, catalog=args.catalog).run()
+        PixieTui(server=args.server, mac=args.mac, catalog=args.catalog).run()
     finally:
         # ``finally`` so the marker fires for every exit path:
         # clean run, SystemExit from a sys.exit(N) deep inside

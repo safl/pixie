@@ -40,7 +40,7 @@ flash (derived from the catalog URL's scheme+host).
 
 Public surface exposed by the module:
 
-  * ``BtyTui`` class with ``run()``.
+  * ``PixieTui`` class with ``run()``.
   * ``_TuiImage`` dataclass (catalog row shape).
   * ``load_catalog_from_source(...)``,
     ``post_pxe_status(...)``, ``post_inventory(...)`` helpers.
@@ -334,7 +334,7 @@ def collect_lshw(*, timeout: float = 30.0) -> object | None:
 # netboot-capable nosi subset) shipped as a pixie release asset, so the
 # live-env wizard defaults to the same known-good set the appliance
 # seeds -- not the full upstream nosi catalog.
-_BTY_DEFAULT_CATALOG_URL = "https://github.com/safl/pixie/releases/latest/download/catalog.toml"
+_PIXIE_DEFAULT_CATALOG_URL = "https://github.com/safl/pixie/releases/latest/download/catalog.toml"
 # The full upstream nosi catalog (every flashable variant incl freebsd +
 # the desktop/proxmox/rpios shapes). Mirrors NOSI_CATALOG_URL in
 # pixie.catalog + the appliance's "Fetch latest catalog" button;
@@ -520,7 +520,7 @@ class _DeterminateRemainingColumn(TimeRemainingColumn):
         return Text("") if task.total is None else super().render(task)
 
 
-class BtyTui:
+class PixieTui:
     """The pixie terminal UI -- Rich-based, no event loop.
 
     ``run()`` is the entry point. The wizard advances through five
@@ -1051,7 +1051,7 @@ class BtyTui:
         if choice in ("q", "quit"):
             return "quit"
         if choice in ("d", "default"):
-            self._state.catalog_source = _BTY_DEFAULT_CATALOG_URL
+            self._state.catalog_source = _PIXIE_DEFAULT_CATALOG_URL
             self._state.catalog_chosen = True
             return "continue"
         if choice in ("n", "nosi"):
@@ -1924,7 +1924,7 @@ class BtyTui:
                 ValueError,
             ) as exc:
                 self._catalog_load_error = f"{type(exc).__name__}: {exc}"
-        # Dedup local + remote by the canonical ``bty_image_ref``
+        # Dedup local + remote by the canonical ``image_ref``
         # (``sha256(canonicalise_src(url))``). Local rows take
         # precedence: a catalog entry (operator-set --catalog overlay)
         # and a catalog entry that target the SAME upstream
@@ -2270,7 +2270,7 @@ class _MilestoneEmitter:
 
 
 __all__ = [
-    "BtyTui",
+    "PixieTui",
     "_TuiImage",
     "_WizardStage",
     "_format_mib",
