@@ -77,6 +77,29 @@ def test_overlays_store_round_trip(tmp_path: Path) -> None:
     assert store.delete("simon") is False
 
 
+def test_overlays_try_claim_is_atomic(tmp_path: Path) -> None:
+    """``try_claim`` hands a free alias to exactly one mac; a second
+    mac's claim of the still-held alias returns False. This is what
+    closes the bind route's get()-then-attach() race."""
+    from pixie.exports._store import ExportsStore, Overlay, OverlaysStore
+
+    db_path = tmp_path / "state.db"
+    ExportsStore(db_path)
+    store = OverlaysStore(db_path)
+    store.upsert(Overlay(alias="simon", image_sha="a" * 64, qcow2_path="/tmp/simon.qcow2"))
+
+    assert store.try_claim("simon", "aa:bb:cc:dd:ee:01") is True
+    # Idempotent for the holder (a rebind by the same machine).
+    assert store.try_claim("simon", "aa:bb:cc:dd:ee:01") is True
+    # A different machine cannot steal a held alias.
+    assert store.try_claim("simon", "aa:bb:cc:dd:ee:02") is False
+    held = store.get("simon")
+    assert held is not None and held.attached_mac == "aa:bb:cc:dd:ee:01"
+    # Once released, the next machine can claim it.
+    store.detach("simon")
+    assert store.try_claim("simon", "aa:bb:cc:dd:ee:02") is True
+
+
 def test_overlays_schema_migrates_pre_alias_rows(tmp_path: Path) -> None:
     """A pre-alias overlays table (PK ``(mac, image_sha, profile)``) is
     re-keyed to the alias shape on first :class:`ExportsStore` open: each

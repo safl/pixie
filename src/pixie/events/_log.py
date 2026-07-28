@@ -96,6 +96,7 @@ class EventsLog:
     @contextlib.contextmanager
     def _conn(self) -> Generator[sqlite3.Connection]:
         conn = sqlite3.connect(str(self.db_path))
+        conn.execute("PRAGMA busy_timeout = 5000")  # wait out a concurrent writer, don't error
         conn.row_factory = sqlite3.Row
         try:
             yield conn

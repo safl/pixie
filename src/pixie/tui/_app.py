@@ -1987,12 +1987,19 @@ class BtyTui:
                 else:
                     assert image.path is not None  # local row guarantees a path
                     image_info = flash.probe_image(image.path)
-            except (FileNotFoundError, ValueError) as exc:
+            except (OSError, ValueError) as exc:
+                # OSError covers FileNotFoundError AND the transient
+                # urllib URLError / socket errors a URL probe can raise
+                # (URLError subclasses OSError); catching them here turns
+                # a flaky network into a soft "probe failed" message
+                # instead of a traceback that exits the TUI -- which under
+                # pixie-on-tty1.service (Restart=on-failure) is a
+                # crash/restart loop on the target console.
                 return f"image probe failed: {exc}"
 
             try:
                 target_info = flash.probe_target(disk_path)
-            except (FileNotFoundError, ValueError) as exc:
+            except (OSError, ValueError) as exc:
                 return f"target probe failed: {exc}"
 
         plan = flash.make_plan(image_info, target_info)

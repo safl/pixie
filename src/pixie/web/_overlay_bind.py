@@ -85,7 +85,11 @@ def resolve_overlay_bind(
         )
         resolved_image = image_sha
 
-    overlays.attach(alias, mac)
+    if not overlays.try_claim(alias, mac):
+        # Lost the race: another machine claimed this alias between the
+        # get() above and here. Refuse rather than last-write-win over
+        # its hold (the atomic claim is what closes the window).
+        raise ValueError(f"overlay {alias!r} was just claimed by another machine; retry")
     overlays.detach_mac(mac, keep=alias)
     return (resolved_image, alias)
 
