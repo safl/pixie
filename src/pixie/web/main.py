@@ -1427,6 +1427,9 @@ def create_app() -> FastAPI:
         deletion out. Any operator who lands here without confirming
         picked the button already."""
         _reset_overlay_row(request.app.state, alias)
+        set_flash(
+            request, f"Overlay {alias!r} reset; a fresh qcow2 is created on next boot.", "success"
+        )
         return RedirectResponse(url=f"/ui/machines/{mac}", status_code=status.HTTP_303_SEE_OTHER)
 
     # ---------- ui: overlays management -----------------------------
@@ -1504,6 +1507,9 @@ def create_app() -> FastAPI:
         operation as the per-machine Reset button; redirects back to
         the overlays list instead of the machine detail."""
         _reset_overlay_row(request.app.state, alias)
+        set_flash(
+            request, f"Overlay {alias!r} reset; a fresh qcow2 is created on next boot.", "success"
+        )
         return RedirectResponse(url="/ui/overlays", status_code=status.HTTP_303_SEE_OTHER)
 
     @app.post("/ui/overlays/prune")

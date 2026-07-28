@@ -1226,21 +1226,26 @@ class BtyTui:
         prompt_text = self._render_prompt_line(
             title="Confirm flash plan",
             extras=(
-                ("y", "yes, flash"),
-                ("b", "back"),
+                ("yes", "type 'yes' to ERASE + flash"),
+                ("b", "back (safe)"),
                 ("q", "quit"),
             ),
         )
         choice = self._ask(prompt_text)
         if choice in ("q", "quit"):
             return "quit"
+        if choice == "yes":
+            self._screen_flash_running(plan)
+            return "continue"
         if choice in ("b", "back", "n", "no", ""):
             self._state.back()
             return "continue"
-        if choice in ("y", "yes"):
-            self._screen_flash_running(plan)
-            return "continue"
-        self._console.print(f"[{_DANGER}]Unrecognised choice {choice!r}.[/]")
+        # An irreversible whole-disk erase must be an explicit typed
+        # 'yes', never a single reflexive 'y'. Anything else re-prompts
+        # (nothing is written) rather than flashing or silently leaving.
+        self._console.print(
+            f"[{_MUTED}]Type 'yes' to flash, or 'b' to go back. Nothing was written.[/]"
+        )
         self._pause_for_ack()
         return "continue"
 
@@ -1721,8 +1726,17 @@ class BtyTui:
         ]
         if plan.image.virtual_size_bytes is not None:
             image_lines.append(f"  virtual size: {_format_mib(plan.image.virtual_size_bytes)}")
+        # Echo the model + serial the operator picked from the disk table,
+        # not just the /dev path: on a box with several identical-sized
+        # drives the path alone is not enough to be sure this is the right
+        # disk before an irreversible whole-disk erase.
+        disk = self._state.selected_disk or {}
+        model = str(disk.get("model") or "unknown model")
+        serial = str(disk.get("serial") or "no serial")
         target_lines = [
             f"  target:       {plan.target.path}",
+            f"  model:        {model}",
+            f"  serial:       {serial}",
             f"  size:         {_format_mib(plan.target.size_bytes)}",
         ]
         body = "[bold]Image[/]\n" + "\n".join(image_lines)
@@ -1733,6 +1747,13 @@ class BtyTui:
             # a bare "rejected" and no clue (e.g. mounted partitions /
             # image-too-big / unrecognised format).
             body += f"\n\n[bold {_DANGER}]Rejected:[/]\n" + "\n".join(f"  - {e}" for e in errors)
+        else:
+            # A flash is an irreversible whole-disk overwrite. Say so, in
+            # the danger colour, naming the disk being erased.
+            body += (
+                f"\n\n[bold {_DANGER}]WARNING: this ERASES ALL DATA on "
+                f"{plan.target.path} ({model}, serial {serial}).[/]"
+            )
         border_style = _DANGER if errors else _OK
         title = "[red]Flash plan (rejected)[/]" if errors else "[green]Flash plan[/]"
         self._console.print(Panel(body, border_style=border_style, title=title))

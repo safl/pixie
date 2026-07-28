@@ -33,7 +33,7 @@ COMPOSE_YAML = """\
 #     COMPOSE_ENV_FILES=envvars podman compose up -d
 #
 # ``--network=host`` is the whole point of pixie's one-container
-# shape: udp/69 (once the in-process TFTP router lands), tcp/8080
+# shape: udp/69 (the supervised in.tftpd subprocess), tcp/8080
 # (HTTP), and the NBD port range all reach the LAN without any
 # port-publish hoops. Operators fronting pixie behind a reverse proxy
 # can drop network_mode: host and publish 8080 explicitly.
