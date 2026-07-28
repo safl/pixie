@@ -11,6 +11,21 @@ operator-facing summary.
 
 ## [Unreleased]
 
+## [0.4.14] - 2026-07-28
+
+### Changed
+
+**Internal robustness (tech-debt sweep).** The `sfdisk --json` partition
+probe is now bounded by a timeout, so a bad or slow blob can no longer
+wedge a request thread. The catalog fetch trigger is idempotent under
+concurrent clicks: two simultaneous "fetch" requests for one entry no
+longer spawn two downloads. The pre-alias overlay migration is hardened
+so a partial or hand-edited `state.db` can't stop pixie from starting
+(the un-migratable row is skipped with a warning). An unexpected fetch
+failure now logs a full traceback instead of only a one-line summary, and
+a deprecated asyncio call was dropped. No behaviour change for a healthy
+deploy.
+
 ## [0.4.13] - 2026-07-28
 
 ### Fixed
