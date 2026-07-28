@@ -11,6 +11,8 @@ operator-facing summary.
 
 ## [Unreleased]
 
+## [0.4.12] - 2026-07-28
+
 ### Changed
 
 **Integration tests now cover the flash core, and CI tracks their
