@@ -147,6 +147,10 @@ MACHINE_INVENTORY_UPDATED = "machine.inventory.updated"
 """POST /pxe/<mac>/inventory landed a new hardware inventory blob
 from the live-env pixie CLI."""
 
+MACHINE_INVENTORY_CLEARED = "machine.inventory.cleared"
+"""POST /ui/machines/<mac>/re-inventory dropped the stored inventory so
+the next PXE boot re-runs the pixie-inventory pass."""
+
 # ---------- PXE plan render + status --------------------------------
 #
 # The renderer fires exactly one of ``pxe.plan.rendered`` /
@@ -229,6 +233,7 @@ KNOWN_EVENT_KINDS: frozenset[str] = frozenset(
         MACHINE_BINDING_CHANGED,
         MACHINE_DELETED,
         MACHINE_INVENTORY_UPDATED,
+        MACHINE_INVENTORY_CLEARED,
         PXE_PLAN_RENDERED,
         PXE_PLAN_UNAVAILABLE,
         PXE_STATUS_RECEIVED,

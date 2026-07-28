@@ -21,7 +21,6 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import PlainTextResponse
 
 from pixie.events._kinds import (
-    MACHINE_BINDING_CHANGED,
     MACHINE_DISCOVERED,
     MACHINE_INVENTORY_UPDATED,
     PXE_PLAN_RENDERED,
@@ -147,32 +146,14 @@ async def pxe_inventory(request: Request, mac: str) -> PlainTextResponse:
             details=details,
         )
 
-    # Inventory is one-shot: once a machine has reported, flip a
-    # pixie-inventory binding to ipxe-exit so a PXE-first machine does
-    # not re-inventory and boot-loop. Mirrors pixie-flash-once's
-    # self-terminating flip (see pxe_status). Preserve the row's other
-    # fields; the collected inventory stays. Rebinding to
-    # pixie-inventory buys exactly one more pass.
-    row = machines.get(canon)
-    if row is not None and row.boot_mode == "pixie-inventory":
-        with contextlib.suppress(ValueError):
-            machines.upsert_binding(
-                canon,
-                boot_mode="ipxe-exit",
-                image_content_sha256=row.image_content_sha256,
-                labels=list(row.labels),
-                target_disk_serial=row.target_disk_serial,
-                extra_cmdline=row.extra_cmdline,
-                overlay_alias=row.overlay_alias,
-            )
-        if log is not None:
-            log.emit(
-                MACHINE_BINDING_CHANGED,
-                subject_kind="machine",
-                subject_id=canon,
-                summary=f"{canon}: inventory collected, auto-exit (pixie-inventory is one-shot)",
-                details={"boot_mode": "ipxe-exit", "reason": "inventory-once"},
-            )
+    # Inventory is one-shot, but the machine's boot_mode is left exactly
+    # as the operator set it -- ``pixie-inventory`` STAYS
+    # ``pixie-inventory``, no silent flip to ``ipxe-exit``. The renderer
+    # serves an exit plan for a pixie-inventory machine that already has
+    # inventory (see PxeRenderer.render), so a PXE-first target does not
+    # re-inventory + boot-loop while the mode still reads as the
+    # operator's intent, not a system side effect. Re-inventory is an
+    # explicit operator action (clear the inventory) rather than a rebind.
     return PlainTextResponse("", status_code=204)
 
 

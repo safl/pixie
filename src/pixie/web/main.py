@@ -1698,6 +1698,36 @@ def create_app() -> FastAPI:
         set_flash(request, f"Deleted machine {mac}.", "success")
         return RedirectResponse(url="/ui/machines", status_code=status.HTTP_303_SEE_OTHER)
 
+    @app.post("/ui/machines/re-inventory")
+    def ui_machines_re_inventory(
+        request: Request,
+        mac: str = Form(...),
+        _auth: None = Depends(_require_ui_auth),
+    ) -> RedirectResponse:
+        """Clear the machine's stored inventory so the next PXE boot
+        re-runs pixie-inventory. Meaningful while the machine is in
+        pixie-inventory mode: the renderer serves the inventory live env
+        again once the stored inventory is empty (a machine with
+        inventory otherwise gets an exit plan)."""
+        from pixie.events._kinds import MACHINE_INVENTORY_CLEARED
+
+        request.app.state.machines_store.clear_inventory(mac)
+        events = getattr(request.app.state, "events_log", None)
+        if events is not None:
+            with contextlib_suppress(Exception):
+                events.emit(
+                    MACHINE_INVENTORY_CLEARED,
+                    subject_kind="machine",
+                    subject_id=mac,
+                    summary=f"{mac}: inventory cleared, re-inventories on next PXE",
+                )
+        set_flash(
+            request,
+            f"Cleared inventory for {mac}; it re-inventories on the next PXE boot.",
+            "success",
+        )
+        return RedirectResponse(url=f"/ui/machines/{mac}", status_code=status.HTTP_303_SEE_OTHER)
+
     @app.get("/ui/events", response_class=HTMLResponse)
     def ui_events(
         request: Request,
