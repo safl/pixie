@@ -9,6 +9,7 @@ port + status are refreshed at spawn time.
 from __future__ import annotations
 
 import contextlib
+import logging
 import sqlite3
 import threading
 from collections.abc import Generator
@@ -17,6 +18,8 @@ from pathlib import Path
 from typing import Any
 
 from pixie._util import now_iso
+
+_log = logging.getLogger(__name__)
 
 _DB_WRITE_LOCK = threading.Lock()
 
@@ -80,8 +83,21 @@ def _migrate_overlays_schema(conn: sqlite3.Connection) -> None:
     conn.executescript(_OVERLAYS_SCHEMA)
     seen: set[str] = set()
     for r in old_rows:
-        mac_slug = str(r["mac"]).replace(":", "-")
-        base = f"{r['profile']}-{mac_slug}"
+        # A partially-migrated or hand-edited pre-alias table can be
+        # missing an expected column; skip such a row (with a loud log)
+        # rather than raising KeyError and aborting store construction
+        # for the whole process.
+        try:
+            mac_slug = str(r["mac"]).replace(":", "-")
+            base = f"{r['profile']}-{mac_slug}"
+            mac = r["mac"]
+            image_sha = r["image_sha"]
+            qcow2_path = r["qcow2_path"]
+            created_at = r["created_at"]
+            last_boot_at = r["last_boot_at"]
+        except (KeyError, IndexError) as exc:
+            _log.warning("skipping un-migratable pre-alias overlays row (missing %s)", exc)
+            continue
         alias = base
         n = 1
         while alias in seen:
@@ -97,11 +113,11 @@ def _migrate_overlays_schema(conn: sqlite3.Connection) -> None:
             """,
             (
                 alias,
-                r["image_sha"],
-                r["qcow2_path"],
-                r["mac"],
-                r["created_at"],
-                r["last_boot_at"],
+                image_sha,
+                qcow2_path,
+                mac,
+                created_at,
+                last_boot_at,
             ),
         )
     conn.execute("DROP TABLE overlays_pre_alias")

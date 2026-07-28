@@ -161,6 +161,42 @@ def test_overlays_schema_migrates_pre_alias_rows(tmp_path: Path) -> None:
     assert {o.alias for o in OverlaysStore(db_path).list_all()} == set(overlays)
 
 
+def test_overlays_migration_skips_row_missing_a_column(tmp_path: Path) -> None:
+    """A partially-migrated / hand-edited pre-alias overlays table missing
+    an expected column no longer aborts store construction; the
+    un-migratable row is skipped instead of raising KeyError/IndexError."""
+    import sqlite3
+
+    from pixie.exports._store import ExportsStore, OverlaysStore
+
+    db_path = tmp_path / "state.db"
+    conn = sqlite3.connect(str(db_path))
+    # A broken old shape: no ``alias`` (so migration runs) but also no
+    # ``image_sha`` (so re-keying the row would raise).
+    conn.executescript(
+        """
+        CREATE TABLE overlays (
+            mac          TEXT NOT NULL,
+            profile      TEXT NOT NULL,
+            qcow2_path   TEXT NOT NULL,
+            created_at   TEXT NOT NULL,
+            last_boot_at TEXT NOT NULL DEFAULT '',
+            PRIMARY KEY (mac, profile)
+        );
+        """
+    )
+    conn.execute(
+        "INSERT INTO overlays (mac, profile, qcow2_path, created_at) "
+        "VALUES ('aa:bb:cc:dd:ee:00', 'safl', '/data/x.qcow2', '2026-01-01T00:00:00Z')"
+    )
+    conn.commit()
+    conn.close()
+
+    # Must NOT raise; the un-migratable row is dropped.
+    ExportsStore(db_path)
+    assert OverlaysStore(db_path).list_all() == []
+
+
 def test_partition_sig_matches_boot_sector(tmp_path: Path) -> None:
     """A raw disk image with 0x55/0xAA at bytes 510-511 is treated
     as partitioned; anything else is not."""

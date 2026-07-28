@@ -90,9 +90,15 @@ def _sfdisk_partitions(blob: Path) -> list[dict[str, Any]]:
             capture_output=True,
             text=True,
             check=True,
+            timeout=30,
         )
     except FileNotFoundError as exc:
         raise PartitionNotFound("sfdisk binary not found on PATH") from exc
+    except subprocess.TimeoutExpired as exc:
+        # Bounded like the other metadata shell-outs (pixie.disks,
+        # pixie.images): a hung sfdisk on a large or bad blob must not
+        # wedge the request thread indefinitely.
+        raise PartitionNotFound(f"sfdisk --json timed out after {exc.timeout}s on {blob}") from exc
     except subprocess.CalledProcessError as exc:
         raise PartitionNotFound(
             f"sfdisk --json exited rc={exc.returncode}: {exc.stderr.strip()}"

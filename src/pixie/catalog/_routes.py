@@ -13,7 +13,8 @@ routes (``POST`` / ``DELETE``) require a valid pixie session.
 
 from __future__ import annotations
 
-import asyncio
+import logging
+import threading
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
@@ -33,6 +34,14 @@ from pixie.events._kinds import (
 )
 from pixie.images import is_sha256_hex
 from pixie.web._auth import require_auth
+
+_log = logging.getLogger(__name__)
+
+# Serialises the check-then-claim on the per-app ``fetch_states`` dict so
+# two near-simultaneous POSTs for the same entry can't both spawn a
+# fetch (the guard reads the state then writes "fetching" -- without the
+# lock that is a race across request threads + pool workers).
+_FETCH_LOCK = threading.Lock()
 
 # Named field-safety regex for the content sha URL segment. iPXE fires
 # at ``/artifacts/<sha>/vmlinuz``; a bad sha is a client bug + we 404
@@ -272,14 +281,14 @@ async def start_fetch(
         )
 
     states = _fetch_states(request)
-    if states.get(name, {}).get("state") == "fetching":
-        # In-flight already; return the current state instead of
-        # spawning a second task.
-        return {"state": "fetching", "started_at": states[name].get("started_at")}
-
-    states[name] = {"state": "fetching", "started_at": now_iso(), "error": None}
+    with _FETCH_LOCK:
+        if states.get(name, {}).get("state") == "fetching":
+            # In-flight already; return the current state instead of
+            # spawning a second task. The lock makes this check-and-claim
+            # atomic so two concurrent POSTs can't both pass here.
+            return {"state": "fetching", "started_at": states[name].get("started_at")}
+        states[name] = {"state": "fetching", "started_at": now_iso(), "error": None}
     pool = _get_fetch_pool(request)
-    loop = asyncio.get_event_loop()
     log = getattr(request.app.state, "events_log", None)
     log_emit = log.emit if log is not None else None
 
@@ -320,6 +329,11 @@ async def start_fetch(
                     summary=str(exc),
                 )
         except Exception as exc:
+            # An unexpected failure (e.g. a store OperationalError) would
+            # otherwise be flattened to a bare "internal: <str>" with no
+            # traceback anywhere. Log the full stack at the boundary so
+            # it is diagnosable, then still surface the short form.
+            _log.exception("catalog fetch for %r failed internally", name)
             states[name] = {
                 "state": "error",
                 "started_at": states[name].get("started_at"),
@@ -333,7 +347,7 @@ async def start_fetch(
                     summary=f"internal: {exc}",
                 )
 
-    loop.run_in_executor(pool, _run)
+    pool.submit(_run)  # fire-and-forget on the shared fetch thread pool
     return {"state": "fetching", "started_at": states[name].get("started_at")}
 
 
