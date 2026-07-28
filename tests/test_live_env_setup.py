@@ -117,3 +117,10 @@ def test_setup_fetches_and_selects(monkeypatch: pytest.MonkeyPatch) -> None:
         assert app.state.settings_store.resolve_live_env_image_sha() == image_sha
         # And the page reports ready.
         assert "ready" in c.get("/ui/live-env").text
+        # Regression: the live-env setup drives the SAME catalog
+        # fetch_states the Catalog pane polls, so both fetched entries
+        # carry a pill (previously the pane showed no status during a
+        # live-env setup because it ran its own separate fetch path).
+        fs = app.state.fetch_states
+        assert fs["pixie-live-env"]["state"] == "done"
+        assert fs["nosi arch-headless netboot bundle"]["state"] == "done"

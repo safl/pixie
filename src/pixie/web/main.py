@@ -39,6 +39,7 @@ from starlette.middleware.sessions import SessionMiddleware
 import pixie
 from pixie.catalog import DEFAULT_CATALOG_URL, NOSI_CATALOG_URL
 from pixie.catalog._routes import router as catalog_router
+from pixie.catalog._routes import run_fetch
 from pixie.catalog._store import CatalogStore
 from pixie.events import EventsLog
 from pixie.events._kinds import (
@@ -48,8 +49,6 @@ from pixie.events._kinds import (
     CATALOG_ENTRY_ADDED,
     CATALOG_ENTRY_DELETED,
     CATALOG_ENTRY_UPDATED,
-    CATALOG_FETCH_DONE,
-    CATALOG_FETCH_FAILED,
     CATALOG_FETCH_STARTED,
     CATALOG_FETCH_UNCHANGED,
     CATALOG_IMPORT_FAILED,
@@ -2042,7 +2041,6 @@ def create_app() -> FastAPI:
 
     from pixie._util import now_iso as _now_iso
     from pixie.catalog._fetcher import FetchError
-    from pixie.catalog._fetcher import fetch as _fetch
     from pixie.catalog._schema import CatalogEntry as _Entry
 
     @app.post("/ui/catalog/add")
@@ -2174,79 +2172,30 @@ def create_app() -> FastAPI:
                 details={"src": entry.src, "update": is_update},
             )
 
-        def _report(payload: dict[str, Any]) -> None:
-            # Merge each phase transition into the row's live state so
-            # the UI polling endpoint (/ui/catalog/fetch-states.json)
-            # sees ``phase`` + ``bytes_downloaded`` / ``total_bytes``
-            # (during downloading) or ``format`` (during
-            # decompressing). We keep ``state=='fetching'`` throughout
-            # so existing "is this row in flight?" checks (the button-
-            # disable in catalog.html, the fresh-fetch guard above)
-            # still fire while the phase spins through its stages.
-            row = states.get(name) or {}
-            merged: dict[str, Any] = {
-                "state": "fetching",
-                "started_at": row.get("started_at"),
-                "error": None,
-            }
-            merged.update(payload)
-            states[name] = merged
-
-        def _run() -> None:
+        def _bg() -> None:
+            # Delegate the fetch + fetch_states pill (with byte progress) +
+            # DONE/FAILED events to the shared worker; on a successful
+            # update, also record the UI-only "entry updated" event.
             try:
-                result = _fetch(entry, store, progress=_report)
-                states[name] = {"state": "done", "started_at": states[name].get("started_at")}
-                if events is not None:
-                    events.emit(
-                        CATALOG_FETCH_DONE,
-                        subject_kind="entry",
-                        subject_id=name,
-                        summary=(
-                            f"{name}: {result.size_bytes} bytes, sha {result.content_sha256[:12]}"
-                        ),
-                        details={
-                            "content_sha256": result.content_sha256,
-                            "size_bytes": result.size_bytes,
-                        },
-                    )
-                    if is_update:
-                        events.emit(
-                            CATALOG_ENTRY_UPDATED,
-                            subject_kind="entry",
-                            subject_id=name,
-                            summary=f"{name}: bytes refreshed",
-                            details={"content_sha256": result.content_sha256},
-                        )
-            except FetchError as exc:
-                states[name] = {
-                    "state": "error",
-                    "started_at": states[name].get("started_at"),
-                    "error": str(exc),
-                }
-                if events is not None:
-                    events.emit(
-                        CATALOG_FETCH_FAILED,
-                        subject_kind="entry",
-                        subject_id=name,
-                        summary=str(exc),
-                        details={"error": str(exc)[:200]},
-                    )
-            except Exception as exc:  # pragma: no cover -- defensive
-                states[name] = {
-                    "state": "error",
-                    "started_at": states[name].get("started_at"),
-                    "error": f"internal: {exc}",
-                }
-                if events is not None:
-                    events.emit(
-                        CATALOG_FETCH_FAILED,
-                        subject_kind="entry",
-                        subject_id=name,
-                        summary=f"internal: {exc}",
-                        details={"error": f"internal: {exc}"[:200]},
-                    )
+                result = run_fetch(
+                    name=name,
+                    entry=entry,
+                    store=store,
+                    states=states,
+                    log_emit=(events.emit if events is not None else None),
+                )
+            except Exception:
+                return  # run_fetch already recorded the error + emitted FAILED
+            if is_update and events is not None:
+                events.emit(
+                    CATALOG_ENTRY_UPDATED,
+                    subject_kind="entry",
+                    subject_id=name,
+                    summary=f"{name}: bytes refreshed",
+                    details={"content_sha256": result.content_sha256},
+                )
 
-        request.app.state.fetch_pool.submit(_run)
+        request.app.state.fetch_pool.submit(_bg)
         return RedirectResponse(url="/ui/catalog", status_code=status.HTTP_303_SEE_OTHER)
 
     @app.post("/ui/catalog/delete")
@@ -2735,14 +2684,36 @@ def create_app() -> FastAPI:
 
             return cb
 
+        catalog_states = state.fetch_states
+        log_emit = events.emit if events is not None else None
+
         def _run() -> None:
             try:
                 # Bundle first (small; the render needs its unpacked
-                # kernel/initrd), then the image (the ~900 MiB leg).
+                # kernel/initrd), then the image (the ~900 MiB leg). Both
+                # go through the SHARED catalog fetch worker, so the
+                # Catalog / Images pane shows fetching / done / error pills
+                # on these two entries exactly like a manual Fetch would;
+                # ``extra_progress`` keeps the Live-env page's own step
+                # progress updated in the same pass (no separate code path).
                 setup_state["step"] = "bundle"
-                _fetch(bundle_entry, store, progress=_step_report("bundle"))
+                run_fetch(
+                    name=bundle_entry.name,
+                    entry=bundle_entry,
+                    store=store,
+                    states=catalog_states,
+                    log_emit=log_emit,
+                    extra_progress=_step_report("bundle"),
+                )
                 setup_state["step"] = "image"
-                img = _fetch(image_entry, store, progress=_step_report("image"))
+                img = run_fetch(
+                    name=image_entry.name,
+                    entry=image_entry,
+                    store=store,
+                    states=catalog_states,
+                    log_emit=log_emit,
+                    extra_progress=_step_report("image"),
+                )
                 settings.set_value(KEY_LIVE_ENV_IMAGE_SHA, img.content_sha256)
                 setup_state.clear()
                 setup_state.update(

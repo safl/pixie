@@ -13,8 +13,10 @@ routes (``POST`` / ``DELETE``) require a valid pixie session.
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import threading
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
@@ -23,7 +25,8 @@ from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel, Field
 
 from pixie._util import now_iso
-from pixie.catalog._fetcher import FetchError, entry_from_dict, fetch
+from pixie.catalog import _fetcher
+from pixie.catalog._fetcher import FetchError, FetchResult, entry_from_dict
 from pixie.catalog._store import CatalogStore
 from pixie.events._kinds import (
     CATALOG_ENTRY_ADDED,
@@ -263,6 +266,83 @@ def delete_entry(
     return Response(status_code=204)
 
 
+def run_fetch(
+    *,
+    name: str,
+    entry: Any,
+    store: CatalogStore,
+    states: dict[str, dict[str, Any]],
+    log_emit: Callable[..., Any] | None = None,
+    extra_progress: Callable[[dict[str, Any]], None] | None = None,
+) -> FetchResult:
+    """Shared worker for every 'fetch a catalog entry' path: the JSON API
+    (:func:`start_fetch`), the operator UI Fetch button
+    (``ui_catalog_fetch``), and the live-env one-click setup.
+
+    Runs in a fetch-pool thread. Drives the per-entry ``fetch_states``
+    pill the Catalog pane polls -- ``fetching`` (with live byte progress
+    merged in) then ``done`` / ``error`` -- and emits the
+    ``CATALOG_FETCH_DONE`` / ``CATALOG_FETCH_FAILED`` events. Callers set
+    the initial ``fetching`` state + emit ``CATALOG_FETCH_STARTED`` before
+    submitting, so an immediate poll already sees the row in flight.
+
+    ``extra_progress`` is an optional secondary progress sink: the
+    live-env setup wires its own Live-env-page state here so a single
+    fetch updates both surfaces without a second code path. On failure
+    this records the error state, emits ``CATALOG_FETCH_FAILED``, and
+    RE-RAISES so a sequential caller (live-env setup) stops;
+    fire-and-forget callers suppress.
+    """
+    started = states.get(name, {}).get("started_at")
+
+    def _report(payload: dict[str, Any]) -> None:
+        # Merge each phase transition into the row so the poller sees
+        # phase + bytes_downloaded / total_bytes while state stays
+        # "fetching" (keeps the in-flight guards + button-disable live).
+        row = states.get(name) or {}
+        merged: dict[str, Any] = {
+            "state": "fetching",
+            "started_at": row.get("started_at"),
+            "error": None,
+        }
+        merged.update(payload)
+        states[name] = merged
+        if extra_progress is not None:
+            extra_progress(payload)
+
+    try:
+        # Call via the module so a test that monkeypatches
+        # ``pixie.catalog._fetcher.fetch`` (the natural target) reaches the
+        # shared worker every path now funnels through.
+        result = _fetcher.fetch(entry, store, progress=_report)
+    except FetchError as exc:
+        states[name] = {"state": "error", "started_at": started, "error": str(exc)}
+        if log_emit is not None:
+            log_emit(CATALOG_FETCH_FAILED, subject_kind="entry", subject_id=name, summary=str(exc))
+        raise
+    except Exception as exc:
+        _log.exception("catalog fetch for %r failed internally", name)
+        states[name] = {"state": "error", "started_at": started, "error": f"internal: {exc}"}
+        if log_emit is not None:
+            log_emit(
+                CATALOG_FETCH_FAILED,
+                subject_kind="entry",
+                subject_id=name,
+                summary=f"internal: {exc}",
+            )
+        raise
+    states[name] = {"state": "done", "started_at": started}
+    if log_emit is not None:
+        log_emit(
+            CATALOG_FETCH_DONE,
+            subject_kind="entry",
+            subject_id=name,
+            summary=f"{name}: {result.size_bytes} bytes, sha {result.content_sha256[:12]}",
+            details={"content_sha256": result.content_sha256, "size_bytes": result.size_bytes},
+        )
+    return result
+
+
 @router.post("/catalog/entries/{name}/fetch", status_code=202)
 async def start_fetch(
     request: Request,
@@ -300,54 +380,14 @@ async def start_fetch(
             summary=f"{name} <- {entry.src}",
         )
 
-    def _run() -> None:
-        try:
-            result = fetch(entry, store)
-            states[name] = {"state": "done", "started_at": states[name].get("started_at")}
-            if log_emit is not None:
-                log_emit(
-                    CATALOG_FETCH_DONE,
-                    subject_kind="entry",
-                    subject_id=name,
-                    summary=f"{name}: {result.size_bytes} bytes, sha {result.content_sha256[:12]}",
-                    details={
-                        "content_sha256": result.content_sha256,
-                        "size_bytes": result.size_bytes,
-                    },
-                )
-        except FetchError as exc:
-            states[name] = {
-                "state": "error",
-                "started_at": states[name].get("started_at"),
-                "error": str(exc),
-            }
-            if log_emit is not None:
-                log_emit(
-                    CATALOG_FETCH_FAILED,
-                    subject_kind="entry",
-                    subject_id=name,
-                    summary=str(exc),
-                )
-        except Exception as exc:
-            # An unexpected failure (e.g. a store OperationalError) would
-            # otherwise be flattened to a bare "internal: <str>" with no
-            # traceback anywhere. Log the full stack at the boundary so
-            # it is diagnosable, then still surface the short form.
-            _log.exception("catalog fetch for %r failed internally", name)
-            states[name] = {
-                "state": "error",
-                "started_at": states[name].get("started_at"),
-                "error": f"internal: {exc}",
-            }
-            if log_emit is not None:
-                log_emit(
-                    CATALOG_FETCH_FAILED,
-                    subject_kind="entry",
-                    subject_id=name,
-                    summary=f"internal: {exc}",
-                )
+    def _bg() -> None:
+        # Fire-and-forget: run_fetch records the error state + emits
+        # CATALOG_FETCH_FAILED itself, then re-raises for sequential
+        # callers; here we suppress so the discarded Future doesn't warn.
+        with contextlib.suppress(Exception):
+            run_fetch(name=name, entry=entry, store=store, states=states, log_emit=log_emit)
 
-    pool.submit(_run)  # fire-and-forget on the shared fetch thread pool
+    pool.submit(_bg)
     return {"state": "fetching", "started_at": states[name].get("started_at")}
 
 
