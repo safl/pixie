@@ -11,6 +11,18 @@ operator-facing summary.
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-07-29
+
+### Changed
+
+**Removed the confusing "select by content sha" live-env override from
+the UI.** The Live env page's Advanced card let you point the live env at
+an image by a raw 64-hex `content_sha256`, duplicating what the one-click
+"Set up live env" already does and inviting error. The card is gone; use
+Set up live env in the UI, or `PIXIE_LIVE_ENV_IMAGE_SHA` for scripted
+config. The programmatic `POST /ui/live-env/image/edit` endpoint stays for
+scripted / chain-test use.
+
 ## [0.6.0] - 2026-07-29
 
 ### Changed
