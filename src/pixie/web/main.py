@@ -2610,6 +2610,46 @@ def create_app() -> FastAPI:
         set_flash(request, "Live-env cmdline saved.", "success")
         return RedirectResponse(url="/ui/live-env", status_code=status.HTTP_303_SEE_OTHER)
 
+    @app.post("/ui/live-env/image/edit", response_model=None)
+    def ui_live_env_image_edit(
+        request: Request,
+        live_env_image_sha: str = Form(""),
+        _auth: None = Depends(_require_ui_auth),
+    ) -> HTMLResponse | RedirectResponse:
+        """Persist the live-env disk-image content sha (programmatic
+        endpoint: the operator-facing UI uses the one-click Set up, but
+        the chain-test harness + scripted config POST here to select an
+        image by its ``content_sha256`` at runtime). Blank clears the
+        override so the value falls back to $PIXIE_LIVE_ENV_IMAGE_SHA then
+        empty. Rejects anything that is not 64 lowercase hex chars."""
+        from pixie.images import is_sha256_hex
+
+        store: SettingsStore = request.app.state.settings_store
+        raw = (live_env_image_sha or "").strip().lower()
+        if raw and not is_sha256_hex(raw):
+            return templates.TemplateResponse(
+                request,
+                "live_env.html",
+                _live_env_context(
+                    request,
+                    flash_error=(
+                        "Live-env image sha must be 64 hex chars "
+                        "(a fetched disk-image's content_sha256)."
+                    ),
+                ),
+                status_code=400,
+            )
+        if raw:
+            store.set_value(KEY_LIVE_ENV_IMAGE_SHA, raw)
+        else:
+            store.clear(KEY_LIVE_ENV_IMAGE_SHA)
+        set_flash(
+            request,
+            "Live-env image updated." if raw else "Live-env image cleared.",
+            "success",
+        )
+        return RedirectResponse(url="/ui/live-env", status_code=status.HTTP_303_SEE_OTHER)
+
     @app.post("/ui/live-env/setup")
     def ui_live_env_setup(
         request: Request,
