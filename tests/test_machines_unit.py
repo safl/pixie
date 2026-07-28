@@ -582,10 +582,12 @@ def test_resolve_default_boot_mode_env_override(monkeypatch: pytest.MonkeyPatch)
     assert _resolve_default_boot_mode() == "pixie-inventory"
 
 
-def test_inventory_post_flips_pixie_inventory_to_ipxe_exit(client: TestClient) -> None:
-    """Inventory is one-shot: a machine sitting in pixie-inventory flips
-    to ipxe-exit on the first inventory POST (so a PXE-first box doesn't
-    re-inventory + boot-loop), and the collected inventory is kept."""
+def test_inventory_post_keeps_mode_renderer_serves_exit(client: TestClient) -> None:
+    """Inventory is one-shot, but the boot_mode is NOT auto-flipped: it
+    stays ``pixie-inventory`` (operator intent). The renderer serves an
+    exit plan for a pixie-inventory machine that already reported, so a
+    PXE-first box neither re-inventories + boot-loops nor has its mode
+    changed behind the operator's back."""
     mac = "aa:bb:cc:dd:ee:f0"
     client.get(f"/pxe/{mac}")  # discovery -> pixie-inventory default
     assert client.get(f"/machines/{mac}").json()["boot_mode"] == "pixie-inventory"
@@ -594,9 +596,31 @@ def test_inventory_post_flips_pixie_inventory_to_ipxe_exit(client: TestClient) -
         f"/pxe/{mac}/inventory", json={"lshw": {"x": 1}, "disks": [{"path": "/dev/sda"}]}
     )
     assert r.status_code == 204
-    assert client.get(f"/machines/{mac}").json()["boot_mode"] == "ipxe-exit"
-    # the inventory itself survives the flip
+    # Mode is unchanged (no auto-flip), and the inventory is kept.
+    assert client.get(f"/machines/{mac}").json()["boot_mode"] == "pixie-inventory"
     assert client.get(f"/machines/{mac}/inventory").json()["inventory"]["disks"]
+    # The renderer now serves the exit plan (its comment carries the
+    # ipxe-exit marker) so the box boots its local disk, not inventory.
+    assert "boot_mode=ipxe-exit" in client.get(f"/pxe/{mac}").text
+
+
+def test_re_inventory_clears_inventory_and_reserves_the_pass(client: TestClient) -> None:
+    """The Re-inventory action drops the stored inventory so the machine
+    re-runs the pixie-inventory pass on its next PXE (no longer the exit
+    plan), while its boot_mode stays pixie-inventory."""
+    c = _authed(client)
+    mac = "aa:bb:cc:dd:ee:f3"
+    client.get(f"/pxe/{mac}")
+    client.post(f"/pxe/{mac}/inventory", json={"lshw": {}, "disks": [{"path": "/dev/sda"}]})
+    assert "boot_mode=ipxe-exit" in client.get(f"/pxe/{mac}").text  # exit while inventory present
+
+    r = c.post("/ui/machines/re-inventory", data={"mac": mac}, follow_redirects=False)
+    assert r.status_code == 303
+    assert client.get(f"/machines/{mac}/inventory").status_code == 404  # inventory dropped
+    assert client.get(f"/machines/{mac}").json()["boot_mode"] == "pixie-inventory"  # mode kept
+    # No longer the exit plan: it re-runs inventory (or degrades to
+    # unavailable when no live env is staged) -- either way not exit.
+    assert "boot_mode=ipxe-exit" not in client.get(f"/pxe/{mac}").text
 
 
 def test_inventory_post_does_not_flip_a_non_inventory_mode(client: TestClient) -> None:

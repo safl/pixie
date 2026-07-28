@@ -574,6 +574,19 @@ class MachinesStore:
             row = conn.execute("SELECT * FROM machines WHERE mac = ?", (canon,)).fetchone()
         return _row(row)
 
+    def clear_inventory(self, mac: str) -> None:
+        """Drop the stored inventory for ``mac`` so the next PXE boot
+        re-runs the pixie-inventory pass: the renderer serves the
+        inventory live env again once ``inventory`` is empty (see
+        ``PxeRenderer.render``). No-op on a missing row."""
+        canon = normalise_mac(mac)
+        with _DB_WRITE_LOCK, self._conn() as conn:
+            conn.execute(
+                "UPDATE machines SET inventory_json = '', inventory_at = '', updated_at = ? "
+                "WHERE mac = ?",
+                (now_iso(), canon),
+            )
+
     def set_inventory(self, mac: str, inventory: dict[str, Any]) -> Machine:
         """Store a fresh inventory blob against the machine row. Creates
         the row on first contact (mirrors touch_seen shape) so a bare

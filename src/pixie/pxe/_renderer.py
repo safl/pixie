@@ -145,6 +145,15 @@ class PlanRenderer:
             return self._env.get_template("exit.j2").render(mac=machine.mac)
         if mode == "nbdboot":
             return self._render_nbdboot(machine, ctx, effective_extra)
+        if mode == "pixie-inventory" and machine.inventory:
+            # One-shot inventory: this machine has already reported. Serve
+            # an exit plan (boot the local disk) WITHOUT changing
+            # boot_mode -- the mode stays the operator's intent; they flip
+            # it when ready, or re-inventory explicitly (which clears the
+            # stored inventory). This is what stops a PXE-first target
+            # from re-inventorying + boot-looping now that the inventory
+            # POST no longer auto-exits it.
+            return self._env.get_template("exit.j2").render(mac=machine.mac)
         if mode in LIVE_ENV_MODES:
             return self._render_live_env(machine, ctx, mode, effective_extra)
         # Unknown mode: refuse loudly rather than falling through.
