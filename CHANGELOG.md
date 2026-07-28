@@ -11,6 +11,31 @@ operator-facing summary.
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-07-29
+
+### Changed
+
+**Discovered machines keep their boot mode; no more silent auto-flip.** A
+freshly-discovered machine defaults to `pixie-inventory` and now STAYS
+there: the first inventory POST no longer flips it to `ipxe-exit` behind
+the operator's back. The renderer serves an exit plan for a
+`pixie-inventory` machine that already reported (so a PXE-first box still
+doesn't re-inventory and boot-loop), while the mode continues to read as
+the operator's intent. Flip it to `ipxe-exit` or a flash mode when you
+mean to. Existing rows already flipped to `ipxe-exit` are unaffected.
+
+**Live-env setup shows catalog status.** The one-click live-env setup now
+fetches its image + netboot bundle through the same worker as the manual
+Fetch button, so the Catalog / Images pane shows fetching / done / error
+pills on those rows during setup (previously it showed nothing there).
+
+### Added
+
+**Re-inventory action.** A button on the machine page (`POST
+/ui/machines/<mac>/re-inventory`) clears the stored inventory so the next
+PXE boot re-runs the `pixie-inventory` pass; records a
+`machine.inventory.cleared` event.
+
 ## [0.5.0] - 2026-07-28
 
 ### Removed
