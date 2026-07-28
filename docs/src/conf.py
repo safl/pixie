@@ -38,10 +38,11 @@ html_theme = "furo"
 # landing page and the sidebar logo identifies the project elsewhere.
 html_title = ""
 html_static_path = ["_static"]
-# Furo falls back to ``project`` for the brand-text span next to
-# where the logo would sit; the index.md H1 is the wordmark on the
-# landing page, so keep the sidebar name hidden until a logo
-# graphic is available.
+# The pixie mascot (a bat face) sits in the sidebar header; combined
+# with sidebar_hide_name below it stands in for the wordmark on every
+# page but the landing one (whose index.md H1 is the wordmark).
+html_logo = "_static/pixie-mascot.png"
+html_favicon = "_static/pixie-mascot.png"
 html_theme_options = {
     "sidebar_hide_name": True,
 }

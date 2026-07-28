@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/src/_static/pixie-mascot.png" alt="pixie mascot" width="220">
+</p>
+
 # pixie
 
 Bare-metal netboot appliance in one container. Catalog + fetch + NBD
