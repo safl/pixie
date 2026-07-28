@@ -72,6 +72,7 @@ from rich.panel import Panel
 from rich.progress import (
     BarColumn,
     Progress,
+    Task,
     TaskID,
     TaskProgressColumn,
     TextColumn,
@@ -81,6 +82,7 @@ from rich.progress import (
 )
 from rich.prompt import Prompt
 from rich.table import Table
+from rich.text import Text
 
 import pixie
 from pixie import disks, flash, images
@@ -499,6 +501,23 @@ def _uefi_boot_registration_enabled() -> bool:
 # ---------------------------------------------------------------------------
 # The TUI itself. Sequential-screen wizard driven by a plain loop.
 # ---------------------------------------------------------------------------
+
+
+class _DeterminateProgressColumn(TaskProgressColumn):
+    """Percent column that stays blank for an indeterminate (``total=None``)
+    task, so the pulsing write bar doesn't render a misleading ``0%`` next
+    to it. The determinate download task still shows its real percentage."""
+
+    def render(self, task: Task) -> Text:
+        return Text("") if task.total is None else super().render(task)
+
+
+class _DeterminateRemainingColumn(TimeRemainingColumn):
+    """ETA column, blank for an indeterminate task (no misleading
+    ``-:--:--`` on the write bar); the download task keeps its ETA."""
+
+    def render(self, task: Task) -> Text:
+        return Text("") if task.total is None else super().render(task)
 
 
 class BtyTui:
@@ -1125,7 +1144,7 @@ class BtyTui:
             self._console.print(
                 Panel(
                     f"[{_DANGER}]No flash-eligible disks detected.[/]\n\n"
-                    f"[{_MUTED}]Check ``lsblk`` on tty2 to see what the kernel sees.[/]",
+                    f"[{_MUTED}]Check [b]lsblk[/] on tty2 to see what the kernel sees.[/]",
                     border_style=_DANGER,
                     title="No disks",
                 )
@@ -1263,11 +1282,11 @@ class BtyTui:
         progress = Progress(
             TextColumn("[bold]{task.description}"),
             BarColumn(bar_width=None),
-            TaskProgressColumn(),
+            _DeterminateProgressColumn(),
             TextColumn("[{task.fields[bytes_human]}]"),
             TransferSpeedColumn(),
             TimeElapsedColumn(),
-            TimeRemainingColumn(),
+            _DeterminateRemainingColumn(),
             console=self._console,
             transient=False,
             expand=True,
@@ -1530,9 +1549,9 @@ class BtyTui:
             Panel(
                 f"Current source: [{_PRIMARY}]{self._state.catalog_source or '(local only)'}[/]\n\n"
                 "Enter a new source:\n"
-                "  - local TOML path:    ``/etc/pixie/catalog.toml``\n"
-                "  - HTTP URL:           ``http://pixie:8080/catalog.toml``\n"
-                "  - ORAS reference:     ``oras://ghcr.io/owner/repo:tag``\n"
+                "  - local TOML path:    /etc/pixie/catalog.toml\n"
+                "  - HTTP URL:           http://pixie:8080/catalog.toml\n"
+                "  - ORAS reference:     oras://ghcr.io/owner/repo:tag\n"
                 "  - empty:              clear catalog (local image-root only)",
                 title="Catalog source",
             )
@@ -1706,10 +1725,8 @@ class BtyTui:
             f"No images visible.\n\n"
             f"[{_MUTED}]Add some via:[/]\n"
             f"  - drop files into [{_PRIMARY}]{self._state.image_root}[/]\n"
-            f"  - [{_ACCENT}]d[/] load pixie's default catalog "
-            f"(published with pixie as a release artifact)\n"
-            f"  - [{_ACCENT}]c[/] provide an http(s):// or oras:// URL "
-            f"to a catalog that you host"
+            f"  - press [{_ACCENT}]b[/] back to choose a catalog source "
+            f"(pixie's default catalog, or an http(s):// / oras:// URL you host)"
         )
         self._console.print(Panel(body, title="Catalog is empty"))
         self._console.print()
@@ -2043,8 +2060,9 @@ class BtyTui:
             msg = flash.register_uefi_boot_entry(plan.target.path)
         except Exception as exc:  # boot-entry setup must never fail the flash
             self._console.print(
-                f"[{_DANGER}]pixie: could not register UEFI boot entry: {exc}[/] "
-                f"[{_MUTED}](flash succeeded; firmware may not boot the disk)[/]"
+                f"[{_DANGER}]pixie: warning (flash OK): could not register UEFI boot "
+                f"entry: {exc}[/] [{_MUTED}](the disk was written; firmware may not "
+                f"boot it without a manual boot-order entry)[/]"
             )
             return
         style = _OK if msg.startswith("registered") else _MUTED

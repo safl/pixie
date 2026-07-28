@@ -20,12 +20,19 @@ import contextlib
 import os
 import re
 import sqlite3
+import threading
 from collections.abc import Generator
 from datetime import UTC, datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pixie.images import is_sha256_hex
+
+# Serialise writes to the shared state.db, matching the sibling stores
+# (machines/_store.py, exports/_store.py, events/_log.py). busy_timeout
+# already stops a concurrent writer from erroring; the lock also keeps
+# two settings writes from interleaving.
+_DB_WRITE_LOCK = threading.Lock()
 
 # One shared table for every future key -> value. ``updated_at`` is
 # free debugging telemetry; the Settings page shows it next to each
@@ -129,7 +136,7 @@ class SettingsStore:
     def set_value(self, key: str, value: str) -> None:
         """Upsert ``key`` = ``value``."""
         now = datetime.now(UTC).isoformat()
-        with self._conn() as conn:
+        with _DB_WRITE_LOCK, self._conn() as conn:
             conn.execute(
                 """
                 INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?)
@@ -141,7 +148,7 @@ class SettingsStore:
 
     def clear(self, key: str) -> None:
         """Remove any override for ``key`` (revert to env / default)."""
-        with self._conn() as conn:
+        with _DB_WRITE_LOCK, self._conn() as conn:
             conn.execute("DELETE FROM settings WHERE key = ?", (key,))
 
     def updated_at(self, key: str) -> str | None:

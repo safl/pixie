@@ -23,6 +23,7 @@
                    style="max-width: 22rem; min-width: 0;"
                    value="{{ default_catalog_url }}"
                    placeholder="catalog.toml URL"
+                   aria-label="Catalog TOML URL"
                    title="Defaults to pixie's curated catalog (the netboot-capable subset). Replace to import a different catalog.toml, e.g. the full nosi catalog."
                    required>
             <button type="submit" class="btn btn-sm btn-primary flex-shrink-0 text-nowrap">
@@ -32,7 +33,8 @@
         {# One-click: import the full upstream nosi catalog (all distros +
            freebsd + desktop/proxmox/rpios, rolling tags). Separate from
            the URL bar so the common case is a single button. #}
-        <form method="post" action="/ui/catalog/import" class="subnav-actions m-0">
+        <form method="post" action="/ui/catalog/import" class="subnav-actions m-0"
+              onsubmit="return confirm('Import the full nosi catalog? This stages every flashable variant (all distros incl. freebsd, rolling tags) as catalog entries. It does not download any bytes; hit Fetch on a row for that.');">
             <input type="hidden" name="url" value="{{ nosi_catalog_url }}">
             <button type="submit" class="btn btn-sm btn-outline-light flex-shrink-0 text-nowrap"
                     title="Import the full nosi catalog ({{ nosi_catalog_url }}): stages every flashable variant incl freebsd (rolling tags) as sources. Doesn't download bytes -- hit Fetch on a row for that.">
