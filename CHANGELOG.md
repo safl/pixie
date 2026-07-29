@@ -13,11 +13,25 @@ operator-facing summary.
 
 ### Changed
 
+- **BREAKING: `nbdboot` split into `nbdboot-ephemeral` and `nbdboot-overlay`.**
+  The single mode overloaded ephemeral (overlay-on-tmpfs, nothing persists)
+  and persistent-overlay behaviour on one form, inferred from whether an
+  overlay alias was set. They are now two explicit boot modes. Existing
+  machine rows migrate automatically on first start: a row that carried an
+  overlay becomes `nbdboot-overlay`, otherwise `nbdboot-ephemeral`. The
+  `nbdboot` identifier is no longer accepted (API PUT + bind form).
+- **Overlays are now created explicitly on the Overlays page.** Selecting an
+  overlay on a machine never creates one, exactly as selecting an image never
+  fetches it: the overlay must already exist. The Overlays page grew a Create
+  form that materializes the qcow2 over a fetched base image up front (no more
+  lazy-on-first-boot `pending` state for the normal path); the machine bind
+  form is now select-only. All overlay lifecycle (create / delete / prune)
+  lives on the Overlays page; the per-machine overlay reset button is gone.
 - **Bind-mode picker on the machine page now reads least -> most invasive.**
-  Order is `ipxe-exit`, `pixie-inventory`, `pixie-tui`, `nbdboot`,
-  `pixie-flash-once`, `pixie-flash-always`. `nbdboot` moved up out of last
-  place: it runs a full OS but its root is overlay-on-tmpfs, so it never
-  writes the disk and is less invasive than either flash mode.
+  Order is `ipxe-exit`, `pixie-inventory`, `pixie-tui`, `nbdboot-ephemeral`,
+  `nbdboot-overlay`, `pixie-flash-once`, `pixie-flash-always`. The nbdboot
+  modes run a full OS but never write the installed disk, so they sit below
+  the flash modes; ephemeral precedes overlay because overlay writes persist.
 
 ## [0.6.1] - 2026-07-29
 

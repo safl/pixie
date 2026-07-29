@@ -10,7 +10,7 @@
 {% elif state == 'held' %}<span class="badge text-bg-primary"><i class="bi bi-lock me-1"></i>Held</span>
 {% elif state == 'free' %}<span class="badge text-bg-secondary"><i class="bi bi-unlock me-1"></i>Free</span>
 {% elif state == 'orphaned' %}<span class="badge text-bg-warning"><i class="bi bi-question-circle me-1"></i>Orphaned</span>
-{% elif state == 'pending' %}<span class="badge text-bg-info" title="Reserved alias; the qcow2 is lazy-created on its first nbdboot"><i class="bi bi-hourglass-split me-1"></i>Pending</span>
+{% elif state == 'pending' %}<span class="badge text-bg-info" title="The qcow2 is not on disk yet (removed before first boot); the next nbdboot re-creates it from the base image"><i class="bi bi-hourglass-split me-1"></i>Pending</span>
 {% else %}<span class="badge text-bg-danger" title="The qcow2 existed after a prior boot but is now gone from disk"><i class="bi bi-exclamation-triangle me-1"></i>File missing</span>{% endif %}
 {% endmacro %}
 
@@ -18,6 +18,7 @@
 <nav class="navbar subnav-strip" aria-label="Section sub-navigation">
     <div class="container">
         <span class="subnav-jumps d-flex align-items-center flex-wrap">
+            <a href="#create">Create</a>
             <a href="#overlays">Overlays</a>
             <a href="#events">Events</a>
         </span>
@@ -26,7 +27,7 @@
 {% endblock %}
 
 {% block content %}
-{{ page_description('layers', 'Persistent named qcow2 overlays for nbdboot. Each overlay is a globally-unique writable volume over one catalog base image, single-writer: at most one machine holds it at a time. The disk-used + last-modified columns refresh every 5 s while the page is open. Reset wipes one back to the base image; Prune reclaims overlays whose file is gone or whose holder pixie no longer tracks.') }}
+{{ page_description('layers', 'Persistent named qcow2 overlays for the nbdboot-overlay mode. Each overlay is a globally-unique writable volume over one catalog base image, single-writer: at most one machine holds it at a time. This is where overlays are created: a machine only ever SELECTS an existing overlay, it never creates one. The disk-used + last-modified columns refresh every 5 s while the page is open. Delete removes an overlay entirely; Prune reclaims overlays whose file is gone or whose holder pixie no longer tracks.') }}
 
 {# ---- Summary strip -------------------------------------------------
    Fleet-wide roll-up. The numbers poll live alongside the table so an
@@ -69,6 +70,57 @@
                 </button>
             </form>
         </div></div>
+    </div>
+</div>
+
+{# ---- Create ---------------------------------------------------------
+   The one place an overlay comes into being. Materializes the qcow2 over
+   a fetched base image up front, so the machine bind form only ever
+   selects an existing overlay (never conjures one). #}
+<div class="card mb-4" id="create">
+    <div class="card-header bg-light fw-semibold">
+        <i class="bi bi-plus-square me-1"></i>Create overlay
+    </div>
+    <div class="card-body">
+        {% if base_images %}
+        <form method="post" action="/ui/overlays/create" class="row g-3 align-items-end">
+            <div class="col-12 col-md-4">
+                <label for="alias" class="form-label">Alias</label>
+                <input type="text" id="alias" name="alias" class="form-control font-monospace"
+                       required maxlength="64" placeholder="e.g. matx-lab"
+                       pattern="[A-Za-z0-9][A-Za-z0-9._-]*"
+                       title="Alphanumeric-leading; a-z / A-Z / 0-9 / . _ - (max 64 chars)">
+            </div>
+            <div class="col-12 col-md-5">
+                <label for="image_content_sha256" class="form-label">Base image</label>
+                <select id="image_content_sha256" name="image_content_sha256"
+                        class="form-select" required>
+                    <option value="" disabled selected>Pick a fetched image...</option>
+                    {% for e in base_images %}
+                    <option value="{{ e.content_sha256 }}">{{ e.name }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="col-12 col-md-3">
+                <button type="submit" class="btn btn-primary w-100">
+                    <i class="bi bi-plus-lg me-1"></i>Create
+                </button>
+            </div>
+            <div class="col-12">
+                <div class="form-text">
+                    The overlay is a writable qcow2 layered over the base image; writes
+                    survive reboots. Once created it shows as <em>Free</em> below and can be
+                    attached to a machine via the <code>nbdboot-overlay</code> boot mode.
+                </div>
+            </div>
+        </form>
+        {% else %}
+        <p class="text-muted mb-0">
+            <i class="bi bi-inbox me-1"></i>
+            No fetched images to layer over. Fetch a disk image on the
+            <a href="/ui/catalog">Catalog</a> first, then create an overlay here.
+        </p>
+        {% endif %}
     </div>
 </div>
 
@@ -147,12 +199,12 @@
                         {% endif %}
                     </td>
                     <td class="text-end">
-                        <form method="post" action="/ui/overlays/reset" class="d-inline"
-                              onsubmit="return confirm('Reset overlay {{ ov.alias }}? The qcow2 is deleted; the next nbdboot that references this alias lazy-creates a fresh overlay from the base image. Any state in the current overlay is lost.');">
+                        <form method="post" action="/ui/overlays/delete" class="d-inline"
+                              onsubmit="return confirm('Delete overlay {{ ov.alias }}? The qcow2 and its row are removed for good. Any machine bound to it via nbdboot-overlay will need rebinding. To wipe an overlay clean, delete it and create a fresh one.');">
                             <input type="hidden" name="alias" value="{{ ov.alias }}">
                             <button type="submit" class="btn btn-sm btn-outline-danger text-nowrap"
-                                    title="Delete this overlay's qcow2; next boot starts fresh from the base image.">
-                                <i class="bi bi-arrow-counterclockwise me-1"></i>Reset
+                                    title="Remove this overlay entirely (qcow2 + row).">
+                                <i class="bi bi-trash3 me-1"></i>Delete
                             </button>
                         </form>
                     </td>
@@ -165,10 +217,9 @@
     <div class="card-body">
         <p class="text-muted mb-0">
             <i class="bi bi-inbox me-1"></i>
-            No overlays yet. An overlay is created when a machine bound to
-            <code>nbdboot</code> with a named alias PXE-boots (or when you
-            name a new alias on a <a href="/ui/machines">machine</a>'s
-            detail page).
+            No overlays yet. Use the <a href="#create">Create overlay</a> form
+            above to make one, then attach it to a machine via the
+            <code>nbdboot-overlay</code> boot mode.
         </p>
     </div>
     {% endif %}
@@ -202,7 +253,7 @@
             case "held":    return `<span class="badge text-bg-primary"><i class="bi bi-lock me-1"></i>Held</span>`;
             case "free":    return `<span class="badge text-bg-secondary"><i class="bi bi-unlock me-1"></i>Free</span>`;
             case "orphaned":return `<span class="badge text-bg-warning"><i class="bi bi-question-circle me-1"></i>Orphaned</span>`;
-            case "pending": return `<span class="badge text-bg-info" title="Reserved alias; the qcow2 is lazy-created on its first nbdboot"><i class="bi bi-hourglass-split me-1"></i>Pending</span>`;
+            case "pending": return `<span class="badge text-bg-info" title="The qcow2 is not on disk yet (removed before first boot); the next nbdboot re-creates it from the base image"><i class="bi bi-hourglass-split me-1"></i>Pending</span>`;
             default:        return `<span class="badge text-bg-danger" title="The qcow2 existed after a prior boot but is now gone from disk"><i class="bi bi-exclamation-triangle me-1"></i>File missing</span>`;
         }
     }

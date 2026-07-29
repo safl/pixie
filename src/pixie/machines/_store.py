@@ -47,7 +47,9 @@ renderer silently falls through the plan-render match and the bound
 target boots into ``unavailable.j2``. Kept close to :data:`BOOT_MODES`
 so a reader adding a mode sees both spots at once."""
 
-BOOT_MODES: frozenset[str] = frozenset({"ipxe-exit", "nbdboot"}) | LIVE_ENV_MODES
+BOOT_MODES: frozenset[str] = (
+    frozenset({"ipxe-exit", "nbdboot-ephemeral", "nbdboot-overlay"}) | LIVE_ENV_MODES
+)
 
 # A freshly-discovered MAC auto-registers with this mode. Default is
 # ``pixie-inventory``: non-destructive (boots the live env, collects
@@ -67,18 +69,20 @@ DEFAULT_BOOT_MODE = "pixie-inventory"
 # tell a first ``machine.bound`` from a later ``machine.binding.changed``.
 UNCOMMITTED_BOOT_MODES: frozenset[str] = frozenset({"ipxe-exit", "pixie-inventory"})
 
-# Presentation metadata for the six boot modes. Ordered least ->
+# Presentation metadata for the seven boot modes. Ordered least ->
 # most invasive so the radio-card picker on ``machine_detail.html``
 # reads top-to-bottom by blast radius:
 #   ipxe-exit          no-op; boots the installed disk untouched
 #   pixie-inventory    live env reads hardware, posts it, exits
 #   pixie-tui          live env wizard; nothing happens without an operator
-#   nbdboot            runs a full ephemeral OS every boot; disk untouched
+#   nbdboot-ephemeral  runs a full OS every boot; overlay-on-tmpfs, disk untouched
+#   nbdboot-overlay    same, but writes land in a persistent qcow2 overlay
 #   pixie-flash-once   rewrites the disk once
 #   pixie-flash-always rewrites the disk on every boot
-# nbdboot sits above the idle/interactive modes (it commandeers the
-# box on every PXE) but below the flash modes (root is overlay-on-
-# tmpfs, so nothing persists). Icons pulled from Bootstrap Icons.
+# Both nbdboot modes sit above the idle/interactive modes (they
+# commandeer the box on every PXE) but below the flash modes (neither
+# touches the installed disk). Ephemeral precedes overlay because
+# overlay writes survive reboots. Icons pulled from Bootstrap Icons.
 #
 # Kept next to :data:`BOOT_MODES` on purpose: adding a mode without
 # a metadata row here trips the assertion below, so the picker
@@ -109,11 +113,20 @@ BOOT_MODE_META: tuple[tuple[str, dict[str, str]], ...] = (
         },
     ),
     (
-        "nbdboot",
+        "nbdboot-ephemeral",
         {
             "icon": "hdd-network",
-            "short": "Netboot over NBD",
+            "short": "Netboot (ephemeral)",
             "desc": "Stream the image over NBD; root is overlay-on-tmpfs. Nothing persists.",
+        },
+    ),
+    (
+        "nbdboot-overlay",
+        {
+            "icon": "hdd-network-fill",
+            "short": "Netboot (overlay)",
+            "desc": "Stream a persistent qcow2 overlay over NBD; writes survive reboots. "
+            "Create the overlay on the Overlays page first.",
         },
     ),
     (
@@ -195,7 +208,9 @@ _FLASH_MODES: frozenset[str] = frozenset({"pixie-flash-once", "pixie-flash-alway
 # other modes (ipxe-exit / pixie-inventory / pixie-tui) ignore
 # ``image_content_sha256`` entirely, so surfacing a bound image for them
 # is noise. Used by the machines-list Image column.
-IMAGE_BOOT_MODES: frozenset[str] = _FLASH_MODES | frozenset({"nbdboot"})
+IMAGE_BOOT_MODES: frozenset[str] = _FLASH_MODES | frozenset(
+    {"nbdboot-ephemeral", "nbdboot-overlay"}
+)
 
 # Bty's shape: alphanumeric-leading, alphanumeric + space + . _ - inside,
 # 64 chars max per label, 16 labels max per machine. Matches the CSS-safe
@@ -258,6 +273,19 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
     # Migrate silently -- an existing state.db from before the
     # rename still resolves.
     conn.execute("UPDATE machines SET boot_mode = 'nbdboot' WHERE boot_mode = 'ramboot'")
+    # Split 2026-07: the single ``nbdboot`` mode overloaded ephemeral vs
+    # persistent on one form, inferred from ``overlay_alias``. It is now
+    # two explicit modes. A row that carried a named overlay becomes
+    # ``nbdboot-overlay``; a blank-alias row becomes ``nbdboot-ephemeral``.
+    # One-time forward migration (no back-compat: ``nbdboot`` is no longer
+    # a valid mode). Order matters -- resolve the overlay rows first.
+    conn.execute(
+        "UPDATE machines SET boot_mode = 'nbdboot-overlay' "
+        "WHERE boot_mode = 'nbdboot' AND overlay_alias != ''"
+    )
+    conn.execute(
+        "UPDATE machines SET boot_mode = 'nbdboot-ephemeral' WHERE boot_mode = 'nbdboot'"
+    )
 
 
 def parse_labels(raw: str) -> list[str]:
@@ -306,12 +334,14 @@ class Machine:
     Not consulted by the renderer or UI anymore."""
     overlay_alias: str = ""
     """The globally-unique overlay ``alias`` this machine attaches for
-    ``boot_mode == 'nbdboot'``. Blank means "ephemeral tmpfs overlay"
-    (writes vanish on reboot). Non-blank names a persistent writable
-    volume (a qcow2 over a base image; see :mod:`pixie.exports._store`);
-    the overlay carries its own ``image_sha``, and the bind sets this
-    machine's ``image_content_sha256`` to match. Single-writer: at most
-    one machine holds an alias at a time (``Overlay.attached_mac``)."""
+    ``boot_mode == 'nbdboot-overlay'``. It names a persistent writable
+    volume (a qcow2 over a base image; see :mod:`pixie.exports._store`)
+    that must already exist -- overlays are created on the Overlays page,
+    never conjured by a bind. The overlay carries its own ``image_sha``,
+    and the bind sets this machine's ``image_content_sha256`` to match.
+    Single-writer: at most one machine holds an alias at a time
+    (``Overlay.attached_mac``). Ignored by ``nbdboot-ephemeral`` (whose
+    writes vanish on reboot) and every other mode."""
     inventory: dict[str, Any] = field(default_factory=dict)
     inventory_at: str = ""
     discovered_at: str = field(default_factory=now_iso)

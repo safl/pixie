@@ -263,7 +263,7 @@ def test_fetched_bundle_powers_nbdboot_plan(
     disk_entry = _wait_fetched(base, "disk-b")
 
     # Bind the machine to the disk-image entry with nbdboot mode.
-    body = {"boot_mode": "nbdboot", "image_content_sha256": disk_entry["content_sha256"]}
+    body = {"boot_mode": "nbdboot-ephemeral", "image_content_sha256": disk_entry["content_sha256"]}
     req = urllib.request.Request(
         f"{base}/machines/{mac}",
         data=json.dumps(body).encode("utf-8"),

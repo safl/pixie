@@ -53,9 +53,53 @@ def test_machines_migration_derives_overlay_alias_from_profile(tmp_path: Path) -
     conn.close()
 
     # Open: the additive migration adds overlay_alias + backfills it.
-    row = MachinesStore(db).get("aa:bb:cc:dd:ee:00")
+    store = MachinesStore(db)
+    row = store.get("aa:bb:cc:dd:ee:00")
     assert row is not None
     assert row.overlay_alias == "safl-aa-bb-cc-dd-ee-00"
+    # The nbdboot-split migration also fires: this row carried an overlay
+    # (profile -> alias backfilled), so it becomes nbdboot-overlay.
+    assert row.boot_mode == "nbdboot-overlay"
+
+
+def test_machines_migration_splits_nbdboot_by_overlay(tmp_path: Path) -> None:
+    """The single ``nbdboot`` mode splits into two: a row with a named
+    overlay becomes ``nbdboot-overlay``, a blank-overlay row becomes
+    ``nbdboot-ephemeral``. One-time forward migration on store open."""
+    import sqlite3
+
+    db = tmp_path / "state.db"
+    conn = sqlite3.connect(str(db))
+    conn.executescript(
+        """
+        CREATE TABLE machines (
+            mac                    TEXT PRIMARY KEY,
+            boot_mode              TEXT NOT NULL DEFAULT 'ipxe-exit',
+            image_content_sha256   TEXT NOT NULL DEFAULT '',
+            labels                 TEXT NOT NULL DEFAULT '',
+            target_disk_serial     TEXT NOT NULL DEFAULT '',
+            extra_cmdline          TEXT NOT NULL DEFAULT '',
+            overlay_profile        TEXT NOT NULL DEFAULT '',
+            overlay_alias          TEXT NOT NULL DEFAULT '',
+            inventory_json         TEXT NOT NULL DEFAULT '',
+            inventory_at           TEXT NOT NULL DEFAULT '',
+            discovered_at          TEXT NOT NULL,
+            last_seen_at           TEXT NOT NULL,
+            last_seen_ip           TEXT NOT NULL DEFAULT '',
+            updated_at             TEXT NOT NULL
+        );
+        INSERT INTO machines (mac, boot_mode, overlay_alias,
+            discovered_at, last_seen_at, updated_at)
+        VALUES ('aa:bb:cc:dd:ee:01', 'nbdboot', 'held', 'x', 'x', 'x'),
+               ('aa:bb:cc:dd:ee:02', 'nbdboot', '',     'x', 'x', 'x');
+        """
+    )
+    conn.commit()
+    conn.close()
+
+    store = MachinesStore(db)
+    assert store.get("aa:bb:cc:dd:ee:01").boot_mode == "nbdboot-overlay"  # type: ignore[union-attr]
+    assert store.get("aa:bb:cc:dd:ee:02").boot_mode == "nbdboot-ephemeral"  # type: ignore[union-attr]
 
 
 def test_normalise_mac_accepts_all_common_shapes() -> None:
@@ -83,7 +127,8 @@ def test_boot_modes_is_the_locked_set() -> None:
                 "pixie-flash-always",
                 "pixie-inventory",
                 "pixie-tui",
-                "nbdboot",
+                "nbdboot-ephemeral",
+                "nbdboot-overlay",
             }
         )
         == BOOT_MODES
@@ -120,7 +165,7 @@ def test_put_machine_rejects_unknown_boot_mode(client: TestClient) -> None:
 def test_put_machine_rejects_bad_content_sha(client: TestClient) -> None:
     r = _authed(client).put(
         "/machines/aa:bb:cc:dd:ee:03",
-        json={"boot_mode": "nbdboot", "image_content_sha256": "not-a-sha"},
+        json={"boot_mode": "nbdboot-ephemeral", "image_content_sha256": "not-a-sha"},
     )
     assert r.status_code == 422
 
@@ -219,10 +264,10 @@ def test_put_machine_flash_rejects_unknown_target_serial(client: TestClient) -> 
 
 
 def test_put_machine_non_flash_modes_skip_disk_guard(client: TestClient) -> None:
-    """ipxe-exit / nbdboot / pixie-inventory / pixie-tui do not touch
-    the target disk; binding them without an inventory succeeds."""
+    """ipxe-exit / nbdboot-ephemeral / pixie-inventory / pixie-tui do not
+    touch the target disk; binding them without an inventory succeeds."""
     c = _authed(client)
-    for mode in ("ipxe-exit", "nbdboot", "pixie-inventory", "pixie-tui"):
+    for mode in ("ipxe-exit", "nbdboot-ephemeral", "pixie-inventory", "pixie-tui"):
         r = c.put(
             f"/machines/aa:bb:cc:dd:ee:{ord(mode[0]):02x}",
             json={"boot_mode": mode},
@@ -291,38 +336,38 @@ def test_ui_machines_bind_form_persists_boot_mode(client: TestClient) -> None:
     assert "labels" not in row
 
 
-def test_bind_overlay_alias_round_trips(client: TestClient) -> None:
-    """PUT /machines/{mac} with overlay_alias creates the overlay over
-    the selected base image, persists the alias on the row, and holds
-    the single-writer lock; the ephemeral (blank alias) case is the
-    default and releases the hold."""
+def test_bind_overlay_selects_existing_and_round_trips(client: TestClient) -> None:
+    """nbdboot-overlay attaches an EXISTING overlay (created out of band),
+    persists the alias, and holds the single-writer lock. Switching the
+    machine to nbdboot-ephemeral releases the hold and clears the alias."""
     c = _authed(client)
     state = client.app.state
+    from pixie.exports._store import Overlay
+
+    # The overlay must already exist -- the bind never creates it.
+    state.overlays_store.upsert(Overlay("simon", "a" * 64, "/tmp/simon.qcow2"))
     mac = "aa:bb:cc:dd:ee:2a"
     r = c.put(
         f"/machines/{mac}",
         json={
-            "boot_mode": "nbdboot",
-            "image_content_sha256": "a" * 64,
+            "boot_mode": "nbdboot-overlay",
             "overlay_alias": "simon",
         },
     )
     assert r.status_code == 200
     row = c.get(f"/machines/{mac}").json()
     assert row["overlay_alias"] == "simon"
-    # The overlay row exists over the selected image and this MAC holds it.
     ov = state.overlays_store.get("simon")
     assert ov is not None
-    assert ov.image_sha == "a" * 64
+    assert ov.image_sha == "a" * 64  # implied by the overlay
     assert ov.attached_mac == mac
 
-    # Blank overlay_alias clears the field (round-trip absent) + frees it.
+    # Switch to ephemeral: overlay_alias clears + the hold is released.
     r = c.put(
         f"/machines/{mac}",
         json={
-            "boot_mode": "nbdboot",
+            "boot_mode": "nbdboot-ephemeral",
             "image_content_sha256": "a" * 64,
-            "overlay_alias": "",
         },
     )
     assert r.status_code == 200
@@ -332,7 +377,7 @@ def test_bind_overlay_alias_round_trips(client: TestClient) -> None:
 
 
 def test_bind_overlay_alias_implies_base_image(client: TestClient) -> None:
-    """Attaching an EXISTING alias overrides the image dropdown: the
+    """Attaching an existing overlay overrides the image dropdown: the
     machine binds the overlay's base image, not whatever sha was sent."""
     c = _authed(client)
     state = client.app.state
@@ -343,8 +388,8 @@ def test_bind_overlay_alias_implies_base_image(client: TestClient) -> None:
     r = c.put(
         f"/machines/{mac}",
         json={
-            # A different (even blank-ish) sha is sent; the alias wins.
-            "boot_mode": "nbdboot",
+            # A different sha is sent; the overlay's base image wins.
+            "boot_mode": "nbdboot-overlay",
             "image_content_sha256": "c" * 64,
             "overlay_alias": "shared",
         },
@@ -352,11 +397,11 @@ def test_bind_overlay_alias_implies_base_image(client: TestClient) -> None:
     assert r.status_code == 200
     row = c.get(f"/machines/{mac}").json()
     assert row["overlay_alias"] == "shared"
-    assert row["image_content_sha256"] == "b" * 64  # implied by the alias
+    assert row["image_content_sha256"] == "b" * 64  # implied by the overlay
 
 
 def test_bind_overlay_alias_single_writer_rejected(client: TestClient) -> None:
-    """An alias already held by a DIFFERENT machine is single-writer-
+    """An overlay already held by a DIFFERENT machine is single-writer-
     locked: a second machine attaching it is rejected (422) and no bind
     lands."""
     c = _authed(client)
@@ -370,8 +415,7 @@ def test_bind_overlay_alias_single_writer_rejected(client: TestClient) -> None:
     r = c.put(
         f"/machines/{other}",
         json={
-            "boot_mode": "nbdboot",
-            "image_content_sha256": "a" * 64,
+            "boot_mode": "nbdboot-overlay",
             "overlay_alias": "held",
         },
     )
@@ -381,17 +425,34 @@ def test_bind_overlay_alias_single_writer_rejected(client: TestClient) -> None:
     assert state.overlays_store.get("held").attached_mac == "aa:bb:cc:dd:ee:01"  # type: ignore[union-attr]
 
 
+def test_bind_overlay_nonexistent_alias_rejected_never_creates(client: TestClient) -> None:
+    """The core contract of the split: selecting an overlay never CREATES
+    it. Binding nbdboot-overlay to an alias that does not exist is
+    rejected (422), and no overlay row is conjured."""
+    c = _authed(client)
+    state = client.app.state
+    r = c.put(
+        "/machines/aa:bb:cc:dd:ee:2c",
+        json={
+            "boot_mode": "nbdboot-overlay",
+            "image_content_sha256": "a" * 64,
+            "overlay_alias": "ghost",
+        },
+    )
+    assert r.status_code == 422
+    assert "does not exist" in r.json()["detail"]
+    assert state.overlays_store.list_all() == []
+
+
 def test_bind_overlay_alias_rejects_bad_chars(client: TestClient) -> None:
-    """A new alias lands on disk as ``data/overlays/<alias>.qcow2``, so a
-    name with ``..`` or a slash could escape the tree. Reject before any
-    row or path is written."""
+    """A malformed alias (``..`` or a slash) is refused before any lookup,
+    with no overlay row written."""
     c = _authed(client)
     state = client.app.state
     r = c.put(
         "/machines/aa:bb:cc:dd:ee:2b",
         json={
-            "boot_mode": "nbdboot",
-            "image_content_sha256": "a" * 64,
+            "boot_mode": "nbdboot-overlay",
             "overlay_alias": "../etc/passwd",
         },
     )
@@ -400,30 +461,16 @@ def test_bind_overlay_alias_rejects_bad_chars(client: TestClient) -> None:
     assert state.overlays_store.list_all() == []
 
 
-def test_ui_bind_form_maps_overlay_alias_new_to_new_name(
-    client: TestClient,
-) -> None:
-    """The bind form select carries a magic ``__new`` value that tells
-    the handler to pull the alias name from the sibling
-    ``overlay_alias_new`` text field. Exercise the merge so an operator
-    using the picker's create-new flow lands the fresh alias without a
-    JSON round-trip."""
+def test_bind_overlay_without_alias_rejected(client: TestClient) -> None:
+    """nbdboot-overlay requires an overlay; binding it with none is
+    rejected rather than silently falling back to ephemeral."""
     c = _authed(client)
-    mac = "aa:bb:cc:dd:ee:2c"
-    r = c.post(
-        "/ui/machines/bind",
-        data={
-            "mac": mac,
-            "boot_mode": "nbdboot",
-            "image_content_sha256": "a" * 64,
-            "overlay_alias": "__new",
-            "overlay_alias_new": "karl",
-        },
-        follow_redirects=False,
+    r = c.put(
+        "/machines/aa:bb:cc:dd:ee:2e",
+        json={"boot_mode": "nbdboot-overlay"},
     )
-    assert r.status_code == 303
-    row = c.get(f"/machines/{mac}").json()
-    assert row["overlay_alias"] == "karl"
+    assert r.status_code == 422
+    assert "requires an overlay" in r.json()["detail"]
 
 
 def test_ui_labels_edit_form_persists_and_independent_of_bind(
@@ -512,7 +559,7 @@ def test_pxe_plan_nbdboot_without_bound_image_falls_back(client: TestClient) -> 
     the target does NOT boot a mismatched kernel."""
     c = _authed(client)
     mac = "de:ad:be:ef:00:01"
-    c.put(f"/machines/{mac}", json={"boot_mode": "nbdboot"})
+    c.put(f"/machines/{mac}", json={"boot_mode": "nbdboot-ephemeral"})
     r = c.get(f"/pxe/{mac}")
     assert r.status_code == 200
     assert r.text.startswith("#!ipxe")
@@ -624,13 +671,13 @@ def test_re_inventory_clears_inventory_and_reserves_the_pass(client: TestClient)
 
 
 def test_inventory_post_does_not_flip_a_non_inventory_mode(client: TestClient) -> None:
-    """A machine an operator put on, say, nbdboot is left alone -- only
-    pixie-inventory is one-shot."""
+    """A machine an operator put on, say, nbdboot-ephemeral is left alone
+    -- only pixie-inventory is one-shot."""
     c = _authed(client)
     mac = "aa:bb:cc:dd:ee:f1"
-    c.put(f"/machines/{mac}", json={"boot_mode": "nbdboot"})
+    c.put(f"/machines/{mac}", json={"boot_mode": "nbdboot-ephemeral"})
     client.post(f"/pxe/{mac}/inventory", json={"lshw": {}, "disks": []})
-    assert client.get(f"/machines/{mac}").json()["boot_mode"] == "nbdboot"
+    assert client.get(f"/machines/{mac}").json()["boot_mode"] == "nbdboot-ephemeral"
 
 
 def test_session_secret_is_stable_and_persisted(

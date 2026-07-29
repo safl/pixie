@@ -64,14 +64,18 @@ def test_flash_always_without_disk_flags_it() -> None:
 
 
 def test_nbdboot_ephemeral_says_overlay_on_tmpfs() -> None:
-    text = _call(boot_mode="nbdboot", image_name="nosi ubuntu-2604-headless")
+    text = _call(boot_mode="nbdboot-ephemeral", image_name="nosi ubuntu-2604-headless")
     assert "overlay-on-tmpfs" in text
 
 
-def test_nbdboot_persist_names_the_alias() -> None:
+def test_nbdboot_ephemeral_without_image_prompts_for_pick() -> None:
+    text = _call(boot_mode="nbdboot-ephemeral")
+    assert "Pick an image above" in text
+
+
+def test_nbdboot_overlay_names_the_alias() -> None:
     text = _call(
-        boot_mode="nbdboot",
-        image_name="nosi ubuntu-2604-headless",
+        boot_mode="nbdboot-overlay",
         overlay_alias="simon",
     )
     assert "simon" in text
@@ -80,12 +84,17 @@ def test_nbdboot_persist_names_the_alias() -> None:
     assert "overlay-on-tmpfs" not in text
 
 
-def test_nbdboot_persist_needs_no_image_alias_implies_it() -> None:
-    """An attached alias implies its own base image, so the persist
+def test_nbdboot_overlay_needs_no_image_alias_implies_it() -> None:
+    """An attached overlay implies its own base image, so the overlay
     sentence renders even with no image picked in the dropdown."""
-    text = _call(boot_mode="nbdboot", overlay_alias="simon")
+    text = _call(boot_mode="nbdboot-overlay", overlay_alias="simon")
     assert "Pick an image above" not in text
     assert "simon" in text
+
+
+def test_nbdboot_overlay_without_an_overlay_prompts_to_select() -> None:
+    text = _call(boot_mode="nbdboot-overlay")
+    assert "Select an overlay above" in text
 
 
 def test_unknown_mode_falls_back_to_the_mode_string() -> None:

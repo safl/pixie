@@ -405,7 +405,7 @@ def pxe_plan_json(request: Request, mac: str) -> dict[str, Any]:
         if plan_format:
             plan["format"] = plan_format
         return plan
-    if mode == "nbdboot":
+    if mode in ("nbdboot-ephemeral", "nbdboot-overlay"):
         # nbdboot targets normally boot the image's own kernel +
         # initrd -- no pixie CLI in the picture -- so this branch
         # only fires under the nbdboot chain test, which pivots

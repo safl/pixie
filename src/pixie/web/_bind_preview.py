@@ -17,7 +17,11 @@ sentence with a bare ``{IMAGE}`` placeholder.
 
 from __future__ import annotations
 
-_IMAGE_MODES: frozenset[str] = frozenset({"nbdboot", "pixie-flash-once", "pixie-flash-always"})
+# Modes that consume the picked image. nbdboot-overlay is absent: its
+# image is implied by the selected overlay, not the image picker.
+_IMAGE_MODES: frozenset[str] = frozenset(
+    {"nbdboot-ephemeral", "pixie-flash-once", "pixie-flash-always"}
+)
 _FLASH_MODES: frozenset[str] = frozenset({"pixie-flash-once", "pixie-flash-always"})
 
 _MODE_PREVIEWS: dict[str, str] = {
@@ -41,14 +45,14 @@ _MODE_PREVIEWS: dict[str, str] = {
         "Pixie boots its live env, which re-writes {IMAGE} to disk "
         "(serial: {DISK}) on every PXE. Any local changes are lost."
     ),
-    "nbdboot_ephemeral": (
+    "nbdboot-ephemeral": (
         "Pixie streams {IMAGE} over NBD; root is an overlay-on-tmpfs "
         "of the image. Nothing writes back to the source."
     ),
-    "nbdboot_persist": (
+    "nbdboot-overlay": (
         "Pixie streams the {ALIAS} overlay over NBD (a writable qcow2 "
         "layer over its base image). System changes on the target "
-        "survive reboots; the alias is single-writer, so no other "
+        "survive reboots; the overlay is single-writer, so no other "
         "machine can attach it at the same time."
     ),
 }
@@ -65,17 +69,14 @@ def bind_preview_text(
     if not boot_mode:
         return "Pick a boot mode above to see what happens."
 
-    if boot_mode == "nbdboot":
-        template_key = "nbdboot_persist" if overlay_alias else "nbdboot_ephemeral"
-    else:
-        template_key = boot_mode
+    text = _MODE_PREVIEWS.get(boot_mode, boot_mode)
 
-    text = _MODE_PREVIEWS.get(template_key, boot_mode)
-
-    # The persist sentence names the alias (which implies its base
-    # image); the ephemeral + flash sentences still need the image name.
-    persist = boot_mode == "nbdboot" and bool(overlay_alias)
-    if boot_mode in _IMAGE_MODES and not image_name and not persist:
+    # nbdboot-overlay names the overlay (which implies its base image),
+    # so it needs an overlay selected rather than an image picked.
+    if boot_mode == "nbdboot-overlay" and not overlay_alias:
+        return "Select an overlay above; this mode needs one."
+    # The image + flash modes still need the image name.
+    if boot_mode in _IMAGE_MODES and not image_name:
         return "Pick an image above; this mode needs one."
     text = text.replace("{IMAGE}", image_name) if image_name else text
 

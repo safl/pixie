@@ -37,7 +37,7 @@
         <h2 class="h5 mb-0"><i class="bi bi-pc-display me-2"></i><code>{{ machine.mac }}</code></h2>
         <span class="ms-auto">
             {% set _bm = boot_mode_meta_map.get(machine.boot_mode) %}
-            <span class="badge {{ 'text-bg-primary' if machine.boot_mode == 'nbdboot' else 'text-bg-secondary' }}"
+            <span class="badge {{ 'text-bg-primary' if machine.boot_mode in ('nbdboot-ephemeral', 'nbdboot-overlay') else 'text-bg-secondary' }}"
                   title="{{ machine.boot_mode }}{% if _bm %} -- {{ _bm.desc }}{% endif %}">
                 <i class="bi bi-{{ _bm.icon if _bm else 'box-arrow-right' }} me-1"></i>{{ _bm.short if _bm else machine.boot_mode }}
             </span>
@@ -146,7 +146,7 @@
             <div class="row g-3">
                 {# ---- Image picker --------------------------------- #}
                 <div class="col-md-6"
-                     data-policy-relevant="pixie-flash-once pixie-flash-always nbdboot">
+                     data-policy-relevant="pixie-flash-once pixie-flash-always nbdboot-ephemeral">
                     <label for="image_content_sha256" class="form-label fw-semibold">
                         Image
                         <span class="policy-usage small text-muted fw-normal ms-1"></span>
@@ -160,12 +160,14 @@
                         {% for e in bindable_entries %}
                         {# ``data-nbdboot-ready`` mirrors ``e.fetched``: bytes
                            on disk means pixie can serve the image over NBD
-                           for nbdboot. The inline script disables options
-                           whose value is "false" when ``boot_mode=nbdboot``
-                           so an operator can't accidentally bind an
-                           unfetched image for a nbdboot target. Flash modes
-                           leave every option enabled (the flash pipeline
-                           will refuse a missing blob at plan time). #}
+                           for nbdboot-ephemeral. The inline script disables
+                           options whose value is "false" when
+                           ``boot_mode=nbdboot-ephemeral`` so an operator
+                           can't accidentally bind an unfetched image for a
+                           netboot target. Flash modes leave every option
+                           enabled (the flash pipeline will refuse a missing
+                           blob at plan time). nbdboot-overlay takes its
+                           image from the overlay, so it hides this picker. #}
                         <option value="{{ e.content_sha256 }}"
                                 data-nbdboot-ready="{{ 'true' if e.fetched else 'false' }}"
                                 data-image-name="{{ e.name }}"
@@ -240,7 +242,7 @@
                so an operator can pin a hardware quirk to one target
                without every other machine seeing the same tokens.
                Consumed by the nbdboot + pixie-live-env templates. #}
-            <div data-policy-relevant="nbdboot pixie-flash-once pixie-flash-always pixie-inventory pixie-tui">
+            <div data-policy-relevant="nbdboot-ephemeral nbdboot-overlay pixie-flash-once pixie-flash-always pixie-inventory pixie-tui">
                 <label for="extra_cmdline" class="form-label fw-semibold">
                     Extra kernel cmdline
                     <span class="policy-usage small text-muted fw-normal ms-1"></span>
@@ -270,88 +272,62 @@
                 </div>
             </div>
 
-            {# ---- Overlay alias (nbdboot only) ----------------------
+            {# ---- Overlay picker (nbdboot-overlay only) -------------
 
-               An alias names a globally-unique writable qcow2 volume
-               over one base image; picking one flips this machine from
-               ephemeral (writes vanish on reboot) to persistent (writes
-               land on the qcow2 and survive). Attaching an existing
-               alias IMPLIES its base image. Aliases free or held by THIS
-               machine are selectable; an alias held by ANOTHER machine is
-               single-writer-locked and shown disabled (with the holder
-               MAC) so the operator sees it exists but is in use. ``__new``
-               reveals a text input for a fresh alias name (created over
-               the image selected above); the bind handler merges the two
-               fields into a single ``overlay_alias`` value. #}
-            <div data-policy-relevant="nbdboot">
+               Select an EXISTING overlay; this form never creates one
+               (overlays are made on the Overlays page, just as images are
+               fetched on the Catalog page). Selecting an overlay IMPLIES
+               its base image, so there is no image picker for this mode.
+               Overlays free or held by THIS machine are selectable; one
+               held by ANOTHER machine is single-writer-locked and shown
+               disabled (with the holder MAC). #}
+            <div data-policy-relevant="nbdboot-overlay">
                 <label for="overlay_alias" class="form-label fw-semibold">
-                    Overlay alias
+                    Overlay
                     <span class="policy-usage small text-muted fw-normal ms-1"></span>
                 </label>
-                <div class="d-flex gap-2 align-items-start flex-wrap">
-                    <select id="overlay_alias" name="overlay_alias"
-                            class="form-select flex-grow-1" style="min-width: 14rem;">
-                        <option value=""
-                                {% if not machine.overlay_alias %}selected{% endif %}>
-                            Ephemeral (no persist)
-                        </option>
-                        {% for ov in overlay_aliases %}
-                        {% if ov.attached_mac and ov.attached_mac != machine.mac %}
-                        {# Held by another machine: single-writer-locked, so
-                           show it (the operator sees the alias exists) but
-                           disable it -- binding it would be rejected. #}
-                        <option value="{{ ov.alias }}" disabled>
-                            {{ ov.alias }} (held by {{ ov.attached_mac }})
-                        </option>
-                        {% else %}
-                        <option value="{{ ov.alias }}"
-                                {% if machine.overlay_alias == ov.alias %}selected{% endif %}>
-                            {{ ov.alias }}{% if ov.attached_mac == machine.mac %} (held here){% else %} (free){% endif %}
-                        </option>
-                        {% endif %}
-                        {% endfor %}
-                        {# Fallback: if the machine is bound to an alias
-                           whose overlay row got GC'd, keep the value
-                           visible + selected so the operator can clear
-                           or rebind it. #}
-                        {% set known_aliases = overlay_aliases | map(attribute='alias') | list %}
-                        {% if machine.overlay_alias and machine.overlay_alias not in known_aliases %}
-                        <option value="{{ machine.overlay_alias }}" selected>
-                            {{ machine.overlay_alias }} (no qcow2 yet)
-                        </option>
-                        {% endif %}
-                        <option value="__new">+ New alias...</option>
-                    </select>
-                    <input type="text" id="overlay_alias_new" name="overlay_alias_new"
-                           class="form-control font-monospace d-none"
-                           style="max-width: 16rem;"
-                           placeholder="new alias name"
-                           pattern="^[A-Za-z0-9][A-Za-z0-9._\-]{0,63}$"
-                           title="Alphanumeric-leading; a-z / A-Z / 0-9 / . _ - (max 64 chars)">
-                    {% if machine.overlay_alias %}
-                    <form method="post" style="display:inline;"
-                          action="/ui/machines/{{ machine.mac }}/overlay/reset"
-                          onsubmit="return confirm('Reset overlay {{ machine.overlay_alias }}? The qcow2 file will be deleted; the next boot lazy-creates a fresh overlay from the base image. Any state in the current overlay is lost.');">
-                        <input type="hidden" name="alias" value="{{ machine.overlay_alias }}">
-                        <button type="submit" class="btn btn-outline-danger flex-shrink-0"
-                                title="Delete the qcow2 for this alias; next boot starts fresh.">
-                            <i class="bi bi-arrow-counterclockwise me-1"></i>Reset
-                        </button>
-                    </form>
+                <select id="overlay_alias" name="overlay_alias"
+                        class="form-select" style="min-width: 14rem;">
+                    <option value="" {% if not machine.overlay_alias %}selected{% endif %} disabled>
+                        Select an overlay...
+                    </option>
+                    {% for ov in overlay_aliases %}
+                    {% if ov.attached_mac and ov.attached_mac != machine.mac %}
+                    {# Held by another machine: single-writer-locked, so
+                       show it (the operator sees the overlay exists) but
+                       disable it -- binding it would be rejected. #}
+                    <option value="{{ ov.alias }}" disabled>
+                        {{ ov.alias }}{% if overlay_image_names.get(ov.image_sha) %} (over {{ overlay_image_names[ov.image_sha] }}){% endif %} - held by {{ ov.attached_mac }}
+                    </option>
+                    {% else %}
+                    <option value="{{ ov.alias }}"
+                            {% if machine.overlay_alias == ov.alias %}selected{% endif %}>
+                        {{ ov.alias }}{% if overlay_image_names.get(ov.image_sha) %} (over {{ overlay_image_names[ov.image_sha] }}){% endif %}{% if ov.attached_mac == machine.mac %} - held here{% else %} - free{% endif %}
+                    </option>
                     {% endif %}
-                </div>
+                    {% endfor %}
+                    {# Fallback: the machine is bound to an alias whose
+                       overlay row got deleted. Keep it visible + selected
+                       so the operator can see and rebind it. #}
+                    {% set known_aliases = overlay_aliases | map(attribute='alias') | list %}
+                    {% if machine.overlay_alias and machine.overlay_alias not in known_aliases %}
+                    <option value="{{ machine.overlay_alias }}" selected>
+                        {{ machine.overlay_alias }} (overlay deleted)
+                    </option>
+                    {% endif %}
+                </select>
                 <div class="form-text">
-                    Blank = ephemeral tmpfs (writes vanish on reboot;
-                    original nbdboot behaviour). Named = a globally-unique
-                    qcow2 kept at
-                    <code>data/overlays/&lt;alias&gt;.qcow2</code> on
-                    pixie's data volume with
-                    <code>backing_file=&lt;base blob&gt;</code>. An alias
-                    is single-writer: at most one machine holds it at a
-                    time, and attaching it binds this machine to the
-                    alias's base image. Manage every overlay on the
-                    <a href="/ui/overlays">Overlays</a> page. See
+                    {% if not overlay_aliases %}
+                    No overlays yet. Create one on the
+                    <a href="/ui/overlays">Overlays</a> page, then select it here.
+                    {% else %}
+                    Attaching an overlay binds this machine to the overlay's base
+                    image; writes land on its qcow2 and survive reboots. An overlay
+                    is single-writer: at most one machine holds it at a time. Create
+                    and delete overlays on the <a href="/ui/overlays">Overlays</a>
+                    page. See
                     <a href="https://github.com/safl/pixie/blob/main/docs/src/boot-modes.md" target="_blank" rel="noreferrer">boot-modes docs</a>.
+                    {% endif %}
                 </div>
             </div>
 
@@ -666,7 +642,7 @@
     //      sha calibrated under ipxe-exit stays around when the
     //      operator flips to nbdboot.
     //   3. Nbdboot-ready gate on the image picker: only fetched
-    //      catalog entries are selectable under boot_mode=nbdboot
+    //      catalog entries are selectable under boot_mode=nbdboot-ephemeral
     //      (pixie needs the bytes on disk to serve them over NBD).
     //   4. Flash-mode guard: pixie-flash-{once,always} refuses to
     //      Save without both inventory + a picked target disk. The
@@ -693,7 +669,6 @@
     );
     const extraCmdlineInput = form.querySelector("#extra_cmdline");
     const overlayAliasSelect = form.querySelector("#overlay_alias");
-    const overlayAliasNewInput = form.querySelector("#overlay_alias_new");
     const saveBtn = form.querySelector("#save-binding");
     const flashHint = form.querySelector("#flash-guard-hint");
     const dirtyHint = document.getElementById("bind-dirty-hint");
@@ -705,21 +680,23 @@
     // manually until the JS routes preview text through a JSON
     // endpoint that reads that module. Sentences describe the OUTCOME
     // on the next PXE, not the mode definition (the cards themselves
-    // cover that). nbdboot has TWO variants because the persistent-
-    // overlay path (overlay_alias set) survives writes; ephemeral
-    // does not.
+    // cover that). The two nbdboot modes are now their own keys:
+    // ephemeral discards writes, overlay persists them to a qcow2.
     const MODE_PREVIEWS = {
         "ipxe-exit":          "Pixie exits the iPXE chain. The BIOS boot order picks the next bootable device on this target.",
         "pixie-inventory":    "Pixie boots its live env; the pixie CLI posts disk + NIC inventory back, then the target reboots to firmware.",
         "pixie-tui":          "Pixie boots its live env into an interactive TUI. An operator drives the wizard on the target's console.",
         "pixie-flash-once":   "Pixie boots its live env, which writes {IMAGE} to disk (serial: {DISK}), then the target reboots to firmware.",
         "pixie-flash-always": "Pixie boots its live env, which re-writes {IMAGE} to disk (serial: {DISK}) on every PXE. Any local changes are lost.",
-        "nbdboot_ephemeral":  "Pixie streams {IMAGE} over NBD; root is an overlay-on-tmpfs of the image. Nothing writes back to the source.",
-        "nbdboot_persist":    "Pixie streams the <code>{ALIAS}</code> overlay over NBD (a writable qcow2 layer over its base image). System changes on the target survive reboots; the alias is single-writer, so no other machine can attach it at the same time.",
+        "nbdboot-ephemeral":  "Pixie streams {IMAGE} over NBD; root is an overlay-on-tmpfs of the image. Nothing writes back to the source.",
+        "nbdboot-overlay":    "Pixie streams the <code>{ALIAS}</code> overlay over NBD (a writable qcow2 layer over its base image). System changes on the target survive reboots; the overlay is single-writer, so no other machine can attach it at the same time.",
     };
     const FLASH_MODES = new Set(["pixie-flash-once", "pixie-flash-always"]);
-    const NBDBOOT = "nbdboot";
-    const IMAGE_MODES = new Set([NBDBOOT, "pixie-flash-once", "pixie-flash-always"]);
+    const NBDBOOT_EPHEMERAL = "nbdboot-ephemeral";
+    const NBDBOOT_OVERLAY = "nbdboot-overlay";
+    // Modes that consume the Image picker. nbdboot-overlay is NOT here:
+    // its image is implied by the selected overlay.
+    const IMAGE_MODES = new Set([NBDBOOT_EPHEMERAL, "pixie-flash-once", "pixie-flash-always"]);
 
     // Snapshot of the initial pick per field, taken at DOMContentLoaded.
     // A field is DIRTY iff its current value differs from this snapshot.
@@ -781,7 +758,7 @@
     // 3. Nbdboot-ready image gate -----------------------------------
     function applyNbdbootGate() {
         if (!imgSelect) return;
-        const isNbdboot = pickedMode() === NBDBOOT;
+        const isNbdboot = pickedMode() === NBDBOOT_EPHEMERAL;
         imgSelect.querySelectorAll("option[data-nbdboot-ready]").forEach((opt) => {
             const ready = opt.getAttribute("data-nbdboot-ready") === "true";
             // Under nbdboot, non-ready options are HIDDEN outright
@@ -830,16 +807,7 @@
         if (targetSelect && targetSelect.tagName === "SELECT"
             && targetSelect.value !== initial.target_disk_serial) return true;
         if (extraCmdlineInput && extraCmdlineInput.value !== initial.extra_cmdline) return true;
-        if (overlayAliasSelect) {
-            // Dirty if the raw select value changed OR if the operator
-            // picked ``__new`` and typed a name (which becomes the
-            // effective value post-submit).
-            const effective =
-                overlayAliasSelect.value === "__new" && overlayAliasNewInput
-                    ? overlayAliasNewInput.value.trim()
-                    : overlayAliasSelect.value;
-            if (effective !== initial.overlay_alias) return true;
-        }
+        if (overlayAliasSelect && overlayAliasSelect.value !== initial.overlay_alias) return true;
         return false;
     }
 
@@ -854,12 +822,7 @@
 
     // 6. Preview panel narration ------------------------------------
     function pickedOverlayAlias() {
-        if (!overlayAliasSelect) return "";
-        const raw = overlayAliasSelect.value;
-        if (raw === "__new") {
-            return overlayAliasNewInput ? overlayAliasNewInput.value.trim() : "";
-        }
-        return raw;
+        return overlayAliasSelect ? overlayAliasSelect.value : "";
     }
 
     function renderPreview() {
@@ -869,21 +832,17 @@
             previewBody.textContent = "Pick a boot mode above to see what happens.";
             return;
         }
-        // nbdboot has two flavours in the preview table: ephemeral vs
-        // persist. Select the right one before templating.
         const alias = pickedOverlayAlias();
-        let key = mode;
-        if (mode === NBDBOOT) {
-            key = alias ? "nbdboot_persist" : "nbdboot_ephemeral";
-        }
-        let text = MODE_PREVIEWS[key] || mode;
+        let text = MODE_PREVIEWS[mode] || mode;
         const imgName = pickedImageName();
         const diskLabel = pickedDiskLabel();
-        // A persist-overlay bind takes its base image from the alias, so
-        // it does not need an image picked here; every other image mode
-        // does.
-        const needsImage = IMAGE_MODES.has(mode) && !(mode === NBDBOOT && alias);
-        if (needsImage && !imgName) {
+        // nbdboot-overlay needs an overlay selected (its image comes from
+        // the overlay); the image modes need an image picked here.
+        if (mode === NBDBOOT_OVERLAY && !alias) {
+            previewBody.innerHTML = `<span class="text-warning-emphasis"><i class="bi bi-exclamation-circle me-1"></i>Select an overlay above; this mode needs one.</span>`;
+            return;
+        }
+        if (IMAGE_MODES.has(mode) && !imgName) {
             previewBody.innerHTML = `<span class="text-warning-emphasis"><i class="bi bi-exclamation-circle me-1"></i>Pick an image above; this mode needs one.</span>`;
             return;
         }
@@ -913,23 +872,7 @@
     if (imgSelect) imgSelect.addEventListener("change", refreshAll);
     if (targetSelect) targetSelect.addEventListener("change", refreshAll);
     if (extraCmdlineInput) extraCmdlineInput.addEventListener("input", refreshAll);
-    if (overlayAliasSelect) {
-        overlayAliasSelect.addEventListener("change", () => {
-            // Reveal the new-alias text input only when __new is picked;
-            // clear its value on any other selection so it doesn't
-            // silently ride along.
-            const isNew = overlayAliasSelect.value === "__new";
-            if (overlayAliasNewInput) {
-                overlayAliasNewInput.classList.toggle("d-none", !isNew);
-                if (!isNew) overlayAliasNewInput.value = "";
-                if (isNew) overlayAliasNewInput.focus();
-            }
-            refreshAll();
-        });
-    }
-    if (overlayAliasNewInput) {
-        overlayAliasNewInput.addEventListener("input", refreshAll);
-    }
+    if (overlayAliasSelect) overlayAliasSelect.addEventListener("change", refreshAll);
 
     // Re-enable every mode-gated control at submit time so the
     // browser POSTs the current values even for fields the current

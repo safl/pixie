@@ -69,12 +69,15 @@ class BindBody(BaseModel):
     overlay_alias: str = Field(
         default="",
         description=(
-            "Globally-unique persistent-overlay alias for nbdboot. Blank "
-            "means ephemeral tmpfs (writes vanish on reboot); non-blank "
-            "attaches a named writable volume (qcow2 over a base image) "
-            "that persists on pixie's data volume. Single-writer: one "
-            "machine per alias. Alphanumeric-leading; a-z / A-Z / 0-9 / "
-            ". _ - (max 64 chars)."
+            "Globally-unique persistent-overlay alias. Meaningful only "
+            "for boot_mode 'nbdboot-overlay', where it attaches a named "
+            "writable qcow2 volume (over a base image) that persists on "
+            "pixie's data volume; the alias IMPLIES the base image. The "
+            "overlay must already exist (create it via POST "
+            "/ui/overlays/create) -- selecting one never creates it; a "
+            "non-existent alias is rejected 422. Single-writer: one "
+            "machine per alias. Ignored by every other mode (including "
+            "'nbdboot-ephemeral', whose writes vanish on reboot)."
         ),
     )
 
@@ -140,10 +143,9 @@ def upsert_machine(
         # alias held by another machine raises ValueError -> 422 here.
         from pixie.web._overlay_bind import overlay_state, resolve_overlay_bind
 
-        overlays, overlays_dir = overlay_state(request.app.state)
+        overlays, _overlays_dir = overlay_state(request.app.state)
         image_sha, resolved_alias = resolve_overlay_bind(
             overlays=overlays,
-            overlays_dir=overlays_dir,
             mac=canon,
             boot_mode=body.boot_mode,
             image_sha=body.image_content_sha256.strip().lower(),

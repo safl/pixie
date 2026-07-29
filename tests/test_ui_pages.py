@@ -218,17 +218,19 @@ def test_ui_machine_detail_bind_form_prefills_current_binding(client: TestClient
     sha = "a" * 64
     c.put(
         "/machines/aa:bb:cc:dd:ee:04",
-        json={"boot_mode": "nbdboot", "image_content_sha256": sha},
+        json={"boot_mode": "nbdboot-ephemeral", "image_content_sha256": sha},
     )
     body = c.get("/ui/machines/aa:bb:cc:dd:ee:04").text
-    # Boot-mode radio-card picker: the nbdboot radio input is
+    # Boot-mode radio-card picker: the nbdboot-ephemeral radio input is
     # rendered with ``checked``. Assert both attributes appear on the
     # same radio; the raw substring uses newlines because the
     # template splits the ``<input>`` across lines for readability,
     # so match by regex instead of anchored substring.
     import re
 
-    nbdboot_radio = re.compile(r'<input\b[^>]*\bvalue="nbdboot"[^>]*\bchecked\b', re.DOTALL)
+    nbdboot_radio = re.compile(
+        r'<input\b[^>]*\bvalue="nbdboot-ephemeral"[^>]*\bchecked\b', re.DOTALL
+    )
     assert nbdboot_radio.search(body), body[:2000]
     # image sha select has an option with the current sha value
     # (may or may not be pre-selected depending on whether the sha
@@ -258,10 +260,13 @@ def test_ui_machines_image_column_resolves_name_and_blanks_non_image_modes(
     )
     state.catalog_store.mark_fetched("ubuntu-2604", content_sha256=sha, size_bytes=42)
 
-    # nbdboot consumes the image; ipxe-exit keeps a sha on the row but
-    # never boots it (seeded via the store so the sha is definitely
-    # retained regardless of any route-side stripping).
-    c.put("/machines/aa:bb:cc:dd:ee:a1", json={"boot_mode": "nbdboot", "image_content_sha256": sha})
+    # nbdboot-ephemeral consumes the image; ipxe-exit keeps a sha on the
+    # row but never boots it (seeded via the store so the sha is
+    # definitely retained regardless of any route-side stripping).
+    c.put(
+        "/machines/aa:bb:cc:dd:ee:a1",
+        json={"boot_mode": "nbdboot-ephemeral", "image_content_sha256": sha},
+    )
     state.machines_store.upsert_binding(
         "aa:bb:cc:dd:ee:a2", boot_mode="ipxe-exit", image_content_sha256=sha
     )
@@ -296,10 +301,10 @@ def test_ui_machine_detail_image_picker_has_boot_mode_gate_markup(
     catalog.mark_fetched("ready-img", content_sha256="a" * 64, size_bytes=42)
     catalog.upsert(CatalogEntry(name="staged-img", src="https://x/staged.img.gz", format="img.gz"))
 
-    c.put("/machines/aa:bb:cc:dd:ee:06", json={"boot_mode": "nbdboot"})
+    c.put("/machines/aa:bb:cc:dd:ee:06", json={"boot_mode": "nbdboot-ephemeral"})
     body = c.get("/ui/machines/aa:bb:cc:dd:ee:06").text
 
-    assert 'data-policy-relevant="pixie-flash-once pixie-flash-always nbdboot"' in body
+    assert 'data-policy-relevant="pixie-flash-once pixie-flash-always nbdboot-ephemeral"' in body
     assert 'data-nbdboot-gate="1"' in body
     assert 'data-nbdboot-ready="true"' in body
     assert 'data-nbdboot-ready="false"' in body

@@ -70,7 +70,9 @@ def _seed(tmp: Path):
 
 def test_build_image_views_groups_and_rolls_up(tmp_path: Path) -> None:
     catalog, exports, overlays, machines = _seed(tmp_path)
-    machines.upsert_binding("aa:aa:aa:aa:aa:aa", boot_mode="nbdboot", image_content_sha256=_SHA)
+    machines.upsert_binding(
+        "aa:aa:aa:aa:aa:aa", boot_mode="nbdboot-overlay", image_content_sha256=_SHA
+    )
     ov = Overlay("prod", _SHA, str(tmp_path / "ov.qcow2"), attached_mac="aa:aa:aa:aa:aa:aa")
     (tmp_path / "ov.qcow2").write_bytes(b"\x00" * 2048)
     overlays.upsert(ov)
@@ -144,7 +146,7 @@ def test_ui_images_renders_image_row(client: TestClient) -> None:
     blob.parent.mkdir(parents=True, exist_ok=True)
     blob.write_bytes(b"\x00" * 4096)
     state.machines_store.upsert_binding(
-        "aa:aa:aa:aa:aa:aa", boot_mode="nbdboot", image_content_sha256=_SHA
+        "aa:aa:aa:aa:aa:aa", boot_mode="nbdboot-overlay", image_content_sha256=_SHA
     )
     body = c.get("/ui/images").text
     assert "ubuntu" in body
@@ -216,7 +218,7 @@ def test_ui_image_delete_refuses_while_in_use(client: TestClient) -> None:
     blob.parent.mkdir(parents=True, exist_ok=True)
     blob.write_bytes(b"\x00" * 4096)
     state.machines_store.upsert_binding(
-        "aa:aa:aa:aa:aa:aa", boot_mode="nbdboot", image_content_sha256=_SHA
+        "aa:aa:aa:aa:aa:aa", boot_mode="nbdboot-overlay", image_content_sha256=_SHA
     )
     c.post(f"/ui/images/{_SHA}/delete", follow_redirects=False)
     assert blob.exists()  # refused: a machine still depends on it
