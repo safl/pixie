@@ -11,6 +11,8 @@ operator-facing summary.
 
 ## [Unreleased]
 
+## [0.7.2] - 2026-07-29
+
 ### Changed
 
 - **Re-fetching an in-use catalog entry is now guarded the same on the JSON
