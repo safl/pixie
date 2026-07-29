@@ -94,6 +94,7 @@
                         <form method="post" action="/ui/machines/delete" class="d-inline"
                               onsubmit="return confirm('Delete machine record for {{ m.mac }}? Inventory + binding will be lost.');">
                             <input type="hidden" name="mac" value="{{ m.mac }}">
+                            <input type="hidden" name="return_qs" value="{{ request.url.query }}">
                             <button type="submit"
                                     class="btn btn-sm btn-outline-danger"
                                     title="Delete {{ m.mac }}"

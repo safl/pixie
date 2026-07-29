@@ -69,6 +69,7 @@
                             {% if im.names | length > 1 %}
                             <span class="badge text-bg-light border ms-1" title="{{ im.names | join(', ') }}">+{{ im.names | length - 1 }} more name(s)</span>
                             {% endif %}
+                            {% if im.is_live_env %}<span class="badge text-bg-info ms-1" title="Selected as the live-env image; the pixie-inventory / pixie-tui / pixie-flash-* modes nbdboot it">live env</span>{% endif %}
                             {% if im.orphan %}<span class="badge text-bg-warning ms-1">orphan</span>
                             {% elif not im.in_use %}<span class="badge text-bg-light border text-muted ms-1">unused</span>{% endif %}
                         </div>

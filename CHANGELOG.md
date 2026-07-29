@@ -11,6 +11,29 @@ operator-facing summary.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A fetched netboot bundle no longer shows up as an "orphan" image.** The
+  Images page flagged every blob with no *bindable* catalog entry as an
+  orphan, but a netboot bundle (a non-bindable tar.gz, e.g. the one the
+  live-env setup fetches) has a real catalog entry and is the boot form of
+  its sibling image. The orphan scan now keys off every catalog entry's sha,
+  not just the bindable image groups.
+- **The selected live-env image now counts as in use.** The
+  `pixie-inventory` / `pixie-tui` / `pixie-flash-*` modes nbdboot the live-env
+  image via the global setting, not a per-machine bind, so it read as usage 0
+  / "unused" and was reclaimable by the image-delete guard -- deleting it
+  would have broken those modes. It now shows a "live env" badge, counts as a
+  usage, and can't be reclaimed while selected.
+
+### Changed
+
+- **List filters survive an action.** Fetching / deleting from a filtered
+  Catalog or Machines list (or acking / clearing a filtered Events view) used
+  to redirect back to the full unfiltered list. The action forms now
+  round-trip the page's query string so the filter / sort / page stick; the
+  filter box already had a Clear button + the native search-box "x".
+
 ## [0.7.2] - 2026-07-29
 
 ### Changed
