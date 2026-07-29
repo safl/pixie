@@ -13,6 +13,15 @@ operator-facing summary.
 
 ### Changed
 
+- **`pixie-flash-once` no longer silently flips to `ipxe-exit` after flashing.**
+  The machine stays on `pixie-flash-once` (the operator's chosen intent); the
+  renderer serves an exit plan on the next PXE because the flash was recorded,
+  not because the mode changed. Same one-shot intent-model already used for
+  `pixie-inventory`. The machine page now shows **when** and **which image** was
+  last flashed and a **Re-flash on next boot** button that re-arms it in one
+  click, instead of the old "switch mode, save, switch back" dance. Binding a
+  different image re-arms automatically. Emits `machine.flashed` /
+  `machine.flash.rearmed` events.
 - **Overlays are never born on a boot.** The plan renderer no longer
   lazy-creates an overlay qcow2 (or emits `overlay.created`) on a
   `GET /pxe/<mac>`; overlays come into being only via the Create form on

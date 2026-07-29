@@ -53,6 +53,46 @@
                 <span class="text-muted">(unbound)</span>
                 {% endif %}
             </dd>
+            {# Flash status: when + which image was last written, and a
+               Re-flash re-arm. Surfaced for the flash modes (and for any
+               machine that has ever been flashed) so the operator can
+               inspect the last flash and re-trigger one without juggling
+               boot modes. #}
+            {% if machine.boot_mode in ('pixie-flash-once', 'pixie-flash-always') or machine.flashed_at %}
+            <dt class="col-sm-3 text-muted small">Flash status</dt>
+            <dd class="col-sm-9">
+                {% if machine.flashed_at %}
+                <span class="badge text-bg-success"><i class="bi bi-check2-circle me-1"></i>Flashed</span>
+                <code>{{ machine.flashed_image_sha256[:12] if machine.flashed_image_sha256 else '(no image)' }}</code>
+                at <span class="text-muted">{{ machine.flashed_at | fmt_ts }}</span>
+                {% if machine.boot_mode == 'pixie-flash-once' %}
+                    {% if machine.flashed_image_sha256 == machine.image_content_sha256 %}
+                    <div class="form-text small mt-1">
+                        One-shot complete: the next PXE boots the flashed disk (no re-flash).
+                        Re-flash to write the bound image again.
+                    </div>
+                    {% else %}
+                    <div class="form-text small text-warning-emphasis mt-1">
+                        <i class="bi bi-exclamation-triangle me-1"></i>Bound image changed since this
+                        flash; the next PXE flashes the new image.
+                    </div>
+                    {% endif %}
+                    <form method="post" action="/ui/machines/re-flash" class="mt-1"
+                          onsubmit="return confirm('Re-flash {{ machine.mac }} on next boot? It writes the bound image to the target disk again on the next PXE.');">
+                        <input type="hidden" name="mac" value="{{ machine.mac }}">
+                        <button type="submit" class="btn btn-sm btn-outline-danger"
+                                title="Clear the flashed marker so the next PXE flashes the bound image again.">
+                            <i class="bi bi-arrow-repeat me-1"></i>Re-flash on next boot
+                        </button>
+                    </form>
+                {% elif machine.boot_mode == 'pixie-flash-always' %}
+                    <div class="form-text small mt-1">Re-flashes on every PXE boot.</div>
+                {% endif %}
+                {% else %}
+                <span class="text-muted">Not flashed yet; flashes on the next PXE boot.</span>
+                {% endif %}
+            </dd>
+            {% endif %}
             <dt class="col-sm-3 text-muted small">Labels</dt>
             <dd class="col-sm-9">
                 {# Labels are metadata (search / filter / grouping) and

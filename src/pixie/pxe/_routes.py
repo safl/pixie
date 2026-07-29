@@ -13,7 +13,6 @@
 
 from __future__ import annotations
 
-import contextlib
 import logging
 from typing import Any
 
@@ -22,12 +21,19 @@ from fastapi.responses import PlainTextResponse
 
 from pixie.events._kinds import (
     MACHINE_DISCOVERED,
+    MACHINE_FLASHED,
     MACHINE_INVENTORY_UPDATED,
     PXE_PLAN_RENDERED,
     PXE_PLAN_UNAVAILABLE,
     PXE_STATUS_RECEIVED,
 )
-from pixie.machines._store import DEFAULT_BOOT_MODE, BadMac, MachinesStore, normalise_mac
+from pixie.machines._store import (
+    _FLASH_MODES,
+    DEFAULT_BOOT_MODE,
+    BadMac,
+    MachinesStore,
+    normalise_mac,
+)
 from pixie.pxe._renderer import PlanRenderer, RenderContext
 
 _log = logging.getLogger(__name__)
@@ -279,25 +285,29 @@ async def pxe_status(request: Request, mac: str) -> PlainTextResponse:
             summary=f"{canon}: {status_token}",
             details={"status": status_token},
         )
-    # pixie-flash-once completes -> flip to ipxe-exit so the next PXE
-    # boot loads the disk. pixie-flash-always keeps re-arming; the
-    # operator explicitly picked "flash every boot". Any other status
-    # (started, failed, etc.) or boot_mode is a pure event emit.
+    # A ``pixie-flash-*`` pass reports ``done`` -> record WHEN + WHICH
+    # image was written, WITHOUT mutating boot_mode. The machine stays on
+    # the operator's chosen mode; for ``pixie-flash-once`` the renderer
+    # reads ``flashed_at`` + ``flashed_image_sha256`` and serves an exit
+    # plan on the next PXE, so it flashes exactly once but the operator
+    # can still see the mode, inspect the flash, and Re-flash on demand.
+    # (This is the same intent-model as pixie-inventory's one-shot: the
+    # mode is intent, the renderer gates the repeat.)
     if status_token == "done":
         machines = _get_machines(request)
         row = machines.get(canon)
-        if row is not None and row.boot_mode == "pixie-flash-once":
-            # Guard would trip if inventory is missing on the row
-            # (shouldn't happen; getting here required a flash-once
-            # bind which itself passed the guard). Swallow so the
-            # /done POST still returns 204.
-            with contextlib.suppress(ValueError):
-                machines.upsert_binding(
-                    canon,
-                    boot_mode="ipxe-exit",
-                    image_content_sha256=row.image_content_sha256,
-                    labels=list(row.labels),
-                    target_disk_serial=row.target_disk_serial,
+        if row is not None and row.boot_mode in _FLASH_MODES:
+            machines.mark_flashed(canon, row.image_content_sha256)
+            if log is not None:
+                log.emit(
+                    MACHINE_FLASHED,
+                    subject_kind="machine",
+                    subject_id=canon,
+                    summary=f"{canon}: flashed {row.image_content_sha256[:12] or '(no image)'}",
+                    details={
+                        "image_content_sha256": row.image_content_sha256,
+                        "boot_mode": row.boot_mode,
+                    },
                 )
     return PlainTextResponse("", status_code=204)
 
@@ -321,9 +331,10 @@ def pxe_plan_json(request: Request, mac: str) -> dict[str, Any]:
     zero cmdline changes. The full mode set is live: ``inventory``
     (post + reboot), ``exit``, ``interactive`` (drop into the wizard),
     and ``flash`` (auto-write the bound image to the target disk).
-    ``pixie-flash-once`` observers are flipped to "flashed" via
-    ``POST /pxe/{mac}/done`` so a re-PXE after a successful flash exits
-    instead of re-flashing."""
+    A ``pixie-flash-once`` machine records ``flashed_at`` when the live
+    env POSTs ``status=done`` (see ``POST /pxe/{mac}/status``); a re-PXE
+    after a successful flash then serves ``exit`` (here and in the iPXE
+    render) instead of re-flashing, WITHOUT changing boot_mode."""
     try:
         canon = normalise_mac(mac)
     except BadMac as exc:
@@ -344,6 +355,15 @@ def pxe_plan_json(request: Request, mac: str) -> dict[str, Any]:
         return {"mode": "inventory"}
     if mode == "pixie-tui":
         return {"mode": "interactive"}
+    if (
+        mode == "pixie-flash-once"
+        and row.flashed_at
+        and row.flashed_image_sha256 == row.image_content_sha256
+    ):
+        # Already flashed the current image -> exit (the iPXE render
+        # normally prevents the live env from even booting here, but be
+        # defensive if the CLI re-asks within the same boot).
+        return {"mode": "exit"}
     if mode in ("pixie-flash-once", "pixie-flash-always"):
         # Resolve the bound catalog entry so the live env can fetch
         # the bytes + know the format. Bind-time validation (see

@@ -1821,6 +1821,36 @@ def create_app() -> FastAPI:
         )
         return RedirectResponse(url=f"/ui/machines/{mac}", status_code=status.HTTP_303_SEE_OTHER)
 
+    @app.post("/ui/machines/re-flash")
+    def ui_machines_re_flash(
+        request: Request,
+        mac: str = Form(...),
+        _auth: None = Depends(_require_ui_auth),
+    ) -> RedirectResponse:
+        """Re-arm a pixie-flash-once machine: clear ``flashed_at`` so the
+        next PXE flashes the bound image again. boot_mode is untouched --
+        the operator does not have to mode-juggle to re-flash. Meaningful
+        only while the machine is on pixie-flash-once and has already
+        flashed; a no-op otherwise."""
+        from pixie.events._kinds import MACHINE_FLASH_REARMED
+
+        request.app.state.machines_store.rearm_flash(mac)
+        events = getattr(request.app.state, "events_log", None)
+        if events is not None:
+            with contextlib_suppress(Exception):
+                events.emit(
+                    MACHINE_FLASH_REARMED,
+                    subject_kind="machine",
+                    subject_id=mac,
+                    summary=f"{mac}: re-armed, flashes again on next PXE",
+                )
+        set_flash(
+            request,
+            f"Re-armed {mac}; it flashes the bound image again on the next PXE boot.",
+            "success",
+        )
+        return RedirectResponse(url=f"/ui/machines/{mac}", status_code=status.HTTP_303_SEE_OTHER)
+
     @app.get("/ui/events", response_class=HTMLResponse)
     def ui_events(
         request: Request,
