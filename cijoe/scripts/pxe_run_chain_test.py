@@ -1271,17 +1271,20 @@ _FLASH_EFFECT_TIMEOUT_S = 180
 def _verify_flash_effects(seed_base: str, cfg, workspace: Path) -> int:
     """After the live env's pixie CLI runs ``_run_auto``, it dds the
     image onto the target disk (matched by serial), then POSTs
-    ``/pxe/<mac>/status`` with status=done. The status handler flips
-    pixie-flash-once to ipxe-exit; pixie-flash-always stays put.
-    Assertions:
+    ``/pxe/<mac>/status`` with status=done. The status handler RECORDS
+    the flash (``flashed_at`` + ``flashed_image_sha256``) WITHOUT
+    changing boot_mode -- the renderer serves an exit plan on the next
+    PXE because the flash was recorded, so pixie-flash-once still
+    flashes exactly once. Assertions:
 
     1. For ``pixie-flash-once``: poll ``GET /machines/<mac>`` until
-       ``boot_mode`` reads ``ipxe-exit`` -- proves the /done POST
-       landed AND the server flipped.
-       For ``pixie-flash-always``: sleep long enough that a flip
-       WOULD have shown up, then GET once and assert boot_mode
-       still reads ``pixie-flash-always``. Same /done POST fires
-       from the CLI; this side of the wire is what differs.
+       ``flashed_at`` is set -- proves the /done POST landed -- and
+       assert boot_mode STAYS pixie-flash-once (the one-shot must not
+       flip the mode).
+       For ``pixie-flash-always``: sleep long enough that any change
+       WOULD have shown up, then GET once and assert boot_mode still
+       reads ``pixie-flash-always``. Same /done POST fires from the
+       CLI; this side of the wire is what differs.
     2. Read the QEMU-side qcow2 blank disk raw and grep for the
        flash marker -- proves the CLI actually wrote the image (not
        just POSTed done and reboot-panicked). qemu-img convert to a
@@ -1292,26 +1295,37 @@ def _verify_flash_effects(seed_base: str, cfg, workspace: Path) -> int:
     boot_mode = str(cfg.get("flash_boot_mode", "pixie-flash-once"))
     url = f"{seed_base}/machines/{mac}"
     if boot_mode == "pixie-flash-once":
-        log.info(f"Polling for pixie-flash-once -> ipxe-exit flip: GET {url}")
+        log.info(f"Polling for pixie-flash-once flash record (flashed_at set): GET {url}")
         deadline = time.monotonic() + _FLASH_EFFECT_TIMEOUT_S
-        last_mode: str | None = None
+        last: str | None = None
         while time.monotonic() < deadline:
             try:
                 with urllib.request.urlopen(url, timeout=5) as resp:
                     body = json.loads(resp.read())
             except (urllib.error.URLError, OSError) as exc:
-                last_mode = f"transport: {exc}"
+                last = f"transport: {exc}"
                 time.sleep(3.0)
                 continue
-            last_mode = body.get("boot_mode")
-            if last_mode == "ipxe-exit":
-                log.info("Mode flipped to ipxe-exit (post-flash /done landed)")
+            if body.get("flashed_at"):
+                observed_mode = body.get("boot_mode")
+                if observed_mode != "pixie-flash-once":
+                    log.error(
+                        f"pixie-flash-once must NOT flip on /done; observed "
+                        f"boot_mode={observed_mode!r}. The one-shot is renderer-gated, "
+                        "not a mode mutation -- server-side regressed."
+                    )
+                    return errno.EPROTO
+                log.info(
+                    "flashed_at recorded and boot_mode stays pixie-flash-once "
+                    "(post-flash /done landed)"
+                )
                 break
+            last = body.get("boot_mode")
             time.sleep(3.0)
         else:
             log.error(
-                f"boot_mode did not flip to ipxe-exit within {_FLASH_EFFECT_TIMEOUT_S}s "
-                f"(last: {last_mode!r}); live-env flash pipeline never POSTed /done"
+                f"flashed_at not recorded within {_FLASH_EFFECT_TIMEOUT_S}s "
+                f"(last boot_mode: {last!r}); live-env flash pipeline never POSTed /done"
             )
             return errno.ETIMEDOUT
     else:
