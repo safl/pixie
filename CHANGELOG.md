@@ -11,6 +11,8 @@ operator-facing summary.
 
 ## [Unreleased]
 
+## [0.7.3] - 2026-07-29
+
 ### Fixed
 
 - **A fetched netboot bundle no longer shows up as an "orphan" image.** The
