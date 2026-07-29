@@ -11,6 +11,8 @@ operator-facing summary.
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-07-29
+
 ### Changed
 
 - **BREAKING: `nbdboot` split into `nbdboot-ephemeral` and `nbdboot-overlay`.**
