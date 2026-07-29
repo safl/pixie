@@ -36,9 +36,18 @@
     <div class="card-body">
         {% if live_env_ready %}
         <p class="small mb-3">
-            Image <code>{{ live_env_image_sha.effective[:12] }}</code> is fetched and
+            Image <code>{{ live_env_image_sha.effective[:12] }}</code>
+            <span class="badge text-bg-{% if live_env_image_sha.override %}primary{% elif live_env_image_sha.effective %}info{% else %}secondary{% endif %} ms-1"
+                  title="Where the selected sha comes from: 'override' = pinned in pixie's state.db (via Set up live env or POST /ui/live-env/image/edit); 'env' = the {{ live_env_image_sha.env }} deploy variable.">
+                {% if live_env_image_sha.override %}override{% elif live_env_image_sha.effective %}env{% else %}default{% endif %}
+            </span>
+            is fetched and
             selected; the <code>pixie-inventory</code> / <code>pixie-tui</code> /
             <code>pixie-flash-*</code> modes nbdboot it. Nothing else to do.
+            {% if not live_env_image_sha.override and live_env_image_sha.effective %}
+            <br><span class="text-muted">Pinned by the <code>{{ live_env_image_sha.env }}</code>
+            deploy variable; Set up live env would override it in the state.db.</span>
+            {% endif %}
         </p>
         {% else %}
         <p class="small mb-3">

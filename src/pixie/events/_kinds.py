@@ -86,7 +86,8 @@ EXPORT_REGISTERED = "export.registered"
 
 EXPORT_DELETED = "export.deleted"
 """Export row + running nbdkit torn down via DELETE /exports/<name>
-or POST /ui/exports/delete."""
+(API-only; ephemeral exports are auto-managed, so there is no UI
+delete)."""
 
 EXPORT_NBDKIT_SPAWNED = "export.nbdkit.spawned"
 """Supervisor spawned an nbdkit subprocess (fresh spawn or the
@@ -106,16 +107,17 @@ EXPORT_NBDKIT_EXITED = "export.nbdkit.exited"
 # ``qcow2_path`` as relevant.
 
 OVERLAY_CREATED = "overlay.created"
-"""An alias-keyed qcow2 overlay was materialised for the first time
-(lazy-created on the first nbdboot render, or after a Reset).
+"""An alias-keyed qcow2 overlay was materialised via the Create form on
+the Overlays page (POST /ui/overlays/create) -- the ONLY path that
+brings an overlay into being. The renderer never creates one.
 ``details`` carries ``alias``, ``image_sha``, and ``qcow2_path``."""
 
 OVERLAY_RESET = "overlay.reset"
-"""Operator hit Reset (one alias) or Prune (bulk) on the Overlays
+"""Operator hit Delete (one alias) or Prune (bulk) on the Overlays
 page: the qemu-nbd was terminated, the qcow2 unlinked, the overlays
-row deleted. ``subject_id`` is the alias for a single Reset, ``""``
+row deleted. ``subject_id`` is the alias for a single Delete, ``""``
 for a bulk Prune (``details.pruned`` counts the reclaimed volumes).
-Next plan render lazily creates a fresh overlay from the base."""
+The overlay is gone; recreate it on the Overlays page to use it again."""
 
 # ---------- machines + PXE ------------------------------------------
 #

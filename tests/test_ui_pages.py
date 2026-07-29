@@ -588,19 +588,6 @@ def test_ui_machine_detail_renders_inventory_sections(client: TestClient) -> Non
     assert "Samsung" in body
 
 
-def test_ui_exports_delete_removes_missing_export_silently(client: TestClient) -> None:
-    """A DELETE for an unknown export is 303 (not 500), landing on the
-    Images view where export usage now lives; consistent shape."""
-    c = _authed(client)
-    r = c.post(
-        "/ui/exports/delete",
-        data={"name": "nope"},
-        follow_redirects=False,
-    )
-    assert r.status_code == 303
-    assert r.headers["location"] == "/ui/images"
-
-
 def test_ui_dashboard_live_returns_stats(client: TestClient) -> None:
     """/ui/dashboard-live.json echoes the same stats the dashboard
     HTML renders so a poll updates counts in place."""

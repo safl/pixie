@@ -17,8 +17,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
-from pixie.events._kinds import MACHINE_DELETED
-from pixie.machines._bind_events import emit_bind_event
+from pixie.machines._bind_events import delete_machine_row, emit_bind_event
 from pixie.machines._store import (
     BOOT_MODES,
     BadMac,
@@ -176,9 +175,6 @@ def delete_machine(
         canon = normalise_mac(mac)
     except BadMac as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    if not _get_machines(request).delete(canon):
+    if not delete_machine_row(request.app.state, canon):
         raise HTTPException(status_code=404, detail=f"no machine {canon}")
-    log = getattr(request.app.state, "events_log", None)
-    if log is not None:
-        log.emit(MACHINE_DELETED, subject_kind="machine", subject_id=canon, summary=canon)
     return Response(status_code=204)

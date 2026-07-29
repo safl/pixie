@@ -11,6 +11,33 @@ operator-facing summary.
 
 ## [Unreleased]
 
+### Changed
+
+- **Overlays are never born on a boot.** The plan renderer no longer
+  lazy-creates an overlay qcow2 (or emits `overlay.created`) on a
+  `GET /pxe/<mac>`; overlays come into being only via the Create form on
+  the Overlays page. A machine bound to `nbdboot-overlay` whose qcow2 was
+  deleted out of band now renders an `unavailable` plan that says to
+  recreate it, instead of silently handing back a fresh empty disk.
+- **Deleting a machine is audited the same way from the UI as the API.**
+  `POST /ui/machines/delete` now emits `machine.deleted` (it used to go
+  silent) and releases any overlay single-writer hold the machine held,
+  through the same path as `DELETE /machines/<mac>` -- so a deleted MAC
+  can't orphan an overlay and the event log doesn't depend on which door
+  the delete came through.
+- **Removed the orphaned `POST /ui/exports/delete` route.** No page ever
+  offered the button, and deleting an auto-managed ephemeral export out
+  from under a booting machine is a footgun; the audited
+  `DELETE /exports/<name>` JSON route stays for power users. Persistent
+  overlays -- the volumes operators actually manage -- live on the
+  Overlays page.
+- **The Live env page shows where the selected image sha comes from.** An
+  override/env/default badge next to the effective sha (matching the
+  Extra cmdline field on the same page), and the previously env-only
+  `PIXIE_SESSION_SECRET`, `PIXIE_FETCH_RETRY`, `PIXIE_FETCH_RETRY_DELAY`,
+  and `PIXIE_FETCH_RETRY_MAX_TIME` variables are now documented in the
+  Settings > Deployment table.
+
 ## [0.7.0] - 2026-07-29
 
 ### Changed
