@@ -11,6 +11,14 @@ operator-facing summary.
 
 ## [Unreleased]
 
+### Changed
+
+- **Bind-mode picker on the machine page now reads least -> most invasive.**
+  Order is `ipxe-exit`, `pixie-inventory`, `pixie-tui`, `nbdboot`,
+  `pixie-flash-once`, `pixie-flash-always`. `nbdboot` moved up out of last
+  place: it runs a full OS but its root is overlay-on-tmpfs, so it never
+  writes the disk and is less invasive than either flash mode.
+
 ## [0.6.1] - 2026-07-29
 
 ### Changed

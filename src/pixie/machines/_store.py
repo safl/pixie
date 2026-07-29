@@ -67,11 +67,18 @@ DEFAULT_BOOT_MODE = "pixie-inventory"
 # tell a first ``machine.bound`` from a later ``machine.binding.changed``.
 UNCOMMITTED_BOOT_MODES: frozenset[str] = frozenset({"ipxe-exit", "pixie-inventory"})
 
-# Presentation metadata for the six boot modes. Ordered
-# passthrough -> diagnostic -> interactive -> destructive so the
-# radio-card picker on ``machine_detail.html`` reads roughly
-# left-to-right by blast radius (ipxe-exit is a no-op; the flash
-# modes rewrite the disk). Icons pulled from Bootstrap Icons.
+# Presentation metadata for the six boot modes. Ordered least ->
+# most invasive so the radio-card picker on ``machine_detail.html``
+# reads top-to-bottom by blast radius:
+#   ipxe-exit          no-op; boots the installed disk untouched
+#   pixie-inventory    live env reads hardware, posts it, exits
+#   pixie-tui          live env wizard; nothing happens without an operator
+#   nbdboot            runs a full ephemeral OS every boot; disk untouched
+#   pixie-flash-once   rewrites the disk once
+#   pixie-flash-always rewrites the disk on every boot
+# nbdboot sits above the idle/interactive modes (it commandeers the
+# box on every PXE) but below the flash modes (root is overlay-on-
+# tmpfs, so nothing persists). Icons pulled from Bootstrap Icons.
 #
 # Kept next to :data:`BOOT_MODES` on purpose: adding a mode without
 # a metadata row here trips the assertion below, so the picker
@@ -102,6 +109,14 @@ BOOT_MODE_META: tuple[tuple[str, dict[str, str]], ...] = (
         },
     ),
     (
+        "nbdboot",
+        {
+            "icon": "hdd-network",
+            "short": "Netboot over NBD",
+            "desc": "Stream the image over NBD; root is overlay-on-tmpfs. Nothing persists.",
+        },
+    ),
+    (
         "pixie-flash-once",
         {
             "icon": "download",
@@ -115,14 +130,6 @@ BOOT_MODE_META: tuple[tuple[str, dict[str, str]], ...] = (
             "icon": "arrow-clockwise",
             "short": "Flash every boot",
             "desc": "Re-flash the image on every PXE. Any local changes are discarded.",
-        },
-    ),
-    (
-        "nbdboot",
-        {
-            "icon": "hdd-network",
-            "short": "Netboot over NBD",
-            "desc": "Stream the image over NBD; root is overlay-on-tmpfs. Nothing persists.",
         },
     ),
 )
