@@ -607,15 +607,23 @@ def test_touch_seen_defaults_to_pixie_inventory(tmp_path: Path) -> None:
     assert m.boot_mode == "pixie-inventory"
 
 
-def test_touch_seen_honours_default_and_rejects_unknown(tmp_path: Path) -> None:
-    store = MachinesStore(tmp_path / "state.db")
-    assert store.touch_seen("aa:bb:cc:dd:ee:02", default_boot_mode="ipxe-exit").boot_mode == (
-        "ipxe-exit"
-    )
+def test_store_default_boot_mode_honoured_and_unknown_rejected(tmp_path: Path) -> None:
+    # The deploy default is resolved once and owned by the store, so it
+    # applies to every lazy-create path (touch_seen here).
+    store = MachinesStore(tmp_path / "a.db", default_boot_mode="ipxe-exit")
+    assert store.touch_seen("aa:bb:cc:dd:ee:02").boot_mode == "ipxe-exit"
     # An unknown value can't seed an unrenderable mode on every new MAC.
-    assert store.touch_seen("aa:bb:cc:dd:ee:03", default_boot_mode="bogus").boot_mode == (
-        "pixie-inventory"
-    )
+    bogus = MachinesStore(tmp_path / "b.db", default_boot_mode="bogus")
+    assert bogus.touch_seen("aa:bb:cc:dd:ee:03").boot_mode == "pixie-inventory"
+
+
+def test_store_default_boot_mode_applies_to_all_lazy_create_paths(tmp_path: Path) -> None:
+    """The divergence fix: a tag-first (set_labels) or inventory-first
+    (set_inventory) row uses the SAME deploy default as PXE discovery,
+    not the hardcoded pixie-inventory."""
+    store = MachinesStore(tmp_path / "state.db", default_boot_mode="ipxe-exit")
+    assert store.set_labels("aa:bb:cc:dd:ee:04", ["rack-1"]).boot_mode == "ipxe-exit"
+    assert store.set_inventory("aa:bb:cc:dd:ee:05", {"disks": []}).boot_mode == "ipxe-exit"
 
 
 def test_resolve_default_boot_mode_env_override(monkeypatch: pytest.MonkeyPatch) -> None:

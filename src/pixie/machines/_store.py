@@ -400,8 +400,16 @@ class Machine:
 
 
 class MachinesStore:
-    def __init__(self, db_path: Path) -> None:
+    def __init__(self, db_path: Path, *, default_boot_mode: str = DEFAULT_BOOT_MODE) -> None:
         self.db_path = Path(db_path)
+        # Boot mode a brand-new MAC auto-registers with, resolved once from
+        # the deploy's ``PIXIE_DEFAULT_BOOT_MODE`` and used by EVERY lazy
+        # row-create path (touch_seen on PXE discovery, set_labels on a
+        # tag-first edit, set_inventory on a stray inventory POST) so a
+        # machine's first-seen mode never depends on which door created it.
+        self._default_boot_mode = (
+            default_boot_mode if default_boot_mode in BOOT_MODES else DEFAULT_BOOT_MODE
+        )
         self._ensure_schema()
 
     def _ensure_schema(self) -> None:
@@ -561,18 +569,16 @@ class MachinesStore:
             row = conn.execute("SELECT * FROM machines WHERE mac = ?", (canon,)).fetchone()
         return _row(row)
 
-    def touch_seen(
-        self, mac: str, *, ip: str = "", default_boot_mode: str = DEFAULT_BOOT_MODE
-    ) -> Machine:
+    def touch_seen(self, mac: str, *, ip: str = "") -> Machine:
         """Discovery-side write: create-or-update ``last_seen_at`` +
         optionally ``last_seen_ip``. Does NOT touch operator fields.
 
-        A brand-new MAC is auto-registered with ``default_boot_mode``
-        (the deploy's ``PIXIE_DEFAULT_BOOT_MODE``, resolved by the
-        caller; falls back to :data:`DEFAULT_BOOT_MODE`). Unknown values
-        are refused here so a bad env can't seed an unrenderable mode."""
+        A brand-new MAC is auto-registered with the store's
+        :attr:`_default_boot_mode` (the deploy's ``PIXIE_DEFAULT_BOOT_MODE``,
+        resolved once at construction), the same default every lazy-create
+        path uses."""
         canon = normalise_mac(mac)
-        mode = default_boot_mode if default_boot_mode in BOOT_MODES else DEFAULT_BOOT_MODE
+        mode = self._default_boot_mode
         now = now_iso()
         with _DB_WRITE_LOCK, self._conn() as conn:
             existing = conn.execute("SELECT * FROM machines WHERE mac = ?", (canon,)).fetchone()
@@ -625,7 +631,7 @@ class MachinesStore:
                         labels, discovered_at, last_seen_at, last_seen_ip, updated_at
                     ) VALUES (?, ?, '', ?, ?, ?, '', ?)
                     """,
-                    (canon, DEFAULT_BOOT_MODE, labels_json, now, now, now),
+                    (canon, self._default_boot_mode, labels_json, now, now, now),
                 )
             else:
                 conn.execute(
@@ -692,7 +698,7 @@ class MachinesStore:
                         discovered_at, last_seen_at, last_seen_ip, updated_at
                     ) VALUES (?, ?, '', ?, ?, ?, ?, '', ?)
                     """,
-                    (canon, DEFAULT_BOOT_MODE, blob, now, now, now, now),
+                    (canon, self._default_boot_mode, blob, now, now, now, now),
                 )
             else:
                 conn.execute(

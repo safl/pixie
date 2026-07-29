@@ -570,8 +570,8 @@ class PixieTui:
         resolved_root = images.default_image_root()
         # ``server`` is the pixie URL or hostname (bare hostnames
         # get an ``http://`` scheme defaulted in below). Stored on the
-        # state so the header Panel can show it; also the base for
-        # ``/pxe/<mac>/done`` POST after a successful flash.
+        # state so the header Panel can show it; also the base for the
+        # ``POST /pxe/<mac>/status`` (status=done) call after a flash.
         self._server_url = _normalise_server_url(server)
         pxe_done = self._server_url if mac else None
         # Three startup paths:
@@ -841,7 +841,7 @@ class PixieTui:
            /ui/machines).
         2. Build the flash plan.
         3. Run the flash with the standard Rich progress bar.
-        4. POST ``/pxe/<mac>/done`` to the pixie.
+        4. POST ``/pxe/<mac>/status`` with ``status=done`` to the pixie.
         5. Reboot.
 
         On any failure: prints a red Panel + exits non-zero, no reboot.
@@ -2069,9 +2069,11 @@ class PixieTui:
         self._console.print(f"[{style}]pixie: {msg}[/]")
 
     def _post_pxe_done_if_configured(self) -> None:
-        """Best-effort: POST ``/pxe/<mac>/done`` after a successful
-        flash so the pixie server's last_flashed_at + pixie-flash-once
-        flip can fire. Failure is logged via the soft banner; does
+        """Best-effort: POST ``/pxe/<mac>/status`` with ``status=done``
+        after a successful flash so the pixie server records the flash
+        (``flashed_at`` + the image sha); for pixie-flash-once the
+        renderer then serves an exit plan on the next PXE without
+        changing boot_mode. Failure is logged via the soft banner; does
         NOT block the post-flash transition (lesson from v0.20.1).
         """
         if self._state.pxe_done_base is None or self._state.mac is None:

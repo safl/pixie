@@ -76,6 +76,35 @@ def test_add_entry_appears_in_catalog(client: TestClient) -> None:
     assert names == ["tiny"]
 
 
+def test_fetch_in_use_entry_requires_force(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A JSON-API re-fetch of an entry a machine is bound to is refused
+    409 unless ?force=true -- same in-use guard the operator UI enforces,
+    so an automation client can't silently rot bound machines by moving
+    the entry's content sha."""
+    client.post(
+        "/catalog/entries",
+        json={"name": "tiny", "src": "https://example.com/tiny.img.gz", "format": "img.gz"},
+    )
+    sha = "a" * 64
+    state = client.app.state  # type: ignore[attr-defined]
+    state.catalog_store.mark_fetched("tiny", content_sha256=sha, size_bytes=1)
+    state.machines_store.upsert_binding(
+        "aa:bb:cc:dd:ee:01", boot_mode="nbdboot-ephemeral", image_content_sha256=sha
+    )
+
+    # In use + no force -> refused, no fetch spawned.
+    r = client.post("/catalog/entries/tiny/fetch")
+    assert r.status_code == 409, r.text
+    assert "in use" in r.json()["detail"]
+
+    # force=true bypasses the gate (stub the real download).
+    monkeypatch.setattr("pixie.catalog._routes.run_fetch", lambda **kw: None)
+    r2 = client.post("/catalog/entries/tiny/fetch?force=true")
+    assert r2.status_code == 202, r2.text
+
+
 def test_add_entry_conflict_returns_409(client: TestClient) -> None:
     body = {"name": "dup", "src": "https://x/x.img.gz", "format": "img.gz"}
     assert client.post("/catalog/entries", json=body).status_code == 201
