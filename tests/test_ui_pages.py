@@ -76,6 +76,34 @@ def test_ui_machines_bind_form_bad_mac_silently_redirects(client: TestClient) ->
     assert "not-a-mac" not in body
 
 
+def test_list_action_redirect_preserves_the_filter(client: TestClient) -> None:
+    """An action form on a filtered list round-trips the page's query
+    string via return_qs so the operator's filter / sort / page survives
+    the POST instead of dumping them back to the unfiltered list. Uses
+    the unknown-entry fetch path so nothing actually downloads."""
+    c = _authed(client)
+    r = c.post(
+        "/ui/catalog/fetch",
+        data={"name": "does-not-exist", "return_qs": "q=ubuntu&sort=name"},
+        follow_redirects=False,
+    )
+    assert r.status_code == 303
+    assert r.headers["location"] == "/ui/catalog?q=ubuntu&sort=name"
+
+    # No return_qs -> bare list (no trailing '?').
+    r2 = c.post("/ui/catalog/fetch", data={"name": "nope"}, follow_redirects=False)
+    assert r2.headers["location"] == "/ui/catalog"
+
+    # CR/LF in return_qs can't inject into the Location header.
+    r3 = c.post(
+        "/ui/catalog/fetch",
+        data={"name": "nope", "return_qs": "q=x\r\nSet-Cookie: evil=1"},
+        follow_redirects=False,
+    )
+    loc = r3.headers["location"]
+    assert "\r" not in loc and "\n" not in loc
+
+
 def test_ui_catalog_and_machines_require_auth(client: TestClient) -> None:
     for path in ("/ui/catalog", "/ui/machines"):
         r = client.get(path, follow_redirects=False)

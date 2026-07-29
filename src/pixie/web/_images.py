@@ -55,6 +55,7 @@ class ImageView:
     overlays_total: int
     overlays_running: int  # qemu-nbd currently serving
     overlays_bytes: int
+    is_live_env: bool = False  # selected as the live-env image (a real usage)
 
     @property
     def orphan(self) -> bool:
@@ -80,8 +81,18 @@ class ImageView:
 
     @property
     def usage_count(self) -> int:
-        """Total live dependencies -- the refcount. 0 == safe to GC."""
-        return self.machines_count + len(self.export_ports) + self.overlays_total
+        """Total live dependencies -- the refcount. Counts machines
+        bound to this sha, running exports, overlays over it, and the
+        live-env selection (the LIVE_ENV_MODES machines nbdboot this
+        image via the global setting, not a per-machine bind, so it is a
+        real dependency the machine columns don't otherwise show). 0 ==
+        safe to GC."""
+        return (
+            self.machines_count
+            + len(self.export_ports)
+            + self.overlays_total
+            + (1 if self.is_live_env else 0)
+        )
 
     @property
     def in_use(self) -> bool:
@@ -99,9 +110,15 @@ def build_image_views(
     overlays: OverlaysStore,
     machines: MachinesStore,
     nbd: NbdServer,
+    live_env_image_sha: str = "",
 ) -> list[ImageView]:
     """Every fetched disk image, grouped by content sha, with its
-    footprint + machine / export / overlay usage rolled up."""
+    footprint + machine / export / overlay usage rolled up.
+
+    ``live_env_image_sha`` is the currently-selected live-env image (the
+    settings/env override); the matching image is marked ``is_live_env``
+    so it counts as in-use and can't be reclaimed out from under the
+    live-env boot modes."""
     entries = catalog.list_entries()
     by_src = {e.src: e for e in entries if e.src}
 
@@ -161,6 +178,7 @@ def build_image_views(
                 overlays_total=len(ovs),
                 overlays_running=ov_running,
                 overlays_bytes=ov_bytes,
+                is_live_env=bool(live_env_image_sha) and sha == live_env_image_sha,
             )
         )
 
@@ -168,8 +186,15 @@ def build_image_views(
     # un-GC'd junk left when an entry was deleted/re-pointed. Surface
     # them here (usage 0, no name) so they can be reclaimed; this is the
     # other half of the disk-pressure story the catalog can't see.
+    #
+    # ``known`` must be EVERY fetched entry's sha, not just the bindable
+    # image ``groups``: a netboot bundle (tar.gz, non-bindable, e.g. the
+    # arch-headless bundle the live-env setup fetches) has a real catalog
+    # entry + a blob dir, and is the boot form of its sibling image -- it
+    # is not orphan junk. Keying off ``groups`` alone mislabels every
+    # fetched bundle as an orphan.
     blobs_root = catalog.blob_path("_ref_").parent.parent
-    known = set(groups)
+    known = {e.content_sha256 for e in entries if e.content_sha256}
     with suppress(OSError):
         views.extend(
             ImageView(

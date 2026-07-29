@@ -68,6 +68,59 @@ def _seed(tmp: Path):
     return catalog, exports, overlays, machines
 
 
+def test_netboot_bundle_blob_is_not_flagged_orphan(tmp_path: Path) -> None:
+    """The fetch pipeline lands a blob dir for a tar.gz netboot bundle
+    too. Because the bundle is non-bindable it isn't a normal image
+    group, but it HAS a catalog entry, so it must not show up as an
+    orphan blob. A real orphan (blob dir with no entry) still does."""
+    catalog, exports, overlays, machines = _seed(tmp_path)
+    # Bundle blob on disk (what a real tar.gz fetch leaves behind).
+    bblob = catalog.blob_path(_BSHA)
+    bblob.parent.mkdir(parents=True, exist_ok=True)
+    bblob.write_bytes(b"\x00" * 512)
+    # A genuine orphan: a blob dir with NO catalog entry.
+    orphan_sha = "c" * 64
+    ob = catalog.blob_path(orphan_sha)
+    ob.parent.mkdir(parents=True, exist_ok=True)
+    ob.write_bytes(b"junk")
+
+    views = build_image_views(
+        catalog=catalog, exports=exports, overlays=overlays, machines=machines, nbd=_StubNbd()
+    )
+    # The bundle sha is neither a bindable image nor an orphan.
+    assert not any(v.sha == _BSHA for v in views)
+    # The genuine orphan is surfaced.
+    assert any(v.sha == orphan_sha and v.orphan for v in views)
+
+
+def test_live_env_image_counts_as_in_use(tmp_path: Path) -> None:
+    """The selected live-env image has no per-machine binding (the
+    LIVE_ENV_MODES machines nbdboot it via the global setting), so
+    without this it reads as usage 0 / reclaimable. Marking it live-env
+    makes it in-use so it can't be GC'd out from under those modes."""
+    catalog, exports, overlays, machines = _seed(tmp_path)
+    nbd = _StubNbd()
+
+    plain = build_image_views(
+        catalog=catalog, exports=exports, overlays=overlays, machines=machines, nbd=nbd
+    )
+    im = next(v for v in plain if v.sha == _SHA)
+    assert im.usage_count == 0 and im.in_use is False and im.is_live_env is False
+
+    selected = build_image_views(
+        catalog=catalog,
+        exports=exports,
+        overlays=overlays,
+        machines=machines,
+        nbd=nbd,
+        live_env_image_sha=_SHA,
+    )
+    im2 = next(v for v in selected if v.sha == _SHA)
+    assert im2.is_live_env is True
+    assert im2.in_use is True
+    assert im2.usage_count == 1
+
+
 def test_build_image_views_groups_and_rolls_up(tmp_path: Path) -> None:
     catalog, exports, overlays, machines = _seed(tmp_path)
     machines.upsert_binding(

@@ -611,6 +611,19 @@ def _machine_image_cell(machine: Any, image_names: dict[str, str]) -> tuple[str,
     return (sha, image_names.get(sha, ""))
 
 
+def _list_redirect(base: str, return_qs: str) -> RedirectResponse:
+    """303 back to a filtered list view, preserving the ``?q=...&sort=...``
+    query the action form round-tripped so the operator's filter / sort /
+    page survives the POST (instead of being dumped back to the unfiltered
+    list). ``return_qs`` is the raw query string of the page the form was
+    submitted from (``request.url.query`` in the template); CR/LF is
+    stripped so it can't inject a Location header, and it only ever
+    appends after ``?`` -- it can never change the ``base`` path."""
+    qs = "".join(ch for ch in (return_qs or "") if ch not in "\r\n").strip()
+    url = f"{base}?{qs}" if qs else base
+    return RedirectResponse(url=url, status_code=status.HTTP_303_SEE_OTHER)
+
+
 def _reset_overlay_row(state: Any, alias: str) -> bool:
     """Tear down one persistent overlay by ``alias``: terminate its
     qemu-nbd, unlink the qcow2, drop the ``overlays`` row, and emit
@@ -1648,6 +1661,7 @@ def create_app() -> FastAPI:
             overlays=state.overlays_store,
             machines=state.machines_store,
             nbd=state.nbd_server,
+            live_env_image_sha=state.settings_store.resolve_live_env_image_sha(),
         )
         return templates.TemplateResponse(
             request,
@@ -1670,6 +1684,7 @@ def create_app() -> FastAPI:
             overlays=state.overlays_store,
             machines=state.machines_store,
             nbd=state.nbd_server,
+            live_env_image_sha=state.settings_store.resolve_live_env_image_sha(),
         )
         return next((v for v in views if v.sha == sha), None)
 
@@ -1711,8 +1726,9 @@ def create_app() -> FastAPI:
 
         state = request.app.state
         image = _image_view_for(request, sha)
-        if image is None or image.usage_count > 0:
-            # Still in use (or already gone): bounce back, no-op.
+        if image is None or image.in_use:
+            # Still in use (bound machine / export / overlay / the live-env
+            # selection) or already gone: bounce back, no-op.
             return RedirectResponse(url="/ui/images", status_code=status.HTTP_303_SEE_OTHER)
 
         store = state.catalog_store
@@ -1776,6 +1792,7 @@ def create_app() -> FastAPI:
     def ui_machines_delete(
         request: Request,
         mac: str = Form(...),
+        return_qs: str = Form(""),
         _auth: None = Depends(_require_ui_auth),
     ) -> RedirectResponse:
         from pixie.machines._bind_events import delete_machine_row
@@ -1784,13 +1801,13 @@ def create_app() -> FastAPI:
         try:
             canon = normalise_mac(mac)
         except BadMac:
-            return RedirectResponse(url="/ui/machines", status_code=status.HTTP_303_SEE_OTHER)
+            return _list_redirect("/ui/machines", return_qs)
         # Same shared path as the JSON API: releases any overlay hold +
         # emits machine.deleted, so the audit trail no longer depends on
         # which door the delete came through.
         delete_machine_row(request.app.state, canon)
         set_flash(request, f"Deleted machine {canon}.", "success")
-        return RedirectResponse(url="/ui/machines", status_code=status.HTTP_303_SEE_OTHER)
+        return _list_redirect("/ui/machines", return_qs)
 
     @app.post("/ui/machines/re-inventory")
     def ui_machines_re_inventory(
@@ -1985,6 +2002,7 @@ def create_app() -> FastAPI:
             overlays=overlays_store,
             machines=machines_store,
             nbd=nbd,
+            live_env_image_sha=request.app.state.settings_store.resolve_live_env_image_sha(),
         )
         images_bytes = sum(v.footprint_bytes for v in image_views)
         images_reclaimable = sum(1 for v in image_views if not v.in_use)
@@ -2084,6 +2102,7 @@ def create_app() -> FastAPI:
     def ui_events_ack(
         request: Request,
         next: str = Form("/ui/"),
+        return_qs: str = Form(""),
         _auth: None = Depends(_require_ui_auth),
     ) -> RedirectResponse:
         """Advance the events-ack cursor to now so the dashboard's
@@ -2103,12 +2122,16 @@ def create_app() -> FastAPI:
         from pixie._util import now_iso as _ack_now
 
         request.app.state.settings_store.set_value("events_ack_ts", _ack_now())
+        # ``next`` picks the base page (dashboard vs events); return_qs
+        # carries the events-page filter so an ack from a filtered view
+        # lands back on the same filter.
         target = next if next.startswith("/ui/") else "/ui/"
-        return RedirectResponse(url=target, status_code=status.HTTP_303_SEE_OTHER)
+        return _list_redirect(target, return_qs)
 
     @app.post("/ui/events/clear")
     def ui_events_clear(
         request: Request,
+        return_qs: str = Form(""),
         _auth: None = Depends(_require_ui_auth),
     ) -> RedirectResponse:
         """Wipe the whole event log, then drop one ``events.cleared``
@@ -2126,7 +2149,7 @@ def create_app() -> FastAPI:
             details={"removed": removed},
         )
         request.app.state.settings_store.set_value("events_ack_ts", _ack_now())
-        return RedirectResponse(url="/ui/events", status_code=status.HTTP_303_SEE_OTHER)
+        return _list_redirect("/ui/events", return_qs)
 
     # ---------- live fetch progress ---------------------------------
     #
@@ -2239,12 +2262,13 @@ def create_app() -> FastAPI:
         request: Request,
         name: str = Form(...),
         force: str = Form(""),
+        return_qs: str = Form(""),
         _auth: None = Depends(_require_ui_auth),
     ) -> RedirectResponse:
         store = request.app.state.catalog_store
         entry = store.get_entry(name)
         if entry is None:
-            return RedirectResponse(url="/ui/catalog", status_code=status.HTTP_303_SEE_OTHER)
+            return _list_redirect("/ui/catalog", return_qs)
 
         # Update-fetch guard. A fetch on an already-fetched entry
         # ("Update" in the UI) re-runs the pipeline; if the sha shifts
@@ -2303,12 +2327,12 @@ def create_app() -> FastAPI:
                     states.pop(name, None)
 
             request.app.state.fetch_pool.submit(_clear_unchanged)
-            return RedirectResponse(url="/ui/catalog", status_code=status.HTTP_303_SEE_OTHER)
+            return _list_redirect("/ui/catalog", return_qs)
 
         # Atomic in-flight claim (shared with the JSON API): if a fetch is
         # already running for this entry, bounce without spawning a second.
         if not claim_fetch_slot(states, name):
-            return RedirectResponse(url="/ui/catalog", status_code=status.HTTP_303_SEE_OTHER)
+            return _list_redirect("/ui/catalog", return_qs)
         if events is not None:
             events.emit(
                 CATALOG_FETCH_STARTED,
@@ -2342,13 +2366,14 @@ def create_app() -> FastAPI:
                 )
 
         request.app.state.fetch_pool.submit(_bg)
-        return RedirectResponse(url="/ui/catalog", status_code=status.HTTP_303_SEE_OTHER)
+        return _list_redirect("/ui/catalog", return_qs)
 
     @app.post("/ui/catalog/delete")
     def ui_catalog_delete(
         request: Request,
         name: str = Form(...),
         force: str = Form(""),
+        return_qs: str = Form(""),
         _auth: None = Depends(_require_ui_auth),
     ) -> RedirectResponse:
         """Delete a catalog entry. Relation-aware: when the entry has
@@ -2366,7 +2391,7 @@ def create_app() -> FastAPI:
         store = request.app.state.catalog_store
         entry = store.get_entry(name)
         if entry is None:
-            return RedirectResponse(url="/ui/catalog", status_code=status.HTTP_303_SEE_OTHER)
+            return _list_redirect("/ui/catalog", return_qs)
         if not force:
             # Compute the relations for this entry so we know whether
             # deletion would break someone.
@@ -2407,7 +2432,7 @@ def create_app() -> FastAPI:
                 summary=name,
                 details={"forced": bool(force)},
             )
-        return RedirectResponse(url="/ui/catalog", status_code=status.HTTP_303_SEE_OTHER)
+        return _list_redirect("/ui/catalog", return_qs)
 
     @app.post("/ui/catalog/delete-blob")
     def ui_catalog_delete_blob(
