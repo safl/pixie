@@ -333,12 +333,15 @@ def test_ui_overlays_create_materializes_qcow2_and_row(
     assert "overlay.created" in kinds
 
 
-def test_ui_overlays_create_rejects_dup_bad_and_unfetched(client: TestClient) -> None:
+def test_ui_overlays_create_rejects_dup_bad_and_unfetched(
+    client: TestClient, monkeypatch: object
+) -> None:
     """Create refuses a duplicate alias, a malformed alias, and an image
     whose blob is not on disk -- each leaves no new overlay behind."""
     c = authed(client)
     state = client.app.state
     _seed_fetched_image(state)
+    _stub_create_qcow2(monkeypatch)
 
     # First create wins.
     assert (
