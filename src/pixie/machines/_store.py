@@ -283,9 +283,7 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
         "UPDATE machines SET boot_mode = 'nbdboot-overlay' "
         "WHERE boot_mode = 'nbdboot' AND overlay_alias != ''"
     )
-    conn.execute(
-        "UPDATE machines SET boot_mode = 'nbdboot-ephemeral' WHERE boot_mode = 'nbdboot'"
-    )
+    conn.execute("UPDATE machines SET boot_mode = 'nbdboot-ephemeral' WHERE boot_mode = 'nbdboot'")
 
 
 def parse_labels(raw: str) -> list[str]:
