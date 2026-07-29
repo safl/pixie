@@ -293,13 +293,31 @@ def _seed_fetched_image(state: object, name: str = "ubuntu") -> None:
     blob.write_bytes(b"\0" * 1024)
 
 
-def test_ui_overlays_create_materializes_qcow2_and_row(client: TestClient) -> None:
+def _stub_create_qcow2(monkeypatch: object) -> None:
+    """Replace the real ``qemu-img create`` shell-out with a stub that
+    just touches the target file, so the create-route unit tests exercise
+    the route logic without depending on qemu-img (absent in the lint +
+    typecheck + pytest CI job; the real call is covered in integration)."""
+
+    def _fake(qcow2_path: Path, base_path: Path) -> None:
+        Path(qcow2_path).parent.mkdir(parents=True, exist_ok=True)
+        Path(qcow2_path).write_bytes(b"")
+
+    monkeypatch.setattr(  # type: ignore[attr-defined]
+        "pixie.exports._supervisor.NbdServer.create_qcow2", staticmethod(_fake)
+    )
+
+
+def test_ui_overlays_create_materializes_qcow2_and_row(
+    client: TestClient, monkeypatch: object
+) -> None:
     """Create makes the overlay explicit: a real qcow2 on disk (no
     ``pending`` limbo) + a row over the chosen image + an OVERLAY_CREATED
     event. This is the ONLY path that brings an overlay into being."""
     c = authed(client)
     state = client.app.state
     _seed_fetched_image(state)
+    _stub_create_qcow2(monkeypatch)
 
     r = c.post(
         "/ui/overlays/create",
