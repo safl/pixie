@@ -1274,18 +1274,18 @@ def create_app() -> FastAPI:
             for e in request.app.state.catalog_store.list_entries()
             if getattr(e, "bindable", False)
         ]
-        # Overlay aliases over THIS machine's currently-bound base image.
-        # ALL of them are surfaced -- free, held here, and held by another
-        # machine -- so the operator sees an alias exists even when it is
-        # single-writer-locked elsewhere (the template renders those
-        # disabled with the holder MAC) rather than assuming the name is
-        # free and hitting a rejected bind. Empty until the machine's been
-        # bound to a real image + at least one overlay over it exists.
-        overlay_aliases: list[Any] = []
-        if machine.image_content_sha256:
-            overlay_aliases = list(
-                request.app.state.overlays_store.list_for_image(machine.image_content_sha256)
-            )
+        # Overlay aliases for the nbdboot-overlay picker. ALL overlays are
+        # surfaced regardless of the machine's currently-bound image,
+        # because selecting an overlay IMPLIES its base image (the picker
+        # is how the operator chooses the image in this mode). Each is
+        # shown free / held-here / held-elsewhere (the last rendered
+        # disabled with the holder MAC) so the operator sees single-writer
+        # locks up front instead of hitting a rejected bind. Overlays are
+        # created on the Overlays page; this form never creates one.
+        overlay_aliases = list(request.app.state.overlays_store.list_all())
+        overlay_image_names = {
+            e.content_sha256: e.name for e in bindable_entries if e.content_sha256
+        }
         # Plain-English narration of what the next PXE will do given
         # the current bind. Rendered into the preview panel so an
         # operator sees a real description on page load, not a bare
@@ -1314,6 +1314,7 @@ def create_app() -> FastAPI:
                 "bindable_entries": bindable_entries,
                 "boot_mode_meta": BOOT_MODE_META,
                 "overlay_aliases": overlay_aliases,
+                "overlay_image_names": overlay_image_names,
                 "initial_bind_preview": initial_bind_preview,
                 "global_live_env_extra_cmdline": (
                     request.app.state.settings_store.resolve_live_env_extra_cmdline()
@@ -1333,7 +1334,6 @@ def create_app() -> FastAPI:
         target_disk_serial: str = Form(""),
         extra_cmdline: str = Form(""),
         overlay_alias: str = Form(""),
-        overlay_alias_new: str = Form(""),
         _auth: None = Depends(_require_ui_auth),
     ) -> RedirectResponse:
         """Persist a boot-mode binding. Labels are edited on their
@@ -1348,38 +1348,36 @@ def create_app() -> FastAPI:
         survive the bind untouched via ``upsert_binding`` pulling them
         off the current row.
 
-        ``overlay_alias`` carries the picker's chosen value; a magic
-        ``__new`` sentinel says "take ``overlay_alias_new`` as a new
-        alias name". Attaching an existing alias IMPLIES its base image
-        (the machine's ``image_content_sha256`` is overridden to the
-        overlay's). A new alias is created over the base image the
-        operator selected in the image dropdown. Single-writer: an alias
-        already held by a DIFFERENT machine is refused (the bind is
-        dropped); the operator must detach it there first. Blank / a
-        ``__new`` without a name / a new alias with no base image all
-        fold back to ephemeral."""
+        ``overlay_alias`` carries the picker's chosen value (only
+        meaningful for ``boot_mode='nbdboot-overlay'``). Attaching an
+        overlay IMPLIES its base image (the machine's
+        ``image_content_sha256`` is overridden to the overlay's).
+        Select-only: the overlay must already exist (created on the
+        Overlays page); a non-existent or malformed alias is refused
+        (the bind is dropped, ``?bind_error=`` explains why). Single-
+        writer: an alias held by a DIFFERENT machine is refused; the
+        operator must detach it there first. Every other mode ignores
+        ``overlay_alias`` and folds back to no overlay."""
         from urllib.parse import quote
 
         from pixie.machines._store import BadMac, normalise_mac
         from pixie.web._overlay_bind import overlay_state, resolve_overlay_bind
 
         choice = overlay_alias.strip()
-        if choice == "__new":
-            choice = overlay_alias_new.strip()
         try:
             canon = normalise_mac(mac)
             store = request.app.state.machines_store
-            overlays, overlays_dir = overlay_state(request.app.state)
+            overlays, _overlays_dir = overlay_state(request.app.state)
             current = store.get(canon)
             existing_labels = list(current.labels) if current else []
 
-            # Single-writer + alias-implies-image + lazy row-create all
-            # live in the shared resolver so the JSON API behaves the
-            # same. A held-elsewhere alias raises ValueError -> surfaced
-            # back on the detail page (no partial state is written).
+            # Single-writer + alias-implies-image + select-only (never
+            # create) all live in the shared resolver so the JSON API
+            # behaves the same. A held-elsewhere or non-existent alias
+            # raises ValueError -> surfaced back on the detail page (no
+            # partial state is written).
             image_sha, resolved = resolve_overlay_bind(
                 overlays=overlays,
-                overlays_dir=overlays_dir,
                 mac=canon,
                 boot_mode=boot_mode,
                 image_sha=image_content_sha256.strip().lower(),
@@ -1409,26 +1407,10 @@ def create_app() -> FastAPI:
         set_flash(request, f"Bound {canon} to {boot_mode}.", "success")
         return RedirectResponse(url="/ui/machines", status_code=status.HTTP_303_SEE_OTHER)
 
-    @app.post("/ui/machines/{mac}/overlay/reset")
-    def ui_machines_overlay_reset(
-        request: Request,
-        mac: str,
-        alias: str = Form(...),
-        _auth: None = Depends(_require_ui_auth),
-    ) -> RedirectResponse:
-        """Terminate the qemu-nbd for this overlay, unlink the qcow2,
-        and drop the overlays row. Next plan render lazily recreates
-        a fresh qcow2 from the base blob. Idempotent: missing row or
-        missing file are both no-ops (row still gets deleted).
-
-        Confirm-modal is on the client. Server-side just carries the
-        deletion out. Any operator who lands here without confirming
-        picked the button already."""
-        _reset_overlay_row(request.app.state, alias)
-        set_flash(
-            request, f"Overlay {alias!r} reset; a fresh qcow2 is created on next boot.", "success"
-        )
-        return RedirectResponse(url=f"/ui/machines/{mac}", status_code=status.HTTP_303_SEE_OTHER)
+    # Overlay lifecycle (create / delete / prune) lives solely on the
+    # Overlays page now -- see the /ui/overlays/* routes below. The
+    # machine bind form only SELECTS an existing overlay, so there is no
+    # per-machine overlay-reset route any more.
 
     # ---------- ui: overlays management -----------------------------
     #
@@ -1466,6 +1448,15 @@ def create_app() -> FastAPI:
         overlay_events = [
             e for e in request.app.state.events_log.list(limit=200) if e.kind.startswith("overlay.")
         ][:_RECENT_EVENTS_LIMIT]
+        # Base images for the Create form: fetched, bindable disk images
+        # (a backing_file needs the blob present). Same filter the machine
+        # bind form uses, so the two pickers agree on what is layer-able.
+        catalog = request.app.state.catalog_store
+        base_images = [
+            e
+            for e in catalog.list_entries()
+            if getattr(e, "bindable", False) and getattr(e, "fetched", False)
+        ]
         return templates.TemplateResponse(
             request,
             "overlays.html",
@@ -1474,6 +1465,7 @@ def create_app() -> FastAPI:
                 "overlays": views,
                 "totals": overlay_totals(views),
                 "overlay_events": overlay_events,
+                "base_images": base_images,
                 "authed": True,
                 "page": "overlays",
             },
@@ -1495,19 +1487,81 @@ def create_app() -> FastAPI:
             rows[v.key] = j
         return JSONResponse({"rows": rows, "totals": overlay_totals(views).to_json()})
 
-    @app.post("/ui/overlays/reset")
-    def ui_overlays_reset(
+    @app.post("/ui/overlays/create")
+    def ui_overlays_create(
+        request: Request,
+        alias: str = Form(...),
+        image_content_sha256: str = Form(...),
+        _auth: None = Depends(_require_ui_auth),
+    ) -> RedirectResponse:
+        """Create a persistent overlay explicitly: validate the alias,
+        materialize the qcow2 over the chosen (already-fetched) base
+        image, and record the row. This is the ONLY way an overlay comes
+        into being -- selecting one on a machine never creates it, just
+        as selecting an image never fetches it. Emits ``overlay.created``
+        and lands the new overlay in the ``free`` state, ready to attach."""
+        from pixie.events._kinds import OVERLAY_CREATED
+        from pixie.exports._store import Overlay
+        from pixie.exports._supervisor import NbdServer, preferred_serve_path
+        from pixie.machines._store import OVERLAY_ALIAS_RE
+        from pixie.pxe._renderer import overlay_qcow2_path
+        from pixie.web._overlay_bind import overlay_state
+
+        def _fail(msg: str) -> RedirectResponse:
+            set_flash(request, msg, "danger")
+            return RedirectResponse(url="/ui/overlays", status_code=status.HTTP_303_SEE_OTHER)
+
+        alias = alias.strip()
+        sha = image_content_sha256.strip().lower()
+        overlays, overlays_dir = overlay_state(request.app.state)
+        if not OVERLAY_ALIAS_RE.match(alias):
+            return _fail(
+                "Alias must be alphanumeric-leading; a-z / A-Z / 0-9 / . _ - (max 64 chars)."
+            )
+        if overlays.get(alias) is not None:
+            return _fail(f"Overlay {alias!r} already exists; pick a different alias.")
+        catalog = request.app.state.catalog_store
+        entry = next(
+            (e for e in catalog.list_entries() if e.content_sha256 == sha and e.content_sha256),
+            None,
+        )
+        if entry is None:
+            return _fail("Select a base image to layer the overlay over.")
+        blob = catalog.blob_path(sha)
+        if not blob.is_file():
+            return _fail(f"Base image {entry.name!r} is not fetched; fetch it first.")
+
+        qcow2 = overlay_qcow2_path(overlays_dir, alias)
+        try:
+            NbdServer.create_qcow2(qcow2, preferred_serve_path(blob))
+        except RuntimeError as exc:
+            return _fail(f"Could not create the overlay qcow2: {exc}")
+        overlays.upsert(Overlay(alias=alias, image_sha=sha, qcow2_path=str(qcow2)))
+        events = getattr(request.app.state, "events_log", None)
+        if events is not None:
+            events.emit(
+                OVERLAY_CREATED,
+                subject_kind="overlay",
+                subject_id=alias,
+                summary=f"overlay {alias!r} created over image {sha[:12]}",
+                details={"alias": alias, "image_sha": sha, "qcow2_path": str(qcow2)},
+            )
+        set_flash(request, f"Overlay {alias!r} created over {entry.name}.", "success")
+        return RedirectResponse(url="/ui/overlays", status_code=status.HTTP_303_SEE_OTHER)
+
+    @app.post("/ui/overlays/delete")
+    def ui_overlays_delete(
         request: Request,
         alias: str = Form(...),
         _auth: None = Depends(_require_ui_auth),
     ) -> RedirectResponse:
-        """Tear down a single overlay from the Overlays page. Same
-        operation as the per-machine Reset button; redirects back to
-        the overlays list instead of the machine detail."""
+        """Delete a single overlay: terminate its qemu-nbd, unlink the
+        qcow2, and drop the row. A machine bound to it via nbdboot-overlay
+        renders ``unavailable`` until rebound. This is the deliberate
+        counterpart to Create; to wipe an overlay's contents, delete and
+        create a fresh one."""
         _reset_overlay_row(request.app.state, alias)
-        set_flash(
-            request, f"Overlay {alias!r} reset; a fresh qcow2 is created on next boot.", "success"
-        )
+        set_flash(request, f"Overlay {alias!r} deleted.", "success")
         return RedirectResponse(url="/ui/overlays", status_code=status.HTTP_303_SEE_OTHER)
 
     @app.post("/ui/overlays/prune")

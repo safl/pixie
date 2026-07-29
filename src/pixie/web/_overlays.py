@@ -144,7 +144,9 @@ def build_overlay_view(
     # "held by a MAC pixie forgot" (orphaned, reclaimable).
     machine = machines.get(ov.attached_mac) if ov.attached_mac else None
     is_active = bool(
-        machine is not None and machine.boot_mode == "nbdboot" and machine.overlay_alias == ov.alias
+        machine is not None
+        and machine.boot_mode == "nbdboot-overlay"
+        and machine.overlay_alias == ov.alias
     )
     if not exists:
         # No qcow2 on disk. Never booted -> the file just hasn't been

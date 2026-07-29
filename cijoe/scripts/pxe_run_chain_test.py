@@ -773,7 +773,7 @@ def _terminate(proc, what: str, sudo: bool = False) -> None:
 def _seed_nbdboot_and_bind(seed_base: str, admin_password: str, cfg) -> int:
     """Import the real nosi catalog, trigger fetch on the paired
     disk-image + netboot-bundle entries, wait for both content_sha256
-    values, then PUT /machines/<mac> with boot_mode=nbdboot bound to
+    values, then PUT /machines/<mac> with boot_mode=nbdboot-ephemeral bound to
     the disk sha. Returns 0 on success, an errno on any failure
     (already logged).
 
@@ -831,7 +831,7 @@ def _seed_nbdboot_and_bind(seed_base: str, admin_password: str, cfg) -> int:
     except Exception as exc:
         log.error(f"machine bind failed: {exc}")
         return errno.EPROTO
-    log.info(f"Machine {mac} bound to boot_mode=nbdboot (real nosi disk + bundle)")
+    log.info(f"Machine {mac} bound to boot_mode=nbdboot-ephemeral (real nosi disk + bundle)")
     return 0
 
 
@@ -1019,7 +1019,7 @@ def _verify_server_inventory(base: str, mac: str) -> int:
 
 
 def _bind_machine(base: str, cookie: str, mac: str, image_sha: str) -> None:
-    body = {"boot_mode": "nbdboot", "image_content_sha256": image_sha}
+    body = {"boot_mode": "nbdboot-ephemeral", "image_content_sha256": image_sha}
     data = json.dumps(body).encode("utf-8")
     req = urllib.request.Request(
         f"{base}/machines/{mac}",

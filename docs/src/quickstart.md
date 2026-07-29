@@ -78,7 +78,7 @@ the card grid, pick an image, and Save. On the target's next PXE,
 pixie serves the plan you bound.
 
 See [](boot-modes.md) for what each mode does and how bindings pin a
-machine to an image and, for `nbdboot`, an overlay volume.
+machine to an image and, for `nbdboot-overlay`, an overlay volume.
 
 ## Tear it down
 

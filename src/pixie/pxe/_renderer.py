@@ -143,8 +143,10 @@ class PlanRenderer:
         effective_extra = machine.extra_cmdline or ctx.extra_cmdline
         if mode == "ipxe-exit":
             return self._env.get_template("exit.j2").render(mac=machine.mac)
-        if mode == "nbdboot":
-            return self._render_nbdboot(machine, ctx, effective_extra)
+        if mode == "nbdboot-ephemeral":
+            return self._render_nbdboot(machine, ctx, effective_extra, persist=False)
+        if mode == "nbdboot-overlay":
+            return self._render_nbdboot(machine, ctx, effective_extra, persist=True)
         if mode == "pixie-inventory" and machine.inventory:
             # One-shot inventory: this machine has already reported. Serve
             # an exit plan (boot the local disk) WITHOUT changing
@@ -168,7 +170,14 @@ class PlanRenderer:
 
     # ---------- nbdboot resolution ---------------------------------
 
-    def _render_nbdboot(self, machine: Machine, ctx: RenderContext, extra_cmdline: str = "") -> str:
+    def _render_nbdboot(
+        self,
+        machine: Machine,
+        ctx: RenderContext,
+        extra_cmdline: str = "",
+        *,
+        persist: bool,
+    ) -> str:
         image_sha = machine.image_content_sha256
         if not image_sha:
             return self._unavailable(
@@ -179,15 +188,19 @@ class PlanRenderer:
             return self._unavailable(machine, resolved)
         bundle_entry, blob = resolved
 
-        # Persistent overlay path: if the machine's bind carries a
-        # non-blank ``overlay_alias``, serve that alias's qcow2 via
-        # qemu-nbd instead of the shared read-only blob via nbdkit.
-        # Client mounts /dev/nbd0 read-write directly (no tmpfs+overlayfs
-        # on the client side); writes land in the qcow2 and persist
-        # across reboots. The overlay row is created at bind time; the
-        # qcow2 file is lazy-created here on the first render.
-        if machine.overlay_alias:
+        # Persistent overlay path (``nbdboot-overlay``): serve the bound
+        # alias's qcow2 via qemu-nbd instead of the shared read-only blob
+        # via nbdkit. Client mounts /dev/nbd0 read-write directly (no
+        # tmpfs+overlayfs on the client side); writes land in the qcow2
+        # and persist across reboots. The overlay row is created up front
+        # on the Overlays page; the qcow2 is materialized there too, but
+        # keep a defensive lazy-create here so a wiped file self-heals.
+        if persist:
             alias = machine.overlay_alias
+            if not alias:
+                return self._unavailable(
+                    machine, "nbdboot-overlay has no overlay bound; select one on this machine"
+                )
             overlay = self._overlays.get(alias)
             if overlay is None:
                 return self._unavailable(

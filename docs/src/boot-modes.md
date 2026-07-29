@@ -6,7 +6,7 @@ whose shape depends on the mode. The bind form on the machine detail
 page picks the mode by clicking a card; the JSON API accepts the same
 tokens.
 
-## The six modes
+## The seven modes
 
 ### `ipxe-exit`
 
@@ -58,29 +58,31 @@ image; any local changes between reboots are discarded. Useful
 for CI reflash loops where the target is expected to boot from a
 known-clean image each cycle.
 
-### `nbdboot`
+### `nbdboot-ephemeral`
 
 The target boots the image's OWN kernel (extracted from the sibling
-netboot bundle) and mounts the image over NBD. By default, root is an
+netboot bundle) and mounts the image over NBD. Root is an
 overlay-on-tmpfs: writes go to RAM, nothing propagates back to the
-source blob. Multiple targets can nbdboot the same image
-simultaneously because they each get their own overlay.
+source blob and nothing survives a reboot. Multiple targets can
+`nbdboot-ephemeral` the same image simultaneously because they each get
+their own tmpfs overlay.
 
-**Persistent overlays** flip a target from ephemeral to dev mode
-without changing anything else about the bind. On the machine detail
-page, the `Overlay alias` field is blank by default (ephemeral,
-unchanged behaviour) or names a persistent overlay volume (e.g.
-`simon`, `karl`, `ci-with-nvme-tools`). A non-blank alias attaches a
-qcow2 volume with the image's base blob as `backing_file`, served by
-`qemu-nbd` at a dedicated port. The target mounts the NBD device
-read-write; system-level changes (apt-installed packages,
-hardware-specific config, kernel modules) land on the qcow2 and
-survive reboots.
+### `nbdboot-overlay`
 
-An overlay is a **globally-unique named volume over one base image**,
-not a per-machine file. See [](#overlays-are-volumes-not-per-machine-files)
-below for how the alias, its base image, and single-writer access
-work.
+Same netboot path, but root is a **persistent qcow2 overlay** instead
+of tmpfs: a writable volume with the image's base blob as
+`backing_file`, served by `qemu-nbd` at a dedicated port. The target
+mounts the NBD device read-write; system-level changes (apt-installed
+packages, hardware-specific config, kernel modules) land on the qcow2
+and survive reboots. This is dev mode: same image, durable writes.
+
+The overlay must **already exist** before you can bind to it. You
+create it on the Overlays page (`/ui/overlays`), then select it on the
+machine's bind form, exactly as you fetch an image on the Catalog page
+before binding it. Selecting an overlay never creates one. The overlay
+is a **globally-unique named volume over one base image**, not a
+per-machine file, and it implies its own base image; see
+[](#overlays-are-volumes-not-per-machine-files) below.
 
 **Kexec into a locally-installed kernel.** The netboot bundle owns
 the kernel and initrd pixie serves. Installing `linux-image-*` on the
@@ -106,36 +108,42 @@ the image's base blob. There is no `(mac, image, profile)` key and no
 per-machine directory; two machines cannot mint independent files
 under the same name, because the name is the volume.
 
-**The alias implies its image.** Attaching an *existing* alias binds
-the machine to that overlay's base image; you don't re-pick the image
-on the bind form, the volume already knows it. Attaching a *new* alias
-takes the image you selected and lays a fresh qcow2 over it. Because
-the alias carries the image, moving a volume between machines is just
-re-binding the alias; the base image follows.
+**The alias implies its image.** Attaching an alias binds the machine
+to that overlay's base image; you don't re-pick the image on the bind
+form, the volume already knows it. Overlays are created on the Overlays
+page over a chosen base image, never conjured by a bind, so the bind
+form only ever *selects* an existing one. Because the alias carries the
+image, moving a volume between machines is just re-binding the alias;
+the base image follows.
 
 **Single-writer, enforced in the app.** At most one machine holds an
 alias at a time. Binding an alias already attached to another machine
 is refused ("overlay `<alias>` held by `<mac>`; detach first") on both
 the operator form and the `PUT /machines/{mac}` API, before any qcow2
 is touched. The qemu qcow2 lock is the backstop; the app-level check
-is the operator-facing guard. Rebinding a machine to ephemeral, to a
-different alias, or to a non-`nbdboot` mode releases the hold it had.
+is the operator-facing guard. Rebinding a machine to a different
+overlay, or to any non-`nbdboot-overlay` mode (including
+`nbdboot-ephemeral`), releases the hold it had.
 
-**Managing volumes.** The Overlays page (`/ui/overlays`) lists every
-volume with its state: *serving* (a live machine is bound to it and
+**Managing volumes.** The Overlays page (`/ui/overlays`) is where every
+overlay is created, listed, and removed. **Create** materializes a
+fresh qcow2 over a chosen (already-fetched) base image up front, so the
+overlay genuinely exists the moment it appears in the list. Each row
+shows its state: *serving* (a live machine is bound to it and
 `qemu-nbd` is up), *held* (attached to a machine, nothing serving),
 *free* (unattached, kept for a future bind), *orphaned* (attached to a
-MAC with no machine row), or *missing* (the qcow2 is gone). **Reset**
-tears down `qemu-nbd` and unlinks one volume's qcow2 so the next boot
-lazy-creates it fresh from the base; **Prune** reclaims the junk
-states (orphaned + missing) in bulk and deliberately leaves free
-volumes alone.
+MAC with no machine row), or *missing* (the qcow2 is gone). **Delete**
+tears down `qemu-nbd` and removes one volume entirely (qcow2 + row); to
+wipe an overlay clean, delete it and create a fresh one. **Prune**
+reclaims the junk states (orphaned + missing) in bulk and deliberately
+leaves free volumes alone.
 
 ## Bindings
 
 A binding is what pixie serves a MAC next time it PXEs: a boot mode,
-plus (for the modes that need one) an image, plus (for `nbdboot`) an
-optional overlay alias. A fresh MAC auto-registers with
+plus (for the modes that need one) an image, plus (for
+`nbdboot-overlay`) the selected overlay alias. A fresh MAC
+auto-registers with
 `PIXIE_DEFAULT_BOOT_MODE` (default `pixie-inventory`, which
 self-terminates to `ipxe-exit` after one inventory pass) and no image
 on first contact; the machine detail page is where an operator promotes
@@ -156,7 +164,8 @@ names the reason, rather than serving a broken boot.
 | `pixie-tui` | no | no | no |
 | `pixie-flash-once` | yes | yes | yes |
 | `pixie-flash-always` | yes | yes | yes |
-| `nbdboot` | yes (with sibling netboot bundle) | no | no |
+| `nbdboot-ephemeral` | yes (with sibling netboot bundle) | no | no |
+| `nbdboot-overlay` | implied by the overlay (create it first) | no | no |
 
 The bind form on the machine detail page enforces these prerequisites
 client-side; the server enforces them again with a 422 on the

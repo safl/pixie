@@ -166,7 +166,7 @@ def test_nbdboot_plan_end_to_end(api: dict[str, object]) -> None:
     r = _put_json(
         base,
         f"/machines/{mac}",
-        {"boot_mode": "nbdboot", "image_content_sha256": disk_sha},
+        {"boot_mode": "nbdboot-ephemeral", "image_content_sha256": disk_sha},
         cookie=cookie,
     )
     assert r.status == 200, r.read().decode()
@@ -254,7 +254,7 @@ def test_nbdboot_without_bundle_unpacked_returns_unavailable(api: dict[str, obje
     _put_json(
         base,
         f"/machines/{mac}",
-        {"boot_mode": "nbdboot", "image_content_sha256": disk_sha},
+        {"boot_mode": "nbdboot-ephemeral", "image_content_sha256": disk_sha},
         cookie=cookie,
     )
 

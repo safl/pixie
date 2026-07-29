@@ -80,7 +80,7 @@ def test_classifies_serving_held_free_orphaned_missing(tmp_path: Path) -> None:
     _touch_qcow2(serving_path)
     machines.upsert_binding(
         "aa:aa:aa:aa:aa:aa",
-        boot_mode="nbdboot",
+        boot_mode="nbdboot-overlay",
         image_content_sha256=_SHA,
         overlay_alias="prod",
     )
@@ -233,7 +233,7 @@ def test_ui_overlays_shows_row_and_live_json(client: TestClient) -> None:
     _touch_qcow2(path)
     state.machines_store.upsert_binding(
         "aa:aa:aa:aa:aa:aa",
-        boot_mode="nbdboot",
+        boot_mode="nbdboot-overlay",
         image_content_sha256=_SHA,
         overlay_alias="prod",
     )
@@ -259,7 +259,7 @@ def test_ui_overlays_reset_deletes_file_and_row(client: TestClient) -> None:
     state.overlays_store.upsert(Overlay("prod", _SHA, str(path)))
 
     r = c.post(
-        "/ui/overlays/reset",
+        "/ui/overlays/delete",
         data={"alias": "prod"},
         follow_redirects=False,
     )
@@ -271,8 +271,85 @@ def test_ui_overlays_reset_deletes_file_and_row(client: TestClient) -> None:
 
 def test_ui_overlays_reset_requires_auth(client: TestClient) -> None:
     r = client.post(
-        "/ui/overlays/reset",
+        "/ui/overlays/delete",
         data={"alias": "prod"},
+        follow_redirects=False,
+    )
+    assert r.status_code == 303
+    assert r.headers["location"] == "/ui/login"
+
+
+def _seed_fetched_image(state: object, name: str = "ubuntu") -> None:
+    """Seed a catalog image with a real base blob on disk so the create
+    route's qcow2 materialization has a backing file."""
+    from pixie.catalog._schema import CatalogEntry
+
+    state.catalog_store.upsert(  # type: ignore[attr-defined]
+        CatalogEntry(name=name, src=f"https://x/{name}.img.gz", format="img.gz")
+    )
+    state.catalog_store.mark_fetched(name, content_sha256=_SHA, size_bytes=1024)  # type: ignore[attr-defined]
+    blob = state.catalog_store.blob_path(_SHA)  # type: ignore[attr-defined]
+    blob.parent.mkdir(parents=True, exist_ok=True)
+    blob.write_bytes(b"\0" * 1024)
+
+
+def test_ui_overlays_create_materializes_qcow2_and_row(client: TestClient) -> None:
+    """Create makes the overlay explicit: a real qcow2 on disk (no
+    ``pending`` limbo) + a row over the chosen image + an OVERLAY_CREATED
+    event. This is the ONLY path that brings an overlay into being."""
+    c = authed(client)
+    state = client.app.state
+    _seed_fetched_image(state)
+
+    r = c.post(
+        "/ui/overlays/create",
+        data={"alias": "fresh", "image_content_sha256": _SHA},
+        follow_redirects=False,
+    )
+    assert r.status_code == 303
+    ov = state.overlays_store.get("fresh")
+    assert ov is not None
+    assert ov.image_sha == _SHA
+    assert Path(ov.qcow2_path).is_file()  # materialized now, not lazy
+    kinds = [e.kind for e in state.events_log.list(limit=50)]
+    assert "overlay.created" in kinds
+
+
+def test_ui_overlays_create_rejects_dup_bad_and_unfetched(client: TestClient) -> None:
+    """Create refuses a duplicate alias, a malformed alias, and an image
+    whose blob is not on disk -- each leaves no new overlay behind."""
+    c = authed(client)
+    state = client.app.state
+    _seed_fetched_image(state)
+
+    # First create wins.
+    assert (
+        c.post(
+            "/ui/overlays/create",
+            data={"alias": "dup", "image_content_sha256": _SHA},
+            follow_redirects=False,
+        ).status_code
+        == 303
+    )
+    # Duplicate alias is refused; still exactly one overlay.
+    c.post("/ui/overlays/create", data={"alias": "dup", "image_content_sha256": _SHA})
+    assert len(state.overlays_store.list_all()) == 1
+
+    # Malformed alias -> no new row.
+    c.post("/ui/overlays/create", data={"alias": "../evil", "image_content_sha256": _SHA})
+    assert state.overlays_store.get("../evil") is None
+    assert len(state.overlays_store.list_all()) == 1
+
+    # Unfetched image (valid-looking sha, no blob on disk) -> no new row.
+    c.post("/ui/overlays/create", data={"alias": "nofetch", "image_content_sha256": "b" * 64})
+    assert state.overlays_store.get("nofetch") is None
+    assert len(state.overlays_store.list_all()) == 1
+
+
+def test_ui_overlays_create_requires_auth(client: TestClient) -> None:
+    r = client.post(
+        "/ui/overlays/create",
+        data={"alias": "x", "image_content_sha256": _SHA},
         follow_redirects=False,
     )
     assert r.status_code == 303
@@ -289,7 +366,7 @@ def test_ui_overlays_prune_reclaims_only_junk(client: TestClient) -> None:
     _touch_qcow2(held_path)
     state.machines_store.upsert_binding(
         "aa:aa:aa:aa:aa:aa",
-        boot_mode="nbdboot",
+        boot_mode="nbdboot-overlay",
         image_content_sha256=_SHA,
         overlay_alias="prod",
     )
@@ -352,7 +429,7 @@ def test_machine_detail_shows_held_elsewhere_alias_disabled(client: TestClient) 
     # Machine B binds nbdboot + the same image, so its picker lists the
     # overlays over that image.
     state.machines_store.upsert_binding(
-        "bb:bb:bb:bb:bb:bb", boot_mode="nbdboot", image_content_sha256=_SHA
+        "bb:bb:bb:bb:bb:bb", boot_mode="nbdboot-overlay", image_content_sha256=_SHA
     )
 
     body = c.get("/ui/machines/bb:bb:bb:bb:bb:bb").text
