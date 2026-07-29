@@ -46,6 +46,47 @@ _log = logging.getLogger(__name__)
 # lock that is a race across request threads + pool workers).
 _FETCH_LOCK = threading.Lock()
 
+
+def claim_fetch_slot(states: dict[str, dict[str, Any]], name: str) -> bool:
+    """Atomically claim the in-flight fetch slot for ``name``. Marks the
+    entry ``fetching`` and returns True if it was free; returns False if a
+    fetch is already in flight. Shared by the JSON API + the operator UI
+    so neither can spawn a duplicate download -- the UI used to
+    check-then-set without the lock and could race two clicks."""
+    with _FETCH_LOCK:
+        if states.get(name, {}).get("state") == "fetching":
+            return False
+        states[name] = {"state": "fetching", "started_at": now_iso(), "error": None}
+    return True
+
+
+def fetch_update_conflicts(state: Any, content_sha256: str) -> tuple[list[str], list[str]]:
+    """``(bound_macs, running_export_names)`` that currently consume
+    ``content_sha256`` -- the things a re-fetch that shifts the sha would
+    silently rot. Empty for a pristine (never-fetched) entry. Shared so
+    the UI's Update-in-use warning and the JSON API's force gate agree on
+    what 'in use' means."""
+    if not content_sha256:
+        return ([], [])
+    machines = getattr(state, "machines_store", None)
+    exports = getattr(state, "exports_store", None)
+    macs = (
+        [m.mac for m in machines.list() if m.image_content_sha256 == content_sha256]
+        if machines is not None
+        else []
+    )
+    running = (
+        [
+            e.name
+            for e in exports.list()
+            if e.content_sha256 == content_sha256 and e.status == "running"
+        ]
+        if exports is not None
+        else []
+    )
+    return (macs, running)
+
+
 # Named field-safety regex for the content sha URL segment. iPXE fires
 # at ``/artifacts/<sha>/vmlinuz``; a bad sha is a client bug + we 404
 # rather than let a caller poke around the artifacts tree.
@@ -347,11 +388,18 @@ def run_fetch(
 async def start_fetch(
     request: Request,
     name: str,
+    force: bool = False,
     _auth: None = Depends(require_auth),
 ) -> dict[str, Any]:
     """Kick off a fetch for the named entry. Returns 202 immediately;
     the actual download runs in the fetch pool. ``GET /catalog``
-    reflects fetching / error state via the ``fetch_state`` field."""
+    reflects fetching / error state via the ``fetch_state`` field.
+
+    Re-fetching an entry that is already fetched can shift its content
+    sha (a moved ``oras://`` tag, an upstream re-tag), silently rotting
+    every machine bound to the old sha. Same guard as the operator UI:
+    if the entry is in use, refuse with 409 unless ``?force=true``.
+    """
     store = _get_store(request)
     entry = store.get_entry(name)
     if entry is None:
@@ -360,14 +408,23 @@ async def start_fetch(
             detail=f"no entry with name={name!r}",
         )
 
+    if entry.content_sha256 and not force:
+        macs, running = fetch_update_conflicts(request.app.state, entry.content_sha256)
+        if macs or running:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    f"entry {name!r} is in use (machines={macs}, exports={running}); "
+                    "a re-fetch may change its content sha and break them. Retry with "
+                    "?force=true to update anyway."
+                ),
+            )
+
     states = _fetch_states(request)
-    with _FETCH_LOCK:
-        if states.get(name, {}).get("state") == "fetching":
-            # In-flight already; return the current state instead of
-            # spawning a second task. The lock makes this check-and-claim
-            # atomic so two concurrent POSTs can't both pass here.
-            return {"state": "fetching", "started_at": states[name].get("started_at")}
-        states[name] = {"state": "fetching", "started_at": now_iso(), "error": None}
+    if not claim_fetch_slot(states, name):
+        # In-flight already; return the current state instead of spawning
+        # a second task (the claim is atomic across request threads).
+        return {"state": "fetching", "started_at": states[name].get("started_at")}
     pool = _get_fetch_pool(request)
     log = getattr(request.app.state, "events_log", None)
     log_emit = log.emit if log is not None else None

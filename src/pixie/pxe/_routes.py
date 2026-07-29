@@ -29,7 +29,6 @@ from pixie.events._kinds import (
 )
 from pixie.machines._store import (
     _FLASH_MODES,
-    DEFAULT_BOOT_MODE,
     BadMac,
     MachinesStore,
     normalise_mac,
@@ -196,8 +195,10 @@ def pxe_plan(request: Request, mac: str) -> PlainTextResponse:
     # event fires exactly once (touch_seen itself can't emit -- stores
     # hold no EventsLog by design).
     is_new = machines.get(canon) is None
-    default_mode = getattr(request.app.state, "default_boot_mode", DEFAULT_BOOT_MODE)
-    row = machines.touch_seen(canon, ip=_client_ip(request), default_boot_mode=default_mode)
+    # The store owns the auto-register default (resolved once from
+    # PIXIE_DEFAULT_BOOT_MODE at construction), so discovery, tag-first,
+    # and inventory-first row creation all agree on it.
+    row = machines.touch_seen(canon, ip=_client_ip(request))
 
     ctx = _render_context(request)
     body = _get_renderer(request).render(row, ctx)

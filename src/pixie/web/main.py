@@ -38,8 +38,8 @@ from starlette.middleware.sessions import SessionMiddleware
 
 import pixie
 from pixie.catalog import DEFAULT_CATALOG_URL, NOSI_CATALOG_URL
+from pixie.catalog._routes import claim_fetch_slot, fetch_update_conflicts, run_fetch
 from pixie.catalog._routes import router as catalog_router
-from pixie.catalog._routes import run_fetch
 from pixie.catalog._store import CatalogStore
 from pixie.events import EventsLog
 from pixie.events._kinds import (
@@ -784,7 +784,9 @@ def create_app() -> FastAPI:
     app.state.catalog_store = CatalogStore(state_dir)
     app.state.exports_store = ExportsStore(app.state.catalog_store.db_path)
     app.state.overlays_store = OverlaysStore(app.state.catalog_store.db_path)
-    app.state.machines_store = MachinesStore(app.state.catalog_store.db_path)
+    app.state.machines_store = MachinesStore(
+        app.state.catalog_store.db_path, default_boot_mode=_resolve_default_boot_mode()
+    )
     app.state.events_log = EventsLog(app.state.catalog_store.db_path)
     app.state.settings_store = SettingsStore(app.state.catalog_store.db_path)
     # Seed the curated catalog on a fresh deploy (env-gated, one-shot).
@@ -794,7 +796,6 @@ def create_app() -> FastAPI:
         bind=_resolve_nbd_bind(),
         nbdkit_bin=_resolve_nbdkit_bin(),
     )
-    app.state.default_boot_mode = _resolve_default_boot_mode()
     # Root for per-machine qcow2 overlay files. Sub-directory under
     # the state dir so a single ``PIXIE_DATA_DIR`` override still
     # relocates everything (catalog blobs + overlays + state.db)
@@ -2246,33 +2247,22 @@ def create_app() -> FastAPI:
             return RedirectResponse(url="/ui/catalog", status_code=status.HTTP_303_SEE_OTHER)
 
         # Update-fetch guard. A fetch on an already-fetched entry
-        # ("Update" in the UI) re-runs the pipeline; if the sha
-        # shifts (moved oras:// tag, upstream re-tag) any machine
-        # currently bound to the OLD sha silently rots. Bounce to
-        # the detail page with warn_update=1 unless the operator
-        # explicitly opts in via force=1 (from the banner).
-        # A pristine fetch (no content_sha256 yet) skips the guard --
-        # the entry is not in use so there is nothing to warn about.
+        # ("Update" in the UI) re-runs the pipeline; if the sha shifts
+        # (moved oras:// tag, upstream re-tag) any machine currently bound
+        # to the OLD sha silently rots. Bounce to the detail page with
+        # warn_update=1 unless the operator opts in via force=1 (from the
+        # banner). Same in-use check the JSON API uses for its force gate.
+        # A pristine fetch (no content_sha256 yet) skips the guard -- the
+        # entry is not in use so there is nothing to warn about.
         if entry.content_sha256 and not force:
-            using_machines = [
-                m.mac
-                for m in request.app.state.machines_store.list()
-                if m.image_content_sha256 == entry.content_sha256
-            ]
-            running_exports = [
-                e.name
-                for e in request.app.state.exports_store.list()
-                if e.content_sha256 == entry.content_sha256 and e.status == "running"
-            ]
-            if using_machines or running_exports:
+            macs, running = fetch_update_conflicts(request.app.state, entry.content_sha256)
+            if macs or running:
                 return RedirectResponse(
                     url=f"/ui/catalog/{name}?warn_update=1",
                     status_code=status.HTTP_303_SEE_OTHER,
                 )
 
         states = request.app.state.fetch_states
-        if states.get(name, {}).get("state") == "fetching":
-            return RedirectResponse(url="/ui/catalog", status_code=status.HTTP_303_SEE_OTHER)
         is_update = bool(entry.content_sha256)
         events = getattr(request.app.state, "events_log", None)
 
@@ -2315,7 +2305,10 @@ def create_app() -> FastAPI:
             request.app.state.fetch_pool.submit(_clear_unchanged)
             return RedirectResponse(url="/ui/catalog", status_code=status.HTTP_303_SEE_OTHER)
 
-        states[name] = {"state": "fetching", "started_at": _now_iso(), "error": None}
+        # Atomic in-flight claim (shared with the JSON API): if a fetch is
+        # already running for this entry, bounce without spawning a second.
+        if not claim_fetch_slot(states, name):
+            return RedirectResponse(url="/ui/catalog", status_code=status.HTTP_303_SEE_OTHER)
         if events is not None:
             events.emit(
                 CATALOG_FETCH_STARTED,

@@ -11,6 +11,26 @@ operator-facing summary.
 
 ## [Unreleased]
 
+### Changed
+
+- **Re-fetching an in-use catalog entry is now guarded the same on the JSON
+  API as in the UI.** A moved `oras://` tag or upstream re-tag can shift an
+  entry's content sha and silently rot every machine bound to the old one.
+  The operator UI already warned; `POST /catalog/entries/<name>/fetch` now
+  also refuses with `409` when the entry is in use (bound machines / running
+  exports) unless called with `?force=true`. The two paths share one in-use
+  check, and the UI's in-flight claim is now the same atomic one the API
+  uses (it could previously race two clicks into two downloads).
+- **A machine's first-seen boot mode no longer depends on how the row was
+  born.** The deploy default (`PIXIE_DEFAULT_BOOT_MODE`) is resolved once and
+  owned by the machines store, so a row created by a tag-first label edit or
+  a stray inventory POST auto-registers with the same default as PXE
+  discovery -- previously those two paths hardcoded `pixie-inventory` and
+  ignored the deploy override.
+- Corrected stale on-target TUI docstrings that referenced a non-existent
+  `POST /pxe/<mac>/done` endpoint (it is `POST /pxe/<mac>/status` with
+  `status=done`) and a boot-mode flip that no longer happens.
+
 ## [0.7.1] - 2026-07-29
 
 ### Changed
