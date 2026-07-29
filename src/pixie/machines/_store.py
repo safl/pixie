@@ -186,6 +186,8 @@ CREATE TABLE IF NOT EXISTS machines (
     extra_cmdline          TEXT NOT NULL DEFAULT '',
     overlay_profile        TEXT NOT NULL DEFAULT '',
     overlay_alias          TEXT NOT NULL DEFAULT '',
+    flashed_at             TEXT NOT NULL DEFAULT '',
+    flashed_image_sha256   TEXT NOT NULL DEFAULT '',
     inventory_json         TEXT NOT NULL DEFAULT '',
     inventory_at           TEXT NOT NULL DEFAULT '',
     discovered_at          TEXT NOT NULL,
@@ -243,6 +245,16 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE machines ADD COLUMN extra_cmdline TEXT NOT NULL DEFAULT ''")
     if "overlay_profile" not in cols:
         conn.execute("ALTER TABLE machines ADD COLUMN overlay_profile TEXT NOT NULL DEFAULT ''")
+    # Flash bookkeeping: when a pixie-flash-* pass completes it records
+    # WHEN it flashed + WHICH image sha, so the operator can inspect the
+    # last flash and the renderer can gate the pixie-flash-once one-shot
+    # without mutating boot_mode (see PxeRenderer.render).
+    if "flashed_at" not in cols:
+        conn.execute("ALTER TABLE machines ADD COLUMN flashed_at TEXT NOT NULL DEFAULT ''")
+    if "flashed_image_sha256" not in cols:
+        conn.execute(
+            "ALTER TABLE machines ADD COLUMN flashed_image_sha256 TEXT NOT NULL DEFAULT ''"
+        )
     # Overlay re-model: a machine now binds a globally-unique overlay
     # ``alias`` instead of a per-(mac,image) ``profile``. Seed the new
     # column from the old one with the SAME deterministic mapping the
@@ -340,6 +352,17 @@ class Machine:
     Single-writer: at most one machine holds an alias at a time
     (``Overlay.attached_mac``). Ignored by ``nbdboot-ephemeral`` (whose
     writes vanish on reboot) and every other mode."""
+    flashed_at: str = ""
+    """When the last ``pixie-flash-*`` pass on this machine completed
+    (the live env POSTed ``status=done``). Blank means "never flashed
+    under the current bind". For ``pixie-flash-once`` the renderer reads
+    this (together with :attr:`flashed_image_sha256`) to serve an exit
+    plan on the NEXT PXE instead of re-flashing -- the one-shot without
+    mutating :attr:`boot_mode`. Cleared by a Re-flash re-arm."""
+    flashed_image_sha256: str = ""
+    """The ``image_content_sha256`` that was written at :attr:`flashed_at`.
+    The one-shot gate only fires while this still matches the bound
+    image; binding a DIFFERENT image implicitly re-arms the flash."""
     inventory: dict[str, Any] = field(default_factory=dict)
     inventory_at: str = ""
     discovered_at: str = field(default_factory=now_iso)
@@ -365,6 +388,9 @@ class Machine:
             out["extra_cmdline"] = self.extra_cmdline
         if self.overlay_alias:
             out["overlay_alias"] = self.overlay_alias
+        if self.flashed_at:
+            out["flashed_at"] = self.flashed_at
+            out["flashed_image_sha256"] = self.flashed_image_sha256
         if self.last_seen_ip:
             out["last_seen_ip"] = self.last_seen_ip
         if self.inventory:
@@ -609,6 +635,31 @@ class MachinesStore:
             row = conn.execute("SELECT * FROM machines WHERE mac = ?", (canon,)).fetchone()
         return _row(row)
 
+    def mark_flashed(self, mac: str, image_sha256: str) -> None:
+        """Record that a ``pixie-flash-*`` pass just wrote ``image_sha256``
+        to this machine's disk. Stamps ``flashed_at`` + the image sha so
+        the operator can see the last flash and the renderer can gate the
+        ``pixie-flash-once`` one-shot. No-op on a missing row."""
+        canon = normalise_mac(mac)
+        with _DB_WRITE_LOCK, self._conn() as conn:
+            conn.execute(
+                "UPDATE machines SET flashed_at = ?, flashed_image_sha256 = ?, updated_at = ? "
+                "WHERE mac = ?",
+                (now_iso(), image_sha256, now_iso(), canon),
+            )
+
+    def rearm_flash(self, mac: str) -> None:
+        """Clear the flash bookkeeping so a ``pixie-flash-once`` machine
+        flashes again on its next PXE (Re-flash on next boot). No-op on a
+        missing row; leaves ``boot_mode`` untouched."""
+        canon = normalise_mac(mac)
+        with _DB_WRITE_LOCK, self._conn() as conn:
+            conn.execute(
+                "UPDATE machines SET flashed_at = '', flashed_image_sha256 = '', updated_at = ? "
+                "WHERE mac = ?",
+                (now_iso(), canon),
+            )
+
     def clear_inventory(self, mac: str) -> None:
         """Drop the stored inventory for ``mac`` so the next PXE boot
         re-runs the pixie-inventory pass: the renderer serves the
@@ -745,6 +796,12 @@ def _row(r: sqlite3.Row) -> Machine:
     overlay_alias = ""
     with contextlib.suppress(IndexError, KeyError):
         overlay_alias = r["overlay_alias"] or ""
+    flashed_at = ""
+    with contextlib.suppress(IndexError, KeyError):
+        flashed_at = r["flashed_at"] or ""
+    flashed_image_sha256 = ""
+    with contextlib.suppress(IndexError, KeyError):
+        flashed_image_sha256 = r["flashed_image_sha256"] or ""
     return Machine(
         mac=r["mac"],
         boot_mode=r["boot_mode"],
@@ -754,6 +811,8 @@ def _row(r: sqlite3.Row) -> Machine:
         extra_cmdline=extra_cmdline,
         overlay_profile=overlay_profile,
         overlay_alias=overlay_alias,
+        flashed_at=flashed_at,
+        flashed_image_sha256=flashed_image_sha256,
         inventory=inv,
         inventory_at=inv_at,
         discovered_at=r["discovered_at"],

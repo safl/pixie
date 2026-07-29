@@ -215,27 +215,91 @@ def test_plan_json_flash_falls_back_when_image_missing(client: TestClient) -> No
     assert r.json() == {"mode": "interactive"}
 
 
-def test_status_done_flips_pixie_flash_once_to_ipxe_exit(client: TestClient) -> None:
-    """After the live env's pixie CLI POSTs status=done, a
-    pixie-flash-once bind flips to ipxe-exit so the target's next
-    PXE boot lands on the disk without re-flashing."""
+def test_status_done_records_flash_and_gates_reboot_without_flipping_mode(
+    client: TestClient,
+) -> None:
+    """status=done records flashed_at + the image sha and STAYS on
+    pixie-flash-once (no auto-flip). The one-shot is then enforced by
+    the renderer: the next iPXE plan is an exit, and plan-JSON also
+    reports exit -- so it flashes exactly once while the operator still
+    sees the mode as pixie-flash-once."""
     mac = "aa:bb:cc:dd:ee:32"
-    _seed_flash_bound_machine(client, mac, "pixie-flash-once", "SN-2")
-    # Confirm the bind pre-check.
-    assert client.get(f"/machines/{mac}").json()["boot_mode"] == "pixie-flash-once"
+    sha = _seed_flash_bound_machine(client, mac, "pixie-flash-once", "SN-2")
+
+    # Before the flash: iPXE serves the live-env chain, plan-JSON = flash.
+    assert client.get(f"/pxe/{mac}/plan").json()["mode"] == "flash"
 
     r = client.post(f"/pxe/{mac}/status", json={"status": "done"})
     assert r.status_code == 204
-    assert client.get(f"/machines/{mac}").json()["boot_mode"] == "ipxe-exit"
+
+    row = client.get(f"/machines/{mac}").json()
+    assert row["boot_mode"] == "pixie-flash-once"  # NOT flipped
+    assert row["flashed_image_sha256"] == sha
+    assert row["flashed_at"]
+
+    # After the flash: the one-shot gate serves exit on both surfaces.
+    ipxe = client.get(f"/pxe/{mac}").text
+    assert "exit" in ipxe
+    assert client.get(f"/pxe/{mac}/plan").json() == {"mode": "exit"}
 
 
-def test_status_done_leaves_pixie_flash_always_alone(client: TestClient) -> None:
-    """pixie-flash-always is meant to re-flash every boot; a status
-    done stays on the same mode so the next boot re-arms."""
+def test_re_flash_rearm_makes_it_flash_again(client: TestClient) -> None:
+    """Re-arming (clearing flashed_at via /ui/machines/re-flash) drops a
+    flashed pixie-flash-once machine back to a flash plan, without the
+    operator having to change boot modes."""
+    mac = "aa:bb:cc:dd:ee:36"
+    _seed_flash_bound_machine(client, mac, "pixie-flash-once", "SN-6")
+    client.post(f"/pxe/{mac}/status", json={"status": "done"})
+    assert client.get(f"/pxe/{mac}/plan").json() == {"mode": "exit"}
+
+    c = _authed(client)
+    r = c.post("/ui/machines/re-flash", data={"mac": mac}, follow_redirects=False)
+    assert r.status_code == 303
+    row = client.get(f"/machines/{mac}").json()
+    assert "flashed_at" not in row  # cleared
+    assert row["boot_mode"] == "pixie-flash-once"  # mode untouched
+    assert client.get(f"/pxe/{mac}/plan").json()["mode"] == "flash"
+
+
+def test_binding_a_different_image_rearms_flash_once(client: TestClient) -> None:
+    """The one-shot gate keys on the flashed image sha, so re-binding a
+    flashed pixie-flash-once machine to a DIFFERENT image implicitly
+    re-arms: the plan drops back to flash for the new image."""
+    from pixie.catalog._schema import CatalogEntry
+
+    mac = "aa:bb:cc:dd:ee:37"
+    _seed_flash_bound_machine(client, mac, "pixie-flash-once", "SN-7")
+    client.post(f"/pxe/{mac}/status", json={"status": "done"})
+    assert client.get(f"/pxe/{mac}/plan").json() == {"mode": "exit"}
+
+    # Bind a second fetched image; flashed_image_sha256 no longer matches.
+    c = _authed(client)
+    catalog = c.app.state.catalog_store  # type: ignore[attr-defined]
+    catalog.upsert(CatalogEntry(name="ready2", src="https://x/r2.img.gz", format="img.gz"))
+    sha2 = "e" * 64
+    catalog.mark_fetched("ready2", content_sha256=sha2, size_bytes=9)
+    c.put(
+        f"/machines/{mac}",
+        json={
+            "boot_mode": "pixie-flash-once",
+            "image_content_sha256": sha2,
+            "target_disk_serial": "SN-7",
+        },
+    )
+    assert client.get(f"/pxe/{mac}/plan").json()["mode"] == "flash"
+
+
+def test_status_done_leaves_pixie_flash_always_flashing(client: TestClient) -> None:
+    """pixie-flash-always re-flashes every boot: status done records the
+    flash but the mode is unchanged and the plan stays flash (no
+    one-shot gate for flash-always)."""
     mac = "aa:bb:cc:dd:ee:33"
     _seed_flash_bound_machine(client, mac, "pixie-flash-always", "SN-3")
     client.post(f"/pxe/{mac}/status", json={"status": "done"})
-    assert client.get(f"/machines/{mac}").json()["boot_mode"] == "pixie-flash-always"
+    row = client.get(f"/machines/{mac}").json()
+    assert row["boot_mode"] == "pixie-flash-always"
+    assert row["flashed_at"]  # recorded for inspection
+    assert client.get(f"/pxe/{mac}/plan").json()["mode"] == "flash"  # still re-flashes
 
 
 def test_ipxe_plan_pixie_inventory_no_image_degrades(client: TestClient) -> None:

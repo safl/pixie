@@ -149,6 +149,19 @@ class PlanRenderer:
             # from re-inventorying + boot-looping now that the inventory
             # POST no longer auto-exits it.
             return self._env.get_template("exit.j2").render(mac=machine.mac)
+        if (
+            mode == "pixie-flash-once"
+            and machine.flashed_at
+            and machine.flashed_image_sha256 == machine.image_content_sha256
+        ):
+            # One-shot flash: this machine already flashed the currently
+            # bound image (recorded on the status=done POST). Serve exit so
+            # the next PXE boots the freshly-written disk instead of
+            # re-flashing -- same intent-model as pixie-inventory above.
+            # boot_mode stays pixie-flash-once so the operator sees what it
+            # is; a Re-flash re-arm (clears flashed_at) or binding a
+            # DIFFERENT image drops back through to the flash plan.
+            return self._env.get_template("exit.j2").render(mac=machine.mac)
         if mode in LIVE_ENV_MODES:
             return self._render_live_env(machine, ctx, mode, effective_extra)
         # Unknown mode: refuse loudly rather than falling through.
