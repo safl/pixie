@@ -13,8 +13,33 @@ from __future__ import annotations
 
 from typing import Any
 
-from pixie.events._kinds import MACHINE_BINDING_CHANGED, MACHINE_BOUND
+from pixie.events._kinds import MACHINE_BINDING_CHANGED, MACHINE_BOUND, MACHINE_DELETED
 from pixie.machines._store import UNCOMMITTED_BOOT_MODES
+
+
+def delete_machine_row(state: Any, canon: str) -> bool:
+    """Delete a machine with identical side effects on BOTH the JSON API
+    (``DELETE /machines/{mac}``) and the HTML form (``POST
+    /ui/machines/delete``): release any overlay single-writer hold the
+    machine still held (so a deleted MAC can't orphan an overlay), drop
+    the row, and emit ``machine.deleted``. Returns ``False`` if no row
+    existed. ``canon`` must already be a normalised MAC.
+
+    Kept here so the two entry points can't drift -- the UI used to skip
+    the event (and neither path released the overlay hold).
+    """
+    overlays = getattr(state, "overlays_store", None)
+    if overlays is not None:
+        # No-op when the MAC held nothing; frees a bound nbdboot-overlay
+        # so it doesn't read as orphaned after the machine is gone.
+        overlays.detach_mac(canon, keep="")
+    machines = getattr(state, "machines_store", None)
+    if machines is None or not machines.delete(canon):
+        return False
+    log = getattr(state, "events_log", None)
+    if log is not None:
+        log.emit(MACHINE_DELETED, subject_kind="machine", subject_id=canon, summary=canon)
+    return True
 
 
 def emit_bind_event(log: Any, previous: Any, row: Any) -> None:

@@ -437,6 +437,39 @@ def _deployment_envvar_docs() -> list[dict[str, str]]:
             ),
         },
         {
+            "name": "PIXIE_SESSION_SECRET",
+            "default": "",
+            "purpose": (
+                "Signing key for the /ui login session cookie. Set it"
+                " (any long random string) to keep operators logged in"
+                " across restarts and to share one key across multiple"
+                " workers. Unset: pixie persists a generated key under"
+                " the data dir, stable for a single-worker deploy."
+            ),
+        },
+        {
+            "name": "PIXIE_FETCH_RETRY",
+            "default": "10",
+            "purpose": (
+                "curl retry count for a catalog fetch. Lower it on a"
+                " flaky mirror to fail fast instead of sitting through"
+                " the full retry backoff."
+            ),
+        },
+        {
+            "name": "PIXIE_FETCH_RETRY_DELAY",
+            "default": "5",
+            "purpose": "Seconds curl waits between catalog-fetch retries.",
+        },
+        {
+            "name": "PIXIE_FETCH_RETRY_MAX_TIME",
+            "default": "900",
+            "purpose": (
+                "Overall curl time budget (seconds) for one catalog"
+                " fetch across all retries before it gives up."
+            ),
+        },
+        {
             "name": FETCH_POOL_SIZE_ENV,
             "default": str(DEFAULT_FETCH_POOL_SIZE),
             "purpose": (
@@ -774,7 +807,6 @@ def create_app() -> FastAPI:
         overlays=app.state.overlays_store,
         nbd=app.state.nbd_server,
         overlays_dir=app.state.overlays_dir,
-        events=app.state.events_log,
     )
     app.state.tftp_server = (
         TftpServer(
@@ -1141,15 +1173,13 @@ def create_app() -> FastAPI:
         bookmarks and any older docs still land on the right place."""
         return RedirectResponse(url="/ui/images", status_code=status.HTTP_308_PERMANENT_REDIRECT)
 
-    @app.post("/ui/exports/delete")
-    def ui_exports_delete(
-        request: Request,
-        name: str = Form(...),
-        _auth: None = Depends(_require_ui_auth),
-    ) -> RedirectResponse:
-        request.app.state.nbd_server.terminate(name)
-        request.app.state.exports_store.delete(name)
-        return RedirectResponse(url="/ui/images", status_code=status.HTTP_303_SEE_OTHER)
+    # NB: there is deliberately no `/ui/exports/delete` route. Ephemeral
+    # NBD exports are auto-managed (created on an nbdboot render, respawned
+    # at startup); deleting one out from under a booting machine is a
+    # footgun with no operator use-case, and no template ever offered the
+    # button. Power users still have the audited `DELETE /exports/{name}`
+    # JSON route. Persistent overlays -- the volumes operators DO manage --
+    # live on the Overlays page.
 
     @app.get("/ui/machines", response_class=HTMLResponse)
     def ui_machines(
@@ -1747,8 +1777,18 @@ def create_app() -> FastAPI:
         mac: str = Form(...),
         _auth: None = Depends(_require_ui_auth),
     ) -> RedirectResponse:
-        request.app.state.machines_store.delete(mac)
-        set_flash(request, f"Deleted machine {mac}.", "success")
+        from pixie.machines._bind_events import delete_machine_row
+        from pixie.machines._store import BadMac, normalise_mac
+
+        try:
+            canon = normalise_mac(mac)
+        except BadMac:
+            return RedirectResponse(url="/ui/machines", status_code=status.HTTP_303_SEE_OTHER)
+        # Same shared path as the JSON API: releases any overlay hold +
+        # emits machine.deleted, so the audit trail no longer depends on
+        # which door the delete came through.
+        delete_machine_row(request.app.state, canon)
+        set_flash(request, f"Deleted machine {canon}.", "success")
         return RedirectResponse(url="/ui/machines", status_code=status.HTTP_303_SEE_OTHER)
 
     @app.post("/ui/machines/re-inventory")

@@ -367,6 +367,42 @@ def test_ui_overlays_create_rejects_dup_bad_and_unfetched(
     assert len(state.overlays_store.list_all()) == 1
 
 
+def test_render_overlay_missing_file_is_unavailable_never_creates(
+    client: TestClient, monkeypatch: object
+) -> None:
+    """A machine on nbdboot-overlay whose overlay row exists but whose
+    qcow2 was deleted out of band renders an 'unavailable' plan naming
+    the missing file -- the renderer NEVER re-creates the overlay or
+    emits overlay.created. Overlays are born only on the Overlays page."""
+    import types
+
+    c = authed(client)
+    state = client.app.state
+    missing = Path(state.overlays_dir) / "ghost.qcow2"
+    assert not missing.exists()
+    state.overlays_store.upsert(Overlay("ghost", _SHA, str(missing)))
+    state.machines_store.upsert_binding(
+        "aa:bb:cc:dd:ee:99",
+        boot_mode="nbdboot-overlay",
+        image_content_sha256=_SHA,
+        overlay_alias="ghost",
+    )
+    # Let the bundle/blob resolution succeed so the render reaches the
+    # overlay-file check (bundle staging is an integration concern).
+    fake = (types.SimpleNamespace(content_sha256="b" * 64), Path("/nonexistent-blob"))
+    monkeypatch.setattr(  # type: ignore[attr-defined]
+        state.pxe_renderer, "_resolve_bundle_and_blob", lambda _sha: fake
+    )
+
+    body = c.get("/pxe/aa:bb:cc:dd:ee:99").text
+    assert "missing on disk" in body
+    # The renderer did NOT materialize the overlay, and emitted no
+    # overlay.created event.
+    assert not missing.exists()
+    kinds = [e.kind for e in state.events_log.list(limit=50)]
+    assert "overlay.created" not in kinds
+
+
 def test_ui_overlays_create_requires_auth(client: TestClient) -> None:
     r = client.post(
         "/ui/overlays/create",

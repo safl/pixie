@@ -21,15 +21,13 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
 
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
 from pixie.catalog._schema import CatalogEntry
 from pixie.catalog._store import CatalogStore
-from pixie.events._kinds import OVERLAY_CREATED
 from pixie.exports._store import Export, ExportsStore, Overlay, OverlaysStore
-from pixie.exports._supervisor import NbdServer, preferred_serve_path
+from pixie.exports._supervisor import NbdServer
 from pixie.machines._store import LIVE_ENV_MODES, Machine
 
 _log = logging.getLogger(__name__)
@@ -113,7 +111,6 @@ class PlanRenderer:
         overlays: OverlaysStore,
         nbd: NbdServer,
         overlays_dir: Path,
-        events: Any = None,
     ) -> None:
         self._catalog = catalog
         self._exports = exports
@@ -123,10 +120,6 @@ class PlanRenderer:
         # materialises flat at ``<overlays_dir>/<alias>.qcow2`` (see
         # :func:`overlay_qcow2_path`).
         self._overlays_dir = overlays_dir
-        # Optional events log so overlay lifecycle events (created /
-        # booted) land alongside the rest of pixie's audit trail. None
-        # for unit tests that don't wire an events sink.
-        self._events = events
         self._env = Environment(
             loader=FileSystemLoader(str(_TEMPLATES_DIR)),
             autoescape=select_autoescape(disabled_extensions=("j2",)),
@@ -192,9 +185,9 @@ class PlanRenderer:
         # alias's qcow2 via qemu-nbd instead of the shared read-only blob
         # via nbdkit. Client mounts /dev/nbd0 read-write directly (no
         # tmpfs+overlayfs on the client side); writes land in the qcow2
-        # and persist across reboots. The overlay row is created up front
-        # on the Overlays page; the qcow2 is materialized there too, but
-        # keep a defensive lazy-create here so a wiped file self-heals.
+        # and persist across reboots. The overlay + its qcow2 are created
+        # up front on the Overlays page; the renderer NEVER creates one --
+        # selecting an overlay must not birth it, same rule as images.
         if persist:
             alias = machine.overlay_alias
             if not alias:
@@ -214,26 +207,18 @@ class PlanRenderer:
                     machine,
                     f"overlay {alias!r} held by {overlay.attached_mac}; detach it there first",
                 )
-            # Ensure the qcow2 exists (lazy on first render / post-Reset).
-            # ``backing_file`` points at whichever file the fetch pipeline
-            # prefers (rootfs.raw if present, else the whole-disk blob),
-            # so the target sees /dev/nbd0 as ext4 at offset 0.
+            # The qcow2 is materialized when the overlay is created on the
+            # Overlays page. A missing file here means it was deleted out
+            # of band (the "missing" state on the Overlays page); refuse
+            # with a legible plan rather than silently birthing an empty
+            # overlay -- that would mask real data loss as a self-heal.
             qcow2 = Path(overlay.qcow2_path)
             if not qcow2.is_file():
-                try:
-                    NbdServer.create_qcow2(qcow2, preferred_serve_path(blob))
-                except RuntimeError as exc:
-                    return self._unavailable(
-                        machine, f"overlay {alias!r} could not be prepared: {exc}"
-                    )
-                if self._events is not None:
-                    self._events.emit(
-                        OVERLAY_CREATED,
-                        subject_kind="overlay",
-                        subject_id=alias,
-                        summary=f"overlay {alias!r} qcow2 created (image {image_sha[:12]})",
-                        details={"alias": alias, "image_sha": image_sha, "qcow2_path": str(qcow2)},
-                    )
+                return self._unavailable(
+                    machine,
+                    f"overlay {alias!r} qcow2 is missing on disk; "
+                    "delete + recreate it on the Overlays page",
+                )
             try:
                 port = self._nbd.spawn_qcow2(_overlay_export_name(overlay), qcow2)
             except RuntimeError as exc:

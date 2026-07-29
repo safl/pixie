@@ -670,6 +670,29 @@ def test_re_inventory_clears_inventory_and_reserves_the_pass(client: TestClient)
     assert "boot_mode=ipxe-exit" not in client.get(f"/pxe/{mac}").text
 
 
+def test_ui_machine_delete_emits_event_and_releases_overlay_hold(client: TestClient) -> None:
+    """Deleting via the HTML form now takes the SAME path as the JSON
+    API: it emits machine.deleted (the UI used to skip it) and releases
+    any overlay single-writer hold the machine held (so a deleted MAC
+    can't orphan an overlay)."""
+    from pixie.exports._store import Overlay
+
+    c = _authed(client)
+    state = client.app.state
+    mac = "aa:bb:cc:dd:ee:5a"
+    state.overlays_store.upsert(Overlay("held5a", "a" * 64, "/tmp/held5a.qcow2", attached_mac=mac))
+    state.machines_store.upsert_binding(
+        mac, boot_mode="nbdboot-overlay", image_content_sha256="a" * 64, overlay_alias="held5a"
+    )
+
+    r = c.post("/ui/machines/delete", data={"mac": mac}, follow_redirects=False)
+    assert r.status_code == 303
+    assert state.machines_store.get(mac) is None
+    assert state.overlays_store.get("held5a").attached_mac == ""  # type: ignore[union-attr]
+    kinds = [e.kind for e in state.events_log.list(limit=50)]
+    assert "machine.deleted" in kinds
+
+
 def test_inventory_post_does_not_flip_a_non_inventory_mode(client: TestClient) -> None:
     """A machine an operator put on, say, nbdboot-ephemeral is left alone
     -- only pixie-inventory is one-shot."""
