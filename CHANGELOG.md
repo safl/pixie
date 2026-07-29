@@ -11,6 +11,8 @@ operator-facing summary.
 
 ## [Unreleased]
 
+## [0.7.1] - 2026-07-29
+
 ### Changed
 
 - **`pixie-flash-once` no longer silently flips to `ipxe-exit` after flashing.**
