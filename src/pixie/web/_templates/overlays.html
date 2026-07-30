@@ -210,7 +210,7 @@
                     </td>
                     <td class="text-end text-nowrap">
                         <button type="button" class="btn btn-sm btn-outline-secondary"
-                                data-bs-toggle="collapse" data-bs-target="#manage-{{ loop.index }}"
+                                data-manage-toggle="manage-{{ loop.index }}"
                                 aria-expanded="false" aria-controls="manage-{{ loop.index }}"
                                 title="Grow or snapshot this overlay">
                             <i class="bi bi-sliders me-1"></i>Manage
@@ -231,7 +231,7 @@
                    unbound overlay -- a bound one shows how to release it.
                    id keys on loop.index (aliases may contain '.', which
                    would break the collapse target's CSS selector). #}
-                <tr class="collapse" id="manage-{{ loop.index }}">
+                <tr class="d-none" id="manage-{{ loop.index }}">
                     <td colspan="10" class="bg-body-tertiary">
                         {% if ov.attached_mac %}
                         <div class="alert alert-secondary small mb-0 d-flex align-items-center">
@@ -421,6 +421,21 @@
     }
 
     setInterval(poll, POLL_MS);
+})();
+
+// Manage-panel toggle. Bootstrap's collapse JS isn't loaded (pixie ships
+// only the CSS), so wire the per-row show/hide by hand: toggle ``d-none``
+// on the target manage row, matching the vanilla-JS pattern the rest of
+// the UI uses instead of ``data-bs-toggle``.
+(function () {
+    document.querySelectorAll("[data-manage-toggle]").forEach(function (btn) {
+        btn.addEventListener("click", function () {
+            var row = document.getElementById(btn.getAttribute("data-manage-toggle"));
+            if (!row) return;
+            var nowHidden = row.classList.toggle("d-none");
+            btn.setAttribute("aria-expanded", nowHidden ? "false" : "true");
+        });
+    });
 })();
 </script>
 {% endblock %}

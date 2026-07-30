@@ -11,6 +11,15 @@ operator-facing summary.
 
 ## [Unreleased]
 
+### Fixed
+
+- **The overlay Manage button works again.** It toggled the per-overlay
+  grow/snapshot panel through Bootstrap's `data-bs-toggle="collapse"`, but
+  pixie ships only Bootstrap's CSS, not its JavaScript, so clicking Manage
+  did nothing and the grow/snapshot controls were unreachable. The panel is
+  now toggled by hand (a small vanilla-JS `d-none` toggle), matching the
+  pattern the rest of the UI already uses.
+
 ## [0.8.0] - 2026-07-30
 
 ### Added
