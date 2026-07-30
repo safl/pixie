@@ -11,6 +11,8 @@ operator-facing summary.
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-07-30
+
 ### Added
 
 - **Overlays can be sized, grown, and snapshotted.** The base disk images
