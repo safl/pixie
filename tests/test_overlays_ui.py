@@ -299,7 +299,7 @@ def _stub_create_qcow2(monkeypatch: object) -> None:
     the route logic without depending on qemu-img (absent in the lint +
     typecheck + pytest CI job; the real call is covered in integration)."""
 
-    def _fake(qcow2_path: Path, base_path: Path) -> None:
+    def _fake(qcow2_path: Path, base_path: Path, *, size_bytes: int | None = None) -> None:
         Path(qcow2_path).parent.mkdir(parents=True, exist_ok=True)
         Path(qcow2_path).write_bytes(b"")
 
@@ -493,3 +493,163 @@ def test_machine_detail_shows_held_elsewhere_alias_disabled(client: TestClient) 
     opt = re.search(r'<option[^>]*value="prod"[^>]*>', body)
     assert opt is not None and "disabled" in opt.group(0)
     assert "held by aa:aa:aa:aa:aa:aa" in body
+
+
+# ---------- overlay sizing: create-with-size, grow, snapshots ----------
+
+
+def test_ui_overlays_create_with_size_records_virtual_size(
+    client: TestClient, monkeypatch: object
+) -> None:
+    """A size on Create provisions the qcow2 at that virtual size (passed
+    through to qemu-img) and records it on the row."""
+    c = authed(client)
+    state = client.app.state
+    _seed_fetched_image(state)
+    captured: dict[str, object] = {}
+
+    def _fake(qcow2_path: Path, base_path: Path, *, size_bytes: int | None = None) -> None:
+        captured["size_bytes"] = size_bytes
+        Path(qcow2_path).parent.mkdir(parents=True, exist_ok=True)
+        Path(qcow2_path).write_bytes(b"")
+
+    monkeypatch.setattr(  # type: ignore[attr-defined]
+        "pixie.exports._supervisor.NbdServer.create_qcow2", staticmethod(_fake)
+    )
+    r = c.post(
+        "/ui/overlays/create",
+        data={"alias": "big", "image_content_sha256": _SHA, "size_gib": "64"},
+        follow_redirects=False,
+    )
+    assert r.status_code == 303
+    assert captured["size_bytes"] == 64 * 1024**3
+    assert state.overlays_store.get("big").size_bytes == 64 * 1024**3
+
+
+def _stub_qcow2_size(monkeypatch: object, *, current: int, resized: list[int]) -> None:
+    monkeypatch.setattr(  # type: ignore[attr-defined]
+        "pixie.exports._supervisor.NbdServer.qcow2_virtual_size",
+        staticmethod(lambda p: current),
+    )
+    monkeypatch.setattr(  # type: ignore[attr-defined]
+        "pixie.exports._supervisor.NbdServer.resize_qcow2",
+        staticmethod(lambda p, n: resized.append(n)),
+    )
+
+
+def test_ui_overlays_grow_updates_size_and_emits(client: TestClient, monkeypatch: object) -> None:
+    """Grow on a free overlay resizes the qcow2, records the new size, and
+    emits overlay.resized."""
+    c = authed(client)
+    state = client.app.state
+    _seed_fetched_image(state)
+    state.overlays_store.upsert(
+        Overlay("g", _SHA, str(Path(state.overlays_dir) / "g.qcow2"), size_bytes=8 * 1024**3)
+    )
+    resized: list[int] = []
+    _stub_qcow2_size(monkeypatch, current=8 * 1024**3, resized=resized)
+    r = c.post("/ui/overlays/grow", data={"alias": "g", "size_gib": "32"}, follow_redirects=False)
+    assert r.status_code == 303
+    assert resized == [32 * 1024**3]
+    assert state.overlays_store.get("g").size_bytes == 32 * 1024**3
+    assert "overlay.resized" in [e.kind for e in state.events_log.list(limit=50)]
+
+
+def test_ui_overlays_grow_refuses_shrink_and_bound(client: TestClient, monkeypatch: object) -> None:
+    """Grow refuses a smaller-than-current size and a bound overlay -- no
+    resize call, size unchanged in both cases."""
+    c = authed(client)
+    state = client.app.state
+    _seed_fetched_image(state)
+    state.overlays_store.upsert(
+        Overlay("free", _SHA, str(Path(state.overlays_dir) / "free.qcow2"), size_bytes=32 * 1024**3)
+    )
+    resized: list[int] = []
+    _stub_qcow2_size(monkeypatch, current=32 * 1024**3, resized=resized)
+    c.post("/ui/overlays/grow", data={"alias": "free", "size_gib": "16"})  # shrink
+    assert resized == []
+    assert state.overlays_store.get("free").size_bytes == 32 * 1024**3
+    state.overlays_store.upsert(
+        Overlay(
+            "bound",
+            _SHA,
+            str(Path(state.overlays_dir) / "bound.qcow2"),
+            attached_mac="aa:bb:cc:dd:ee:ff",
+            size_bytes=8 * 1024**3,
+        )
+    )
+    c.post("/ui/overlays/grow", data={"alias": "bound", "size_gib": "64"})  # bound
+    assert resized == []
+    assert state.overlays_store.get("bound").size_bytes == 8 * 1024**3
+
+
+def test_ui_overlays_snapshot_ops(client: TestClient, monkeypatch: object) -> None:
+    """Snapshot create/revert/delete dispatch to the right qemu-img op on a
+    free overlay + emit overlay.snapshotted; a bad name and a bound overlay
+    are refused (no op)."""
+    c = authed(client)
+    state = client.app.state
+    _seed_fetched_image(state)
+    state.overlays_store.upsert(Overlay("s", _SHA, str(Path(state.overlays_dir) / "s.qcow2")))
+    calls: list[tuple[str, str]] = []
+    monkeypatch.setattr(  # type: ignore[attr-defined]
+        "pixie.exports._supervisor.NbdServer.snapshot_create",
+        staticmethod(lambda p, n: calls.append(("create", n))),
+    )
+    monkeypatch.setattr(  # type: ignore[attr-defined]
+        "pixie.exports._supervisor.NbdServer.snapshot_apply",
+        staticmethod(lambda p, n: calls.append(("revert", n))),
+    )
+    monkeypatch.setattr(  # type: ignore[attr-defined]
+        "pixie.exports._supervisor.NbdServer.snapshot_delete",
+        staticmethod(lambda p, n: calls.append(("delete", n))),
+    )
+    c.post("/ui/overlays/snapshot/create", data={"alias": "s", "snapshot": "snap1"})
+    c.post("/ui/overlays/snapshot/revert", data={"alias": "s", "snapshot": "snap1"})
+    c.post("/ui/overlays/snapshot/delete", data={"alias": "s", "snapshot": "snap1"})
+    assert calls == [("create", "snap1"), ("revert", "snap1"), ("delete", "snap1")]
+    assert "overlay.snapshotted" in [e.kind for e in state.events_log.list(limit=50)]
+    c.post("/ui/overlays/snapshot/create", data={"alias": "s", "snapshot": "../evil"})  # bad name
+    assert len(calls) == 3
+    state.overlays_store.upsert(
+        Overlay(
+            "sb",
+            _SHA,
+            str(Path(state.overlays_dir) / "sb.qcow2"),
+            attached_mac="aa:bb:cc:dd:ee:ff",
+        )
+    )
+    c.post("/ui/overlays/snapshot/create", data={"alias": "sb", "snapshot": "ok"})  # bound
+    assert len(calls) == 3
+
+
+def test_overlay_size_bytes_roundtrip_and_migration(tmp_path: Path) -> None:
+    """size_bytes round-trips through upsert/get/update_size, and a
+    pre-sizing overlays table (no size_bytes column) is migrated to add it
+    with a 0 default without dropping the existing row."""
+    import sqlite3
+
+    db = tmp_path / "s.db"
+    conn = sqlite3.connect(str(db))
+    conn.executescript(
+        """CREATE TABLE overlays (
+            alias TEXT PRIMARY KEY, image_sha TEXT NOT NULL, qcow2_path TEXT NOT NULL,
+            attached_mac TEXT NOT NULL DEFAULT '', nbd_port INTEGER NOT NULL DEFAULT 0,
+            status TEXT NOT NULL DEFAULT 'idle', error TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL, last_boot_at TEXT NOT NULL DEFAULT '');"""
+    )
+    conn.execute(
+        "INSERT INTO overlays (alias, image_sha, qcow2_path, created_at) VALUES (?, ?, ?, ?)",
+        ("old", _SHA, "/x/old.qcow2", "2026-01-01T00:00:00Z"),
+    )
+    conn.commit()
+    conn.close()
+
+    ExportsStore(db)  # runs the migration (ALTER TABLE ADD COLUMN size_bytes)
+    store = OverlaysStore(db)
+    got = store.get("old")
+    assert got is not None and got.size_bytes == 0  # migrated row survives, defaults 0
+    store.upsert(Overlay("new", _SHA, "/x/new.qcow2", size_bytes=42))
+    assert store.get("new").size_bytes == 42
+    store.update_size("new", 99)
+    assert store.get("new").size_bytes == 99

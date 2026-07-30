@@ -11,7 +11,20 @@ operator-facing summary.
 
 ## [Unreleased]
 
-## [0.7.3] - 2026-07-29
+### Added
+
+- **Overlays can be sized, grown, and snapshotted.** The base disk images
+  are deliberately small, so an `nbdboot-overlay` root capped at the image
+  size (~8 GiB) had no room for a real install (a CUDA/ROCm/DOCA stack does
+  not fit). The Overlays page now provisions an overlay at a chosen virtual
+  size (bigger than the base image, thin until written), and each overlay's
+  new **Manage** panel grows the disk and takes / reverts / deletes qcow2
+  snapshots -- the "bring it to a known state, checkpoint, roll back"
+  workflow. Grow and snapshot act on the qcow2 offline, so they are offered
+  only for an unbound (free) overlay; grow is grow-only. Emits
+  `overlay.resized` / `overlay.snapshotted`. The extra space becomes usable
+  ext4 when the target claims it via `resize2fs` on its next nbdboot (needs
+  a nosi image carrying the matching nbdboot mount-hook change).
 
 ### Fixed
 
