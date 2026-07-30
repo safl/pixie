@@ -27,7 +27,7 @@
 {% endblock %}
 
 {% block content %}
-{{ page_description('layers', 'Persistent named qcow2 overlays for the nbdboot-overlay mode. Each overlay is a globally-unique writable volume over one catalog base image, single-writer: at most one machine holds it at a time. This is where overlays are created: a machine only ever SELECTS an existing overlay, it never creates one. The disk-used + last-modified columns refresh every 5 s while the page is open. Delete removes an overlay entirely; Prune reclaims overlays whose file is gone or whose holder pixie no longer tracks.') }}
+{{ page_description('layers', 'Persistent named qcow2 overlays for the nbdboot-overlay mode. Each overlay is a globally-unique writable volume over one catalog base image, single-writer: at most one machine holds it at a time. This is where overlays are created: a machine only ever SELECTS an existing overlay, it never creates one. The disk-used + last-modified columns refresh every 5 s while the page is open. Create provisions the overlay at a chosen size (bigger than the small base image, thin until written) so the target has room to install into. Per overlay, Manage grows the disk and takes/reverts/deletes qcow2 snapshots; both act on the qcow2 offline, so unbind the overlay first. Delete removes an overlay entirely; Prune reclaims overlays whose file is gone or whose holder pixie no longer tracks.') }}
 
 {# ---- Summary strip -------------------------------------------------
    Fleet-wide roll-up. The numbers poll live alongside the table so an
@@ -84,14 +84,14 @@
     <div class="card-body">
         {% if base_images %}
         <form method="post" action="/ui/overlays/create" class="row g-3 align-items-end">
-            <div class="col-12 col-md-4">
+            <div class="col-12 col-md-3">
                 <label for="alias" class="form-label">Alias</label>
                 <input type="text" id="alias" name="alias" class="form-control font-monospace"
                        required maxlength="64" placeholder="e.g. matx-lab"
                        pattern="[A-Za-z0-9][A-Za-z0-9._-]*"
                        title="Alphanumeric-leading; a-z / A-Z / 0-9 / . _ - (max 64 chars)">
             </div>
-            <div class="col-12 col-md-5">
+            <div class="col-12 col-md-4">
                 <label for="image_content_sha256" class="form-label">Base image</label>
                 <select id="image_content_sha256" name="image_content_sha256"
                         class="form-select" required>
@@ -101,7 +101,13 @@
                     {% endfor %}
                 </select>
             </div>
-            <div class="col-12 col-md-3">
+            <div class="col-6 col-md-2">
+                <label for="size_gib" class="form-label">Size (GiB)</label>
+                <input type="number" id="size_gib" name="size_gib" class="form-control"
+                       min="0" step="1" value="64" placeholder="inherit"
+                       title="Provisioned virtual disk size. Must be at least the base image size; leave 0 to inherit it. The extra space is thin (COW) until written.">
+            </div>
+            <div class="col-6 col-md-3">
                 <button type="submit" class="btn btn-primary w-100">
                     <i class="bi bi-plus-lg me-1"></i>Create
                 </button>
@@ -109,7 +115,10 @@
             <div class="col-12">
                 <div class="form-text">
                     The overlay is a writable qcow2 layered over the base image; writes
-                    survive reboots. Once created it shows as <em>Free</em> below and can be
+                    survive reboots. <strong>Size</strong> provisions a bigger root than the
+                    (small) base image so the target has room to install into -- the space is
+                    thin until written, and the target claims it via <code>resize2fs</code> on
+                    its next nbdboot. Once created it shows as <em>Free</em> below and can be
                     attached to a machine via the <code>nbdboot-overlay</code> boot mode.
                 </div>
             </div>
@@ -137,7 +146,7 @@
                     <th scope="col">Alias</th>
                     <th scope="col">Base image</th>
                     <th scope="col">Attached to</th>
-                    <th scope="col" class="text-end">Disk used</th>
+                    <th scope="col" class="text-end">Used / size</th>
                     <th scope="col">Last modified</th>
                     <th scope="col">Created</th>
                     <th scope="col">Last boot</th>
@@ -185,6 +194,7 @@
                         {% else %}
                         <span class="text-muted">-</span>
                         {% endif %}
+                        {% if ov.size_bytes %}<span class="text-muted small">/ {{ ov.size_bytes | humanize_bytes }}</span>{% endif %}
                     </td>
                     <td class="small text-nowrap" data-cell="mtime">
                         {{ ov.mtime | fmt_ts if ov.mtime else '-' }}
@@ -198,15 +208,123 @@
                         <span class="text-muted small">idle</span>
                         {% endif %}
                     </td>
-                    <td class="text-end">
+                    <td class="text-end text-nowrap">
+                        <button type="button" class="btn btn-sm btn-outline-secondary"
+                                data-bs-toggle="collapse" data-bs-target="#manage-{{ loop.index }}"
+                                aria-expanded="false" aria-controls="manage-{{ loop.index }}"
+                                title="Grow or snapshot this overlay">
+                            <i class="bi bi-sliders me-1"></i>Manage
+                        </button>
                         <form method="post" action="/ui/overlays/delete" class="d-inline"
                               onsubmit="return confirm('Delete overlay {{ ov.alias }}? The qcow2 and its row are removed for good. Any machine bound to it via nbdboot-overlay will need rebinding. To wipe an overlay clean, delete it and create a fresh one.');">
                             <input type="hidden" name="alias" value="{{ ov.alias }}">
-                            <button type="submit" class="btn btn-sm btn-outline-danger text-nowrap"
+                            <button type="submit" class="btn btn-sm btn-outline-danger"
                                     title="Remove this overlay entirely (qcow2 + row).">
                                 <i class="bi bi-trash3 me-1"></i>Delete
                             </button>
                         </form>
+                    </td>
+                </tr>
+                {# ---- Manage panel (grow + snapshots) --------------------
+                   Collapsed by default. Both operate on the qcow2 with
+                   qemu-img offline, so they are only offered for an
+                   unbound overlay -- a bound one shows how to release it.
+                   id keys on loop.index (aliases may contain '.', which
+                   would break the collapse target's CSS selector). #}
+                <tr class="collapse" id="manage-{{ loop.index }}">
+                    <td colspan="10" class="bg-body-tertiary">
+                        {% if ov.attached_mac %}
+                        <div class="alert alert-secondary small mb-0 d-flex align-items-center">
+                            <i class="bi bi-lock me-2"></i>
+                            <div>Bound to <code>{{ ov.attached_mac }}</code>. Grow and snapshot
+                            operate on the qcow2 offline, so set that machine to another boot
+                            mode (unbind) first, then reopen this panel.</div>
+                        </div>
+                        {% else %}
+                        <div class="row g-4">
+                            {# Grow #}
+                            <div class="col-12 col-lg-4">
+                                <div class="fw-semibold mb-2"><i class="bi bi-arrows-angle-expand me-1"></i>Grow</div>
+                                <form method="post" action="/ui/overlays/grow" class="row g-2 align-items-end"
+                                      onsubmit="return confirm('Grow overlay {{ ov.alias }}? The virtual disk is enlarged now; the target claims the space with resize2fs on its next nbdboot.');">
+                                    <input type="hidden" name="alias" value="{{ ov.alias }}">
+                                    <div class="col-7">
+                                        <label class="form-label small mb-1">New size (GiB)</label>
+                                        <input type="number" name="size_gib" class="form-control form-control-sm"
+                                               min="1" step="1" required
+                                               placeholder="{{ ov.size_bytes // 1073741824 if ov.size_bytes else '' }}">
+                                    </div>
+                                    <div class="col-5">
+                                        <button type="submit" class="btn btn-sm btn-outline-primary w-100">Grow</button>
+                                    </div>
+                                </form>
+                                <div class="form-text">
+                                    Currently {{ ov.size_bytes | humanize_bytes }}. Grow-only; takes
+                                    effect on the target's next nbdboot.
+                                </div>
+                            </div>
+                            {# Snapshots #}
+                            <div class="col-12 col-lg-8">
+                                <div class="fw-semibold mb-2"><i class="bi bi-camera me-1"></i>Snapshots</div>
+                                {% if ov.snapshots %}
+                                <div class="table-responsive">
+                                <table class="table table-sm align-middle mb-2">
+                                    <thead><tr>
+                                        <th scope="col">Name</th>
+                                        <th scope="col">Taken</th>
+                                        <th scope="col" class="text-end">Actions</th>
+                                    </tr></thead>
+                                    <tbody>
+                                    {% for s in ov.snapshots %}
+                                        <tr>
+                                            <td><code>{{ s.name }}</code></td>
+                                            <td class="small text-muted text-nowrap">{{ s.when | fmt_ts if s.when else '-' }}</td>
+                                            <td class="text-end text-nowrap">
+                                                <form method="post" action="/ui/overlays/snapshot/revert" class="d-inline"
+                                                      onsubmit="return confirm('Revert {{ ov.alias }} to snapshot {{ s.name }}? Every write since that snapshot is discarded.');">
+                                                    <input type="hidden" name="alias" value="{{ ov.alias }}">
+                                                    <input type="hidden" name="snapshot" value="{{ s.name }}">
+                                                    <button type="submit" class="btn btn-sm btn-outline-warning"
+                                                            title="Roll the overlay back to this snapshot">
+                                                        <i class="bi bi-arrow-counterclockwise"></i> Revert
+                                                    </button>
+                                                </form>
+                                                <form method="post" action="/ui/overlays/snapshot/delete" class="d-inline"
+                                                      onsubmit="return confirm('Delete snapshot {{ s.name }} of {{ ov.alias }}? The overlay state is untouched.');">
+                                                    <input type="hidden" name="alias" value="{{ ov.alias }}">
+                                                    <input type="hidden" name="snapshot" value="{{ s.name }}">
+                                                    <button type="submit" class="btn btn-sm btn-outline-danger"
+                                                            title="Delete this snapshot">
+                                                        <i class="bi bi-trash3"></i>
+                                                    </button>
+                                                </form>
+                                            </td>
+                                        </tr>
+                                    {% endfor %}
+                                    </tbody>
+                                </table>
+                                </div>
+                                {% else %}
+                                <p class="text-muted small mb-2">No snapshots yet.</p>
+                                {% endif %}
+                                <form method="post" action="/ui/overlays/snapshot/create" class="row g-2 align-items-end">
+                                    <input type="hidden" name="alias" value="{{ ov.alias }}">
+                                    <div class="col-8 col-sm-6">
+                                        <label class="form-label small mb-1">New snapshot name</label>
+                                        <input type="text" name="snapshot" class="form-control form-control-sm font-monospace"
+                                               required maxlength="64" placeholder="e.g. pre-cuda"
+                                               pattern="[A-Za-z0-9][A-Za-z0-9._-]*"
+                                               title="Alphanumeric-leading; a-z / A-Z / 0-9 / . _ - (max 64 chars)">
+                                    </div>
+                                    <div class="col-4 col-sm-3">
+                                        <button type="submit" class="btn btn-sm btn-outline-success w-100">
+                                            <i class="bi bi-camera me-1"></i>Snapshot
+                                        </button>
+                                    </div>
+                                </form>
+                            </div>
+                        </div>
+                        {% endif %}
                     </td>
                 </tr>
                 {% endfor %}
@@ -276,9 +394,11 @@
                 if (!d) { tr.classList.add("opacity-50"); return; }
                 tr.classList.remove("opacity-50");
                 setCell("state", stateBadge(d.state));
-                setCell("used", d.file_exists
+                const sizeSuffix = d.size_bytes
+                    ? ` <span class="text-muted small">/ ${humanizeBytes(d.size_bytes)}</span>` : ``;
+                setCell("used", (d.file_exists
                     ? `<span class="fw-semibold">${humanizeBytes(d.used_bytes)}</span>`
-                    : `<span class="text-muted">-</span>`);
+                    : `<span class="text-muted">-</span>`) + sizeSuffix);
                 setCell("mtime", d.mtime_display || "-");
                 setCell("nbd", d.running
                     ? `<span class="badge text-bg-success">:${d.nbd_port}</span>`

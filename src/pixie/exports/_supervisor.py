@@ -147,12 +147,21 @@ class NbdServer:
             return self._spawn_qcow2_locked(name, qcow2_path)
 
     @staticmethod
-    def create_qcow2(qcow2_path: Path, base_path: Path) -> None:
-        """``qemu-img create -f qcow2 -F raw -b <base> <path>``.
+    def create_qcow2(qcow2_path: Path, base_path: Path, *, size_bytes: int | None = None) -> None:
+        """``qemu-img create -f qcow2 -F raw -b <base> <path> [size]``.
 
         Fresh per-overlay COW file with ``backing_file`` pointing at
         the shared catalog blob. The base is untouched; the qcow2
         grows only with the writes THIS overlay makes.
+
+        ``size_bytes`` sets the overlay's VIRTUAL size (the disk the
+        target sees at ``/dev/nbd0``). Omitted, the overlay inherits the
+        backing file's size. When given it must be >= the backing size
+        (qemu-img refuses a smaller overlay over a larger backing); the
+        extra space reads as zeros until written, so a generous virtual
+        size stays cheap on disk. The target still has to ``resize2fs``
+        its root to claim the extra space -- the nosi nbdboot mount hook
+        does that offline on the persist path.
 
         Idempotent-ish: raises if ``qcow2_path`` already exists so a
         caller can distinguish "created" from "was already there" if
@@ -172,6 +181,8 @@ class NbdServer:
             str(base_path),
             str(qcow2_path),
         ]
+        if size_bytes is not None:
+            argv.append(str(int(size_bytes)))
         try:
             proc = subprocess.run(argv, capture_output=True, check=False)
         except FileNotFoundError as exc:
@@ -181,6 +192,138 @@ class NbdServer:
                 f"qemu-img create failed (rc={proc.returncode}): "
                 f"{proc.stderr.decode(errors='replace').strip()}"
             )
+
+    @staticmethod
+    def resize_qcow2(qcow2_path: Path, size_bytes: int) -> None:
+        """``qemu-img resize <path> <size>`` -- grow the overlay's virtual
+        size. Grow-only: a target smaller than the current size is
+        rejected here (``qemu-img`` would need ``--shrink`` and shrinking
+        a live filesystem loses data). The caller must ensure no qemu-nbd
+        is serving the file -- resizing a qcow2 out from under a running
+        export corrupts it; the grow route only allows this on a ``free``
+        (unbound) overlay. Like create, the target then has to
+        ``resize2fs`` to claim the space.
+        """
+        if not qcow2_path.is_file():
+            raise RuntimeError(f"overlay qcow2 {qcow2_path!s} does not exist")
+        current = NbdServer.qcow2_virtual_size(qcow2_path)
+        if int(size_bytes) < current:
+            raise RuntimeError(
+                f"refusing to shrink overlay from {current} to {int(size_bytes)} bytes"
+            )
+        argv = ["qemu-img", "resize", str(qcow2_path), str(int(size_bytes))]
+        try:
+            proc = subprocess.run(argv, capture_output=True, check=False)
+        except FileNotFoundError as exc:
+            raise RuntimeError("qemu-img binary not found on PATH") from exc
+        if proc.returncode != 0:
+            raise RuntimeError(
+                f"qemu-img resize failed (rc={proc.returncode}): "
+                f"{proc.stderr.decode(errors='replace').strip()}"
+            )
+
+    @staticmethod
+    def qcow2_virtual_size(qcow2_path: Path) -> int:
+        """Virtual size in bytes from ``qemu-img info --output=json``.
+
+        This is the disk size the target sees, NOT the on-disk footprint
+        (a COW qcow2 is far smaller). Raises on a missing file or a
+        qemu-img failure."""
+        import json
+
+        argv = ["qemu-img", "info", "--output=json", str(qcow2_path)]
+        try:
+            proc = subprocess.run(argv, capture_output=True, check=False)
+        except FileNotFoundError as exc:
+            raise RuntimeError("qemu-img binary not found on PATH") from exc
+        if proc.returncode != 0:
+            raise RuntimeError(
+                f"qemu-img info failed (rc={proc.returncode}): "
+                f"{proc.stderr.decode(errors='replace').strip()}"
+            )
+        try:
+            return int(json.loads(proc.stdout)["virtual-size"])
+        except (ValueError, KeyError) as exc:
+            raise RuntimeError(f"qemu-img info returned no usable virtual-size: {exc}") from exc
+
+    # ---------- qcow2 internal snapshots ----------------------------
+    #
+    # Snapshots live INSIDE the overlay qcow2 (``qemu-img snapshot``),
+    # so there is no extra pixie state to keep -- the list is read back
+    # from the file. Creating / reverting / deleting take the qcow2's
+    # exclusive lock, so they fail while a qemu-nbd serves the overlay
+    # to a live target; the routes additionally gate on the overlay
+    # being unbound so the operator gets a clean message instead of a
+    # raw lock error. Listing uses ``-U`` (force-share) so a live
+    # overlay's snapshots still render.
+
+    @staticmethod
+    def _run_qemu_img(argv: list[str], *, action: str) -> None:
+        try:
+            proc = subprocess.run(argv, capture_output=True, check=False)
+        except FileNotFoundError as exc:
+            raise RuntimeError("qemu-img binary not found on PATH") from exc
+        if proc.returncode != 0:
+            raise RuntimeError(
+                f"qemu-img {action} failed (rc={proc.returncode}): "
+                f"{proc.stderr.decode(errors='replace').strip()}"
+            )
+
+    @staticmethod
+    def snapshot_list(qcow2_path: Path) -> list[dict[str, object]]:
+        """Internal snapshots via ``qemu-img info --output=json -U``.
+
+        ``-U`` reads even while qemu-nbd holds the overlay, so the page
+        can list a live overlay's snapshots. Returns ``[]`` on a missing
+        file or any read failure -- this is a display path, not a place
+        to raise."""
+        import json
+
+        if not qcow2_path.is_file():
+            return []
+        argv = ["qemu-img", "info", "--output=json", "-U", str(qcow2_path)]
+        try:
+            proc = subprocess.run(argv, capture_output=True, check=False)
+        except FileNotFoundError:
+            return []
+        if proc.returncode != 0:
+            return []
+        try:
+            info = json.loads(proc.stdout)
+        except ValueError:
+            return []
+        snaps = info.get("snapshots") or []
+        return list(snaps) if isinstance(snaps, list) else []
+
+    @staticmethod
+    def snapshot_create(qcow2_path: Path, name: str) -> None:
+        """``qemu-img snapshot -c <name> <path>``. Fails (lock) if the
+        overlay is being served; callers gate on unbound first."""
+        if not qcow2_path.is_file():
+            raise RuntimeError(f"overlay qcow2 {qcow2_path!s} does not exist")
+        NbdServer._run_qemu_img(
+            ["qemu-img", "snapshot", "-c", name, str(qcow2_path)], action="snapshot -c"
+        )
+
+    @staticmethod
+    def snapshot_apply(qcow2_path: Path, name: str) -> None:
+        """``qemu-img snapshot -a <name> <path>`` -- revert the overlay's
+        state to the named snapshot. Destructive to uncommitted changes;
+        callers gate on unbound."""
+        if not qcow2_path.is_file():
+            raise RuntimeError(f"overlay qcow2 {qcow2_path!s} does not exist")
+        NbdServer._run_qemu_img(
+            ["qemu-img", "snapshot", "-a", name, str(qcow2_path)], action="snapshot -a"
+        )
+
+    @staticmethod
+    def snapshot_delete(qcow2_path: Path, name: str) -> None:
+        """``qemu-img snapshot -d <name> <path>``."""
+        if not qcow2_path.is_file():
+            raise RuntimeError(f"overlay qcow2 {qcow2_path!s} does not exist")
+        NbdServer._run_qemu_img(
+            ["qemu-img", "snapshot", "-d", name, str(qcow2_path)], action="snapshot -d"
+        )
 
     def terminate(self, name: str) -> bool:
         """Kill the nbdkit for ``name``. Returns True iff a process

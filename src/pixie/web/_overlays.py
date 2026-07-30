@@ -80,6 +80,13 @@ class OverlayView:
     is_active: bool = False
     image_name: str = ""
     base_bytes: int = 0
+    # Provisioned VIRTUAL size (the disk the target sees). Falls back to
+    # the base image size for overlays created before the sizing feature.
+    size_bytes: int = 0
+    # qcow2 internal snapshots (name/date/vm-state-size dicts). Only
+    # populated for the full page render (``with_snapshots``), never the
+    # live poll -- reading them shells out to qemu-img per overlay.
+    snapshots: list[dict[str, object]] = field(default_factory=list)
     state: str = STATE_FREE
 
     @property
@@ -99,6 +106,7 @@ class OverlayView:
             "key": self.key,
             "used_bytes": self.used_bytes,
             "apparent_bytes": self.apparent_bytes,
+            "size_bytes": self.size_bytes,
             "mtime": self.mtime,
             "running": self.running,
             "nbd_port": self.nbd_port,
@@ -126,6 +134,23 @@ def _stat_file(path: Path) -> tuple[bool, int, int, str]:
     return (True, allocated, int(st.st_size), mtime)
 
 
+def _snapshot_rows(raw: list[dict[str, object]]) -> list[dict[str, object]]:
+    """Reduce ``qemu-img`` snapshot dicts to what the page shows: name +
+    an ISO date (from the epoch ``date-sec``, so the ``fmt_ts`` filter can
+    localise it). Nameless entries are dropped."""
+    out: list[dict[str, object]] = []
+    for s in raw:
+        name = str(s.get("name") or s.get("id") or "").strip()
+        if not name:
+            continue
+        when = ""
+        date_sec = s.get("date-sec")
+        if isinstance(date_sec, (int, float)) and date_sec > 0:
+            when = datetime.fromtimestamp(int(date_sec), UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+        out.append({"name": name, "when": when})
+    return out
+
+
 def build_overlay_view(
     ov: Overlay,
     *,
@@ -133,8 +158,13 @@ def build_overlay_view(
     image_names: dict[str, str],
     image_sizes: dict[str, int],
     nbd: NbdServer,
+    with_snapshots: bool = False,
 ) -> OverlayView:
-    """Enrich one :class:`Overlay` row into an :class:`OverlayView`."""
+    """Enrich one :class:`Overlay` row into an :class:`OverlayView`.
+
+    ``with_snapshots`` reads the qcow2's internal snapshot list (a
+    per-overlay qemu-img call); the live poll leaves it off so it stays a
+    cheap stat, and only the full page render pays for it."""
     export_name = _overlay_export_name(ov)
     exists, used, apparent, mtime = _stat_file(Path(ov.qcow2_path))
     port = nbd.port_for(export_name)
@@ -181,6 +211,12 @@ def build_overlay_view(
         is_active=is_active,
         image_name=image_names.get(ov.image_sha, ""),
         base_bytes=image_sizes.get(ov.image_sha, 0),
+        size_bytes=ov.size_bytes or image_sizes.get(ov.image_sha, 0),
+        snapshots=(
+            _snapshot_rows(nbd.snapshot_list(Path(ov.qcow2_path)))
+            if with_snapshots and exists
+            else []
+        ),
         state=state,
     )
 
@@ -191,8 +227,12 @@ def build_overlay_views(
     machines: MachinesStore,
     catalog: CatalogStore,
     nbd: NbdServer,
+    with_snapshots: bool = False,
 ) -> list[OverlayView]:
-    """Every overlay, enriched + sorted for the Overlays page."""
+    """Every overlay, enriched + sorted for the Overlays page.
+
+    ``with_snapshots`` is passed on to :func:`build_overlay_view`; the
+    full page render sets it, the live poll does not."""
     entries = catalog.list_entries()
     image_names = {e.content_sha256: e.name for e in entries if e.content_sha256}
     image_sizes = {
@@ -205,6 +245,7 @@ def build_overlay_views(
             image_names=image_names,
             image_sizes=image_sizes,
             nbd=nbd,
+            with_snapshots=with_snapshots,
         )
         for ov in overlays.list_all()
     ]

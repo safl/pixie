@@ -119,6 +119,18 @@ row deleted. ``subject_id`` is the alias for a single Delete, ``""``
 for a bulk Prune (``details.pruned`` counts the reclaimed volumes).
 The overlay is gone; recreate it on the Overlays page to use it again."""
 
+OVERLAY_RESIZED = "overlay.resized"
+"""Operator grew an overlay's virtual size (POST /ui/overlays/grow):
+``qemu-img resize`` bumped the qcow2, the row's ``size_bytes`` was
+updated. ``details`` carries ``alias`` + ``old_bytes`` + ``new_bytes``.
+The target claims the space by ``resize2fs`` on its next nbdboot."""
+
+OVERLAY_SNAPSHOTTED = "overlay.snapshotted"
+"""A qcow2 internal-snapshot op on an unbound overlay (POST
+/ui/overlays/snapshot/*): ``details.action`` is ``create`` / ``revert``
+/ ``delete`` and ``details.snapshot`` the snapshot name. ``subject_id``
+is the alias."""
+
 # ---------- machines + PXE ------------------------------------------
 #
 # ``subject_kind`` is always ``"machine"``; ``subject_id`` is the
@@ -240,6 +252,8 @@ KNOWN_EVENT_KINDS: frozenset[str] = frozenset(
         EXPORT_NBDKIT_EXITED,
         OVERLAY_CREATED,
         OVERLAY_RESET,
+        OVERLAY_RESIZED,
+        OVERLAY_SNAPSHOTTED,
         MACHINE_DISCOVERED,
         MACHINE_BOUND,
         MACHINE_BINDING_CHANGED,

@@ -1467,7 +1467,7 @@ def create_app() -> FastAPI:
     # tears one down; Prune reclaims every file-missing / machine-
     # orphaned row in one shot (never an idle keep).
 
-    def _overlay_views_now(request: Request) -> list[Any]:
+    def _overlay_views_now(request: Request, *, with_snapshots: bool = False) -> list[Any]:
         from pixie.web._overlays import build_overlay_views
 
         state = request.app.state
@@ -1476,6 +1476,7 @@ def create_app() -> FastAPI:
             machines=state.machines_store,
             catalog=state.catalog_store,
             nbd=state.nbd_server,
+            with_snapshots=with_snapshots,
         )
 
     @app.get("/ui/overlays", response_model=None)
@@ -1485,7 +1486,7 @@ def create_app() -> FastAPI:
     ) -> HTMLResponse:
         from pixie.web._overlays import overlay_totals
 
-        views = _overlay_views_now(request)
+        views = _overlay_views_now(request, with_snapshots=True)
         # Recent overlay-lifecycle events (created / reset / booted).
         # subject_kind is "machine" for all of them, so filter by the
         # ``overlay.`` kind prefix rather than subject_kind here.
@@ -1536,6 +1537,7 @@ def create_app() -> FastAPI:
         request: Request,
         alias: str = Form(...),
         image_content_sha256: str = Form(...),
+        size_gib: float = Form(0),
         _auth: None = Depends(_require_ui_auth),
     ) -> RedirectResponse:
         """Create a persistent overlay explicitly: validate the alias,
@@ -1543,7 +1545,13 @@ def create_app() -> FastAPI:
         image, and record the row. This is the ONLY way an overlay comes
         into being -- selecting one on a machine never creates it, just
         as selecting an image never fetches it. Emits ``overlay.created``
-        and lands the new overlay in the ``free`` state, ready to attach."""
+        and lands the new overlay in the ``free`` state, ready to attach.
+
+        ``size_gib`` provisions the overlay's virtual disk larger than the
+        base image so the target has room to install into (the base roots
+        are deliberately small). 0 / unset inherits the base size. The
+        extra space is COW-cheap until written; the target claims it by
+        ``resize2fs`` on its next nbdboot."""
         from pixie.events._kinds import OVERLAY_CREATED
         from pixie.exports._store import Overlay
         from pixie.exports._supervisor import NbdServer, preferred_serve_path
@@ -1575,12 +1583,29 @@ def create_app() -> FastAPI:
         if not blob.is_file():
             return _fail(f"Base image {entry.name!r} is not fetched; fetch it first.")
 
+        base = preferred_serve_path(blob)
+        try:
+            base_bytes = base.stat().st_size
+        except OSError:
+            base_bytes = 0
+        want_bytes = int(size_gib * 1024**3) if size_gib and size_gib > 0 else 0
+        if want_bytes and base_bytes and want_bytes < base_bytes:
+            return _fail(
+                f"Overlay size must be at least the base image size "
+                f"({base_bytes / 1024**3:.1f} GiB)."
+            )
+        # Record the actual virtual size (explicit, else the inherited
+        # base size) so the page + grow validation have a real figure.
+        stored_bytes = want_bytes or base_bytes
+
         qcow2 = overlay_qcow2_path(overlays_dir, alias)
         try:
-            NbdServer.create_qcow2(qcow2, preferred_serve_path(blob))
+            NbdServer.create_qcow2(qcow2, base, size_bytes=want_bytes or None)
         except RuntimeError as exc:
             return _fail(f"Could not create the overlay qcow2: {exc}")
-        overlays.upsert(Overlay(alias=alias, image_sha=sha, qcow2_path=str(qcow2)))
+        overlays.upsert(
+            Overlay(alias=alias, image_sha=sha, qcow2_path=str(qcow2), size_bytes=stored_bytes)
+        )
         events = getattr(request.app.state, "events_log", None)
         if events is not None:
             events.emit(
@@ -1588,10 +1613,183 @@ def create_app() -> FastAPI:
                 subject_kind="overlay",
                 subject_id=alias,
                 summary=f"overlay {alias!r} created over image {sha[:12]}",
-                details={"alias": alias, "image_sha": sha, "qcow2_path": str(qcow2)},
+                details={
+                    "alias": alias,
+                    "image_sha": sha,
+                    "qcow2_path": str(qcow2),
+                    "size_bytes": stored_bytes,
+                },
             )
-        set_flash(request, f"Overlay {alias!r} created over {entry.name}.", "success")
+        _size_note = f" ({stored_bytes / 1024**3:.0f} GiB)" if stored_bytes else ""
+        set_flash(request, f"Overlay {alias!r} created over {entry.name}{_size_note}.", "success")
         return RedirectResponse(url="/ui/overlays", status_code=status.HTTP_303_SEE_OTHER)
+
+    def _overlay_for_mutation(request: Request, alias: str) -> tuple[Any, Any]:
+        """Resolve an overlay for a mutating op (grow / snapshot), or flash
+        why it can't proceed and return ``(None, None)``. Mutations touch
+        the qcow2 with qemu-img, which needs it quiesced: the overlay must
+        exist and be unbound (no machine holds the single-writer lock).
+        The caller then terminates its qemu-nbd before the op so there is
+        no lock contention -- safe precisely because it is unbound."""
+        from pixie.web._overlay_bind import overlay_state
+
+        overlays, _ = overlay_state(request.app.state)
+        row = overlays.get(alias.strip())
+        if row is None:
+            set_flash(request, f"No overlay named {alias.strip()!r}.", "danger")
+            return None, None
+        if row.attached_mac:
+            set_flash(
+                request,
+                f"Overlay {row.alias!r} is bound to {row.attached_mac}; set that machine "
+                "to another boot mode to unbind it before changing the overlay.",
+                "danger",
+            )
+            return None, None
+        return overlays, row
+
+    @app.post("/ui/overlays/grow")
+    def ui_overlays_grow(
+        request: Request,
+        alias: str = Form(...),
+        size_gib: float = Form(...),
+        _auth: None = Depends(_require_ui_auth),
+    ) -> RedirectResponse:
+        """Grow an unbound overlay's virtual disk (``qemu-img resize``) and
+        record the new size. Grow-only (shrinking a filesystem loses data).
+        The target claims the extra space by ``resize2fs`` on its next
+        nbdboot -- growing here does not touch a running box."""
+        from pathlib import Path
+
+        from pixie.events._kinds import OVERLAY_RESIZED
+        from pixie.exports._supervisor import NbdServer
+        from pixie.pxe._renderer import _overlay_export_name
+
+        _redir = RedirectResponse(url="/ui/overlays", status_code=status.HTTP_303_SEE_OTHER)
+        overlays, row = _overlay_for_mutation(request, alias)
+        if row is None:
+            return _redir
+        new_bytes = int(size_gib * 1024**3) if size_gib and size_gib > 0 else 0
+        qcow2 = Path(row.qcow2_path)
+        try:
+            current = NbdServer.qcow2_virtual_size(qcow2)
+        except RuntimeError as exc:
+            set_flash(request, f"Cannot read overlay {row.alias!r}: {exc}", "danger")
+            return _redir
+        if new_bytes <= current:
+            set_flash(
+                request,
+                f"New size must be larger than the current {current / 1024**3:.1f} GiB.",
+                "danger",
+            )
+            return _redir
+        request.app.state.nbd_server.terminate(_overlay_export_name(row))
+        try:
+            NbdServer.resize_qcow2(qcow2, new_bytes)
+        except RuntimeError as exc:
+            set_flash(request, f"Grow failed: {exc}", "danger")
+            return _redir
+        overlays.update_size(row.alias, new_bytes)
+        events = getattr(request.app.state, "events_log", None)
+        if events is not None:
+            events.emit(
+                OVERLAY_RESIZED,
+                subject_kind="overlay",
+                subject_id=row.alias,
+                summary=f"overlay {row.alias!r} grown to {new_bytes / 1024**3:.0f} GiB",
+                details={"alias": row.alias, "old_bytes": current, "new_bytes": new_bytes},
+            )
+        set_flash(
+            request,
+            f"Overlay {row.alias!r} grown to {new_bytes / 1024**3:.0f} GiB; "
+            "takes effect on the target's next nbdboot.",
+            "success",
+        )
+        return _redir
+
+    def _overlay_snapshot_op(
+        request: Request, alias: str, snapshot: str, action: str
+    ) -> RedirectResponse:
+        """Shared body for the three snapshot routes. Validates the name,
+        gates on an unbound overlay, drops any qemu-nbd (safe: unbound),
+        runs the qemu-img snapshot op, emits ``overlay.snapshotted``."""
+        import re
+        from pathlib import Path
+
+        from pixie.events._kinds import OVERLAY_SNAPSHOTTED
+        from pixie.exports._supervisor import NbdServer
+        from pixie.pxe._renderer import _overlay_export_name
+
+        _redir = RedirectResponse(url="/ui/overlays", status_code=status.HTTP_303_SEE_OTHER)
+        snap = (snapshot or "").strip()
+        if not re.match(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$", snap):
+            set_flash(
+                request,
+                "Snapshot name must be alphanumeric-leading; a-z / A-Z / 0-9 / . _ - (max 64).",
+                "danger",
+            )
+            return _redir
+        _overlays, row = _overlay_for_mutation(request, alias)
+        if row is None:
+            return _redir
+        qcow2 = Path(row.qcow2_path)
+        request.app.state.nbd_server.terminate(_overlay_export_name(row))
+        op = {
+            "create": NbdServer.snapshot_create,
+            "revert": NbdServer.snapshot_apply,
+            "delete": NbdServer.snapshot_delete,
+        }[action]
+        try:
+            op(qcow2, snap)
+        except RuntimeError as exc:
+            set_flash(request, f"Snapshot {action} failed: {exc}", "danger")
+            return _redir
+        events = getattr(request.app.state, "events_log", None)
+        if events is not None:
+            events.emit(
+                OVERLAY_SNAPSHOTTED,
+                subject_kind="overlay",
+                subject_id=row.alias,
+                summary=f"overlay {row.alias!r} snapshot {action}: {snap!r}",
+                details={"alias": row.alias, "action": action, "snapshot": snap},
+            )
+        verb = {"create": "created", "revert": "reverted to", "delete": "deleted"}[action]
+        set_flash(request, f"Overlay {row.alias!r}: snapshot {snap!r} {verb}.", "success")
+        return _redir
+
+    @app.post("/ui/overlays/snapshot/create")
+    def ui_overlays_snapshot_create(
+        request: Request,
+        alias: str = Form(...),
+        snapshot: str = Form(...),
+        _auth: None = Depends(_require_ui_auth),
+    ) -> RedirectResponse:
+        """Take a qcow2 internal snapshot of an unbound overlay -- a
+        named, revertible checkpoint of everything written so far."""
+        return _overlay_snapshot_op(request, alias, snapshot, "create")
+
+    @app.post("/ui/overlays/snapshot/revert")
+    def ui_overlays_snapshot_revert(
+        request: Request,
+        alias: str = Form(...),
+        snapshot: str = Form(...),
+        _auth: None = Depends(_require_ui_auth),
+    ) -> RedirectResponse:
+        """Roll an unbound overlay back to a named snapshot. Destroys
+        every write made since that snapshot -- the classic "known good
+        state" restore."""
+        return _overlay_snapshot_op(request, alias, snapshot, "revert")
+
+    @app.post("/ui/overlays/snapshot/delete")
+    def ui_overlays_snapshot_delete(
+        request: Request,
+        alias: str = Form(...),
+        snapshot: str = Form(...),
+        _auth: None = Depends(_require_ui_auth),
+    ) -> RedirectResponse:
+        """Delete a named snapshot from an unbound overlay (reclaims its
+        space in the qcow2). The overlay's current state is untouched."""
+        return _overlay_snapshot_op(request, alias, snapshot, "delete")
 
     @app.post("/ui/overlays/delete")
     def ui_overlays_delete(

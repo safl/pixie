@@ -57,7 +57,8 @@ CREATE TABLE IF NOT EXISTS overlays (
     status        TEXT NOT NULL DEFAULT 'idle',
     error         TEXT NOT NULL DEFAULT '',
     created_at    TEXT NOT NULL,
-    last_boot_at  TEXT NOT NULL DEFAULT ''
+    last_boot_at  TEXT NOT NULL DEFAULT '',
+    size_bytes    INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_overlays_image_sha
     ON overlays(image_sha);
@@ -164,6 +165,14 @@ class ExportsStore:
             conn.executescript(_SCHEMA)
             _migrate_overlays_schema(conn)
             conn.executescript(_OVERLAYS_SCHEMA)
+            # Additive column for the overlay-size feature: pre-existing
+            # DBs created before it lack ``size_bytes`` (CREATE ... IF NOT
+            # EXISTS won't add it). 0 == "inherits the backing size".
+            ov_cols = {row[1] for row in conn.execute("PRAGMA table_info(overlays)").fetchall()}
+            if "size_bytes" not in ov_cols:
+                conn.execute(
+                    "ALTER TABLE overlays ADD COLUMN size_bytes INTEGER NOT NULL DEFAULT 0"
+                )
 
     @contextlib.contextmanager
     def _conn(self) -> Generator[sqlite3.Connection]:
@@ -267,6 +276,10 @@ class Overlay:
     error: str = ""
     created_at: str = field(default_factory=now_iso)
     last_boot_at: str = ""
+    # Provisioned VIRTUAL size in bytes (the disk the target sees).
+    # 0 == created before the sizing feature / no explicit size, so it
+    # inherits the backing blob's size. Set at create, bumped by grow.
+    size_bytes: int = 0
 
     def to_dict(self) -> dict[str, Any]:
         out: dict[str, Any] = {
@@ -283,6 +296,8 @@ class Overlay:
             out["error"] = self.error
         if self.last_boot_at:
             out["last_boot_at"] = self.last_boot_at
+        if self.size_bytes:
+            out["size_bytes"] = self.size_bytes
         return out
 
 
@@ -333,8 +348,9 @@ class OverlaysStore:
                 """
                 INSERT OR REPLACE INTO overlays (
                     alias, image_sha, qcow2_path, attached_mac,
-                    nbd_port, status, error, created_at, last_boot_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    nbd_port, status, error, created_at, last_boot_at,
+                    size_bytes
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     ov.alias,
@@ -346,7 +362,18 @@ class OverlaysStore:
                     ov.error,
                     ov.created_at,
                     ov.last_boot_at,
+                    ov.size_bytes,
                 ),
+            )
+
+    def update_size(self, alias: str, size_bytes: int) -> None:
+        """Record a new provisioned virtual size after a grow. The qcow2
+        resize + the target-side ``resize2fs`` happen at the call site;
+        this just keeps the row in step for display + grow validation."""
+        with _DB_WRITE_LOCK, self._conn() as conn:
+            conn.execute(
+                "UPDATE overlays SET size_bytes = ? WHERE alias = ?",
+                (int(size_bytes), alias),
             )
 
     def delete(self, alias: str) -> bool:
@@ -418,4 +445,5 @@ def _row_to_overlay(row: sqlite3.Row) -> Overlay:
         error=row["error"],
         created_at=row["created_at"],
         last_boot_at=row["last_boot_at"],
+        size_bytes=row["size_bytes"] or 0,
     )
