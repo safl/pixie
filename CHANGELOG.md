@@ -11,6 +11,8 @@ operator-facing summary.
 
 ## [Unreleased]
 
+## [0.8.1] - 2026-07-30
+
 ### Fixed
 
 - **The overlay Manage button works again.** It toggled the per-overlay
