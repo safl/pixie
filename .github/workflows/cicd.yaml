@@ -84,6 +84,7 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: coverage-${{ matrix.python-version }}
+          retention-days: 7
           path: coverage.xml
           if-no-files-found: warn
 
@@ -133,6 +134,7 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: coverage-integration
+          retention-days: 7
           path: coverage.xml
           if-no-files-found: warn
 
@@ -203,6 +205,7 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: pixie-usbboot-pc-x86_64
+          retention-days: 14
           path: |
             ~/system_imaging/disk/pixie-usbboot-pc-x86_64-v*.iso
             ~/system_imaging/disk/pixie-usbboot-pc-x86_64-v*.sha256
@@ -254,6 +257,7 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: cijoe-output-live-env-image
+          retention-days: 7
           path: cijoe/cijoe-output
           if-no-files-found: warn
 
@@ -261,6 +265,7 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: pixie-live-env-image-x86_64
+          retention-days: 14
           path: |
             ~/system_imaging/disk/pixie-live-env-x86_64.img.gz
             ~/system_imaging/disk/pixie-live-env-x86_64.img.gz.sha256
@@ -316,14 +321,16 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: cijoe-output-test-pxe
+          retention-days: 7
           path: cijoe/cijoe-output
           if-no-files-found: warn
 
       - name: Upload PXE workspace (serial logs, dnsmasq.log)
-        if: always()
+        if: failure() || cancelled()
         uses: actions/upload-artifact@v7
         with:
           name: test-pxe-workspace
+          retention-days: 7
           path: cijoe/_build/test-pxe
           if-no-files-found: warn
 
@@ -371,14 +378,16 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: cijoe-output-test-pxe-nbdboot
+          retention-days: 7
           path: cijoe/cijoe-output
           if-no-files-found: warn
 
       - name: Upload PXE workspace (serial logs, dnsmasq.log)
-        if: always()
+        if: failure() || cancelled()
         uses: actions/upload-artifact@v7
         with:
           name: test-pxe-nbdboot-workspace
+          retention-days: 7
           path: cijoe/_build/test-pxe
           if-no-files-found: warn
 
@@ -428,14 +437,16 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: cijoe-output-test-pxe-live-env-modes
+          retention-days: 7
           path: cijoe/cijoe-output
           if-no-files-found: warn
 
       - name: Upload PXE workspace (serial logs, dnsmasq.log)
-        if: always()
+        if: failure() || cancelled()
         uses: actions/upload-artifact@v7
         with:
           name: test-pxe-live-env-modes-workspace
+          retention-days: 7
           path: cijoe/_build/test-pxe
           if-no-files-found: warn
 
@@ -496,6 +507,7 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: cijoe-output-test-usb-ventoy
+          retention-days: 7
           path: cijoe/cijoe-output
           if-no-files-found: warn
 
@@ -525,6 +537,7 @@ jobs:
       - uses: actions/upload-artifact@v7
         with:
           name: dist
+          retention-days: 14
           path: dist/
           if-no-files-found: error
 
