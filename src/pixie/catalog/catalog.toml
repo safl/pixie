@@ -36,21 +36,6 @@ arch = "x86_64"
 description = "Netboot bundle for debian-13-headless: vmlinuz + initrd so pixie can nbdboot it over NBD."
 
 [[images]]
-name = "nosi ubuntu-2404-headless"
-src = "oras://ghcr.io/safl/nosi/ubuntu-2404-headless:latest"
-format = "img.gz"
-arch = "x86_64"
-description = "Ubuntu 24.04 LTS (noble) headless. Broad driver support for CUDA / ROCm devices and Mellanox NICs / DPUs."
-netboot_src = "oras://ghcr.io/safl/nosi/ubuntu-2404-headless-netboot:latest"
-
-[[images]]
-name = "nosi ubuntu-2404-headless netboot bundle"
-src = "oras://ghcr.io/safl/nosi/ubuntu-2404-headless-netboot:latest"
-format = "tar.gz"
-arch = "x86_64"
-description = "Netboot bundle for ubuntu-2404-headless: vmlinuz + initrd so pixie can nbdboot it over NBD."
-
-[[images]]
 name = "nosi ubuntu-2604-headless"
 src = "oras://ghcr.io/safl/nosi/ubuntu-2604-headless:latest"
 format = "img.gz"
@@ -64,6 +49,21 @@ src = "oras://ghcr.io/safl/nosi/ubuntu-2604-headless-netboot:latest"
 format = "tar.gz"
 arch = "x86_64"
 description = "Netboot bundle for ubuntu-2604-headless: vmlinuz + initrd so pixie can nbdboot it over NBD."
+
+[[images]]
+name = "nosi ubuntu-2610-headless"
+src = "oras://ghcr.io/safl/nosi/ubuntu-2610-headless:latest"
+format = "img.gz"
+arch = "x86_64"
+description = "Ubuntu 26.10 (stonking) headless, the latest Ubuntu release. The newest kernel and user-land on Ubuntu."
+netboot_src = "oras://ghcr.io/safl/nosi/ubuntu-2610-headless-netboot:latest"
+
+[[images]]
+name = "nosi ubuntu-2610-headless netboot bundle"
+src = "oras://ghcr.io/safl/nosi/ubuntu-2610-headless-netboot:latest"
+format = "tar.gz"
+arch = "x86_64"
+description = "Netboot bundle for ubuntu-2610-headless: vmlinuz + initrd so pixie can nbdboot it over NBD."
 
 [[images]]
 name = "nosi fedora-44-headless"

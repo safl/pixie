@@ -59,8 +59,8 @@ def test_bundled_catalog_matches_the_supported_images() -> None:
     images = {e.name for e in entries if e.is_bindable()}
     assert images == {
         "nosi debian-13-headless",
-        "nosi ubuntu-2404-headless",
         "nosi ubuntu-2604-headless",
+        "nosi ubuntu-2610-headless",
         "nosi fedora-44-headless",
         # nbdboot-capable via the shared arch-headless netboot bundle.
         "nosi arch-headless",
