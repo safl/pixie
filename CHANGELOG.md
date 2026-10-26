@@ -28,6 +28,8 @@ operator-facing summary.
   fresh pixie seeds the latest LTS and the latest release, each with its
   netboot bundle. A catalog already seeded keeps its 24.04 entries, whose
   `:latest` image no longer gets updates.
+- A NIC's link speed on the machine page reads in bit/s (`1 Gbit/s`)
+  instead of as a clock frequency (`1.00 GHz`).
 - `PUT` / `DELETE /machines/{ref}` with a ref that is not a MAC now
   answers 404 (no machine by that name) instead of 400 (bad MAC).
 
