@@ -1217,6 +1217,7 @@ def create_app() -> FastAPI:
             all_machines,
             q,
             fields=(
+                "name",
                 "mac",
                 "boot_mode",
                 "image_content_sha256",
@@ -1228,6 +1229,7 @@ def create_app() -> FastAPI:
         sort_state = parse_sort(
             dict(request.query_params),
             allowed={
+                "name": "name",
                 "mac": "mac",
                 "boot_mode": "boot_mode",
                 "last_seen_at": "last_seen_at",
@@ -1290,16 +1292,13 @@ def create_app() -> FastAPI:
         """Per-machine detail: telemetry + boot-mode binding form +
         the inventory blob pixie stored on the row (from
         ``POST /pxe/<mac>/inventory``, driven by the live env's
-        pixie CLI). Falls through to /ui/machines on a bad MAC or a
-        row that doesn't exist yet."""
-        from pixie.machines._store import BOOT_MODE_META, BadMac
+        pixie CLI). ``mac`` may also be the machine's name. Falls
+        through to /ui/machines when neither matches a row."""
+        from pixie.machines._store import BOOT_MODE_META
         from pixie.web._bind_preview import bind_preview_text
         from pixie.web._inventory import normalise_inventory
 
-        try:
-            machine = request.app.state.machines_store.get(mac)
-        except BadMac:
-            return RedirectResponse(url="/ui/machines", status_code=status.HTTP_303_SEE_OTHER)
+        machine = request.app.state.machines_store.resolve(mac)
         if machine is None:
             return RedirectResponse(url="/ui/machines", status_code=status.HTTP_303_SEE_OTHER)
         inv = normalise_inventory(machine.inventory)
@@ -1954,6 +1953,27 @@ def create_app() -> FastAPI:
                 details={"sha": sha, "entries_cleared": cleared, "orphan": image.orphan},
             )
         return RedirectResponse(url="/ui/images", status_code=status.HTTP_303_SEE_OTHER)
+
+    @app.post("/ui/machines/{mac}/name/edit")
+    def ui_machines_name_edit(
+        request: Request,
+        mac: str,
+        name: str = Form(""),
+        _auth: None = Depends(_require_ui_auth),
+    ) -> RedirectResponse:
+        """Rename one machine. A bad or taken name flashes and leaves the
+        old name in place, same as a rejected label edit."""
+        from pixie.machines._store import BadMac
+
+        try:
+            request.app.state.machines_store.set_name(mac, name)
+        except (BadMac, ValueError) as exc:
+            set_flash(request, f"Rename rejected: {exc}", "danger")
+            return RedirectResponse(
+                url=f"/ui/machines/{mac}", status_code=status.HTTP_303_SEE_OTHER
+            )
+        set_flash(request, "Name updated.", "success")
+        return RedirectResponse(url=f"/ui/machines/{mac}", status_code=status.HTTP_303_SEE_OTHER)
 
     @app.post("/ui/machines/{mac}/labels/edit")
     def ui_machines_labels_edit(

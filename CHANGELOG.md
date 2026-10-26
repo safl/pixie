@@ -11,6 +11,16 @@ operator-facing summary.
 
 ## [Unreleased]
 
+### Added
+
+- **Machines have names.** Every machine carries a unique, lowercase
+  hostname-style name (`a-z`, `0-9`, `-`, up to 63 chars). Discovery
+  assigns `machine-<mac>`, existing machines get the same on upgrade, and
+  the machine page renames it. The machines list leads with the name, and
+  every `/machines/{ref}` route and `/ui/machines/{ref}` page accepts the
+  name in place of the MAC. `PUT /machines/{ref}/name` renames over the
+  API, and registers a machine by MAC that never PXEs into pixie.
+
 ### Changed
 
 - **The bundled catalog carries Ubuntu 26.04 and 26.10, not 24.04.** nosi
@@ -18,6 +28,8 @@ operator-facing summary.
   fresh pixie seeds the latest LTS and the latest release, each with its
   netboot bundle. A catalog already seeded keeps its 24.04 entries, whose
   `:latest` image no longer gets updates.
+- `PUT` / `DELETE /machines/{ref}` with a ref that is not a MAC now
+  answers 404 (no machine by that name) instead of 400 (bad MAC).
 
 ## [0.8.1] - 2026-07-30
 

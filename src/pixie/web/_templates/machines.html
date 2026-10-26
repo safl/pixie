@@ -17,12 +17,12 @@
 </nav>
 {% endblock %}
 {% block content %}
-{{ page_description('pc-display', 'Every MAC pixie has seen. A row appears here on the target\'s first PXE contact; the last-seen columns refresh every 5 s while the page is open. Click a MAC to bind its boot mode, edit labels, or inspect the inventory and events for that target.') }}
+{{ page_description('pc-display', 'Every MAC pixie has seen. A row appears here on the target\'s first PXE contact; the last-seen columns refresh every 5 s while the page is open. Click a name to bind its boot mode, edit labels, or inspect the inventory and events for that target.') }}
 <div class="card" id="list">
     <div class="card-header bg-light fw-semibold d-flex flex-wrap align-items-center gap-3 py-2">
         <span class="text-nowrap"><i class="bi bi-pc-display me-1"></i>Machines</span>
         <span class="vr"></span>
-        {{ search_input('/ui/machines', q, preserved, 'MAC / boot mode / sha / last IP') }}
+        {{ search_input('/ui/machines', q, preserved, 'name / MAC / boot mode / sha / last IP') }}
         {{ pagination_inline(page_state, preserved, label='machines') }}
     </div>
     {% if machines %}
@@ -30,7 +30,7 @@
         <table class="table table-hover align-middle mb-0">
             <thead class="table-light">
                 <tr>
-                    {{ sort_header('MAC', 'mac', sort, preserved) }}
+                    {{ sort_header('Name', 'name', sort, preserved) }}
                     {{ sort_header('Boot mode', 'boot_mode', sort, preserved) }}
                     <th scope="col">Image</th>
                     <th scope="col">Inventory</th>
@@ -42,9 +42,8 @@
                 {% for m in machines %}
                 <tr data-machine-row="{{ m.mac }}">
                     <td data-cell="mac-labels">
-                        <a href="/ui/machines/{{ m.mac }}" class="text-decoration-none">
-                            <code>{{ m.mac }}</code>
-                        </a>
+                        <a href="/ui/machines/{{ m.mac }}" class="text-decoration-none fw-semibold">{{ m.name }}</a>
+                        <code class="small text-muted ms-1">{{ m.mac }}</code>
                         {% if m.labels %}
                         <div class="mt-1">
                             {% for lbl in m.labels %}

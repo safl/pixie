@@ -1,7 +1,8 @@
 """Machines table + typed row.
 
-One row per MAC. The two operator-writable fields are ``boot_mode``
-and ``image_content_sha256``; the rest are discovery + telemetry.
+One row per MAC, each carrying a unique hostname-style ``name``. The
+operator-writable binding is ``boot_mode`` + ``image_content_sha256``
+(plus the flash/overlay knobs); the rest are discovery + telemetry.
 Discovery is a side-effect of ``GET /pxe/<mac>`` -- the routes
 module upserts a row (or bumps ``last_seen_at`` on an existing one)
 before rendering the plan.
@@ -179,6 +180,7 @@ def normalise_mac(mac: str) -> str:
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS machines (
     mac                    TEXT PRIMARY KEY,
+    name                   TEXT NOT NULL DEFAULT '',
     boot_mode              TEXT NOT NULL DEFAULT 'ipxe-exit',
     image_content_sha256   TEXT NOT NULL DEFAULT '',
     labels                 TEXT NOT NULL DEFAULT '',
@@ -229,10 +231,60 @@ _LABEL_LIMIT = 16
 # before it ever writes a row or a path.
 OVERLAY_ALIAS_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._\-]{0,63}$")
 
+# A machine name is what people type and put in their test configs next
+# to the target's hostname, so it follows the RFC 1123 host label rules,
+# folded to lowercase.
+MACHINE_NAME_RE = re.compile(r"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$")
+
+# Blank names are left out of the index: this pixie never writes one,
+# but a pixie downgraded onto this state.db creates rows without a name,
+# and they must not collide. The next upgrade backfills them.
+_NAME_INDEX = (
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_machines_name ON machines(name) WHERE name != ''"
+)
+
+
+class DuplicateName(ValueError):
+    """Another machine already carries the requested name."""
+
+
+def validate_name(raw: str) -> str:
+    """Strip, lowercase and check a machine name. A name that parses as
+    a MAC is rejected so a name-or-MAC reference (see
+    :meth:`MachinesStore.resolve`) can never be ambiguous."""
+    name = (raw or "").strip().lower()
+    if not MACHINE_NAME_RE.match(name):
+        raise ValueError(
+            f"name {name!r} must be a hostname label: a-z / 0-9 / -, "
+            "1-63 chars, no leading or trailing -"
+        )
+    with contextlib.suppress(BadMac):
+        normalise_mac(name)
+        raise ValueError(f"name {name!r} reads as a MAC address; pick a name that does not")
+    return name
+
+
+def _default_name(conn: sqlite3.Connection, mac: str) -> str:
+    """The name a machine gets on its first row-create: derived from the
+    MAC, with a numeric suffix only when someone has hand-picked exactly
+    that name for another machine."""
+    base = "machine-" + mac.replace(":", "")
+    name, n = base, 1
+    while conn.execute(
+        "SELECT 1 FROM machines WHERE name = ? AND mac != ?", (name, mac)
+    ).fetchone():
+        n += 1
+        name = f"{base}-{n}"
+    return name
+
 
 def _migrate_schema(conn: sqlite3.Connection) -> None:
     """Additive column adds for existing state.db files. Idempotent."""
     cols = {row[1] for row in conn.execute("PRAGMA table_info(machines)").fetchall()}
+    if "name" not in cols:
+        conn.execute("ALTER TABLE machines ADD COLUMN name TEXT NOT NULL DEFAULT ''")
+    for (mac,) in conn.execute("SELECT mac FROM machines WHERE name = ''").fetchall():
+        conn.execute("UPDATE machines SET name = ? WHERE mac = ?", (_default_name(conn, mac), mac))
     if "inventory_json" not in cols:
         conn.execute("ALTER TABLE machines ADD COLUMN inventory_json TEXT NOT NULL DEFAULT ''")
     if "inventory_at" not in cols:
@@ -326,6 +378,10 @@ def parse_labels(raw: str) -> list[str]:
 @dataclass
 class Machine:
     mac: str
+    name: str = ""
+    """Unique hostname-style name (see :func:`validate_name`). Every row
+    has one: discovery assigns ``machine-<mac>`` and an operator renames
+    it. Blank only on a ``Machine`` built outside the store."""
     boot_mode: str = DEFAULT_BOOT_MODE
     image_content_sha256: str = ""
     labels: list[str] = field(default_factory=list)
@@ -378,6 +434,8 @@ class Machine:
             "last_seen_at": self.last_seen_at,
             "updated_at": self.updated_at,
         }
+        if self.name:
+            out["name"] = self.name
         if self.image_content_sha256:
             out["image_content_sha256"] = self.image_content_sha256
         if self.labels:
@@ -416,6 +474,7 @@ class MachinesStore:
         with self._conn() as conn:
             conn.executescript(_SCHEMA)
             _migrate_schema(conn)
+            conn.execute(_NAME_INDEX)
 
     @contextlib.contextmanager
     def _conn(self) -> Generator[sqlite3.Connection]:
@@ -438,6 +497,52 @@ class MachinesStore:
         with self._conn() as conn:
             row = conn.execute("SELECT * FROM machines WHERE mac = ?", (canon,)).fetchone()
         return _row(row) if row else None
+
+    def resolve(self, ref: str) -> Machine | None:
+        """Look a machine up by MAC (any shape :func:`normalise_mac`
+        accepts) or by name. ``None`` when neither matches."""
+        try:
+            return self.get(ref)
+        except BadMac:
+            pass
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT * FROM machines WHERE name = ?", ((ref or "").strip().lower(),)
+            ).fetchone()
+        return _row(row) if row else None
+
+    def set_name(self, mac: str, name: str) -> Machine:
+        """Rename a machine. Creates the row on first contact like
+        :meth:`set_labels`, so a machine that never PXEs into pixie can
+        still be registered by MAC. Raises :class:`DuplicateName` when
+        another machine holds the name."""
+        canon = normalise_mac(mac)
+        clean = validate_name(name)
+        now = now_iso()
+        with _DB_WRITE_LOCK, self._conn() as conn:
+            holder = conn.execute(
+                "SELECT mac FROM machines WHERE name = ? AND mac != ?", (clean, canon)
+            ).fetchone()
+            if holder is not None:
+                raise DuplicateName(f"name {clean!r} is already used by {holder['mac']}")
+            existing = conn.execute("SELECT 1 FROM machines WHERE mac = ?", (canon,)).fetchone()
+            if existing is None:
+                conn.execute(
+                    """
+                    INSERT INTO machines (
+                        mac, name, boot_mode, image_content_sha256,
+                        discovered_at, last_seen_at, last_seen_ip, updated_at
+                    ) VALUES (?, ?, ?, '', ?, ?, '', ?)
+                    """,
+                    (canon, clean, self._default_boot_mode, now, now, now),
+                )
+            else:
+                conn.execute(
+                    "UPDATE machines SET name = ?, updated_at = ? WHERE mac = ?",
+                    (clean, now, canon),
+                )
+            row = conn.execute("SELECT * FROM machines WHERE mac = ?", (canon,)).fetchone()
+        return _row(row)
 
     def upsert_binding(
         self,
@@ -526,14 +631,15 @@ class MachinesStore:
                 conn.execute(
                     """
                     INSERT INTO machines (
-                        mac, boot_mode, image_content_sha256,
+                        mac, name, boot_mode, image_content_sha256,
                         labels, target_disk_serial, extra_cmdline,
                         overlay_alias,
                         discovered_at, last_seen_at, last_seen_ip, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, '', ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '', ?)
                     """,
                     (
                         canon,
+                        _default_name(conn, canon),
                         boot_mode,
                         image_content_sha256,
                         labels_json,
@@ -586,11 +692,11 @@ class MachinesStore:
                 conn.execute(
                     """
                     INSERT INTO machines (
-                        mac, boot_mode, image_content_sha256,
+                        mac, name, boot_mode, image_content_sha256,
                         discovered_at, last_seen_at, last_seen_ip, updated_at
-                    ) VALUES (?, ?, '', ?, ?, ?, ?)
+                    ) VALUES (?, ?, ?, '', ?, ?, ?, ?)
                     """,
-                    (canon, mode, now, now, ip, now),
+                    (canon, _default_name(conn, canon), mode, now, now, ip, now),
                 )
             else:
                 conn.execute(
@@ -627,11 +733,19 @@ class MachinesStore:
                 conn.execute(
                     """
                     INSERT INTO machines (
-                        mac, boot_mode, image_content_sha256,
+                        mac, name, boot_mode, image_content_sha256,
                         labels, discovered_at, last_seen_at, last_seen_ip, updated_at
-                    ) VALUES (?, ?, '', ?, ?, ?, '', ?)
+                    ) VALUES (?, ?, ?, '', ?, ?, ?, '', ?)
                     """,
-                    (canon, self._default_boot_mode, labels_json, now, now, now),
+                    (
+                        canon,
+                        _default_name(conn, canon),
+                        self._default_boot_mode,
+                        labels_json,
+                        now,
+                        now,
+                        now,
+                    ),
                 )
             else:
                 conn.execute(
@@ -693,12 +807,21 @@ class MachinesStore:
                 conn.execute(
                     """
                     INSERT INTO machines (
-                        mac, boot_mode, image_content_sha256,
+                        mac, name, boot_mode, image_content_sha256,
                         inventory_json, inventory_at,
                         discovered_at, last_seen_at, last_seen_ip, updated_at
-                    ) VALUES (?, ?, '', ?, ?, ?, ?, '', ?)
+                    ) VALUES (?, ?, ?, '', ?, ?, ?, ?, '', ?)
                     """,
-                    (canon, self._default_boot_mode, blob, now, now, now, now),
+                    (
+                        canon,
+                        _default_name(conn, canon),
+                        self._default_boot_mode,
+                        blob,
+                        now,
+                        now,
+                        now,
+                        now,
+                    ),
                 )
             else:
                 conn.execute(
@@ -808,8 +931,12 @@ def _row(r: sqlite3.Row) -> Machine:
     flashed_image_sha256 = ""
     with contextlib.suppress(IndexError, KeyError):
         flashed_image_sha256 = r["flashed_image_sha256"] or ""
+    name = ""
+    with contextlib.suppress(IndexError, KeyError):
+        name = r["name"] or ""
     return Machine(
         mac=r["mac"],
+        name=name,
         boot_mode=r["boot_mode"],
         image_content_sha256=r["image_content_sha256"],
         labels=labels,

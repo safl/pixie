@@ -29,7 +29,12 @@ per image, its on-disk footprint, and every live use of it. (The old
 ## Machines + boot modes
 
 A **machine** is a target, keyed by MAC. It appears the first time it
-PXEs into pixie. You **bind** it to a **boot mode** + an image; on its
+PXEs into pixie, named `machine-<mac>`; rename it on its page to what
+people call it. A name is a unique, lowercase hostname label (`a-z`,
+`0-9`, `-`), and every `/machines/...` route and `/ui/machines/...` page
+accepts it in place of the MAC. A machine that never PXEs into pixie can
+still be registered by naming its MAC: `PUT /machines/<mac>/name`. You
+**bind** it to a **boot mode** + an image; on its
 next PXE, pixie serves that plan. The modes are covered in detail on
 [](boot-modes.md); in short: `ipxe-exit` (fall through to firmware),
 `pixie-inventory` (post disk/NIC info, then exit), `pixie-tui` (operator

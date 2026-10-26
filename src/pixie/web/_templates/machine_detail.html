@@ -1,6 +1,6 @@
 {% extends "layout.html" %}
 {% from "_partials/page_description.html" import page_description %}
-{% block title %}{{ machine.mac }} - pixie{% endblock %}
+{% block title %}{{ machine.name }} - pixie{% endblock %}
 {% block subnav %}
 <div class="subnav-strip">
     <div class="container">
@@ -8,6 +8,7 @@
             <i class="bi bi-arrow-left me-1"></i>Machines
         </a>
         <span class="text-muted">/</span>
+        <span class="text-white">{{ machine.name }}</span>
         <code class="text-white-50">{{ machine.mac }}</code>
         <ul class="nav nav-pills ms-auto">
             <li class="nav-item"><a class="nav-link" href="#binding">Binding</a></li>
@@ -34,7 +35,8 @@
 {% endif %}
 <div class="card shadow-sm mb-4">
     <div class="card-header bg-light d-flex align-items-center">
-        <h2 class="h5 mb-0"><i class="bi bi-pc-display me-2"></i><code>{{ machine.mac }}</code></h2>
+        <h2 class="h5 mb-0"><i class="bi bi-pc-display me-2"></i>{{ machine.name }}
+            <code class="small text-muted ms-2">{{ machine.mac }}</code></h2>
         <span class="ms-auto">
             {% set _bm = boot_mode_meta_map.get(machine.boot_mode) %}
             <span class="badge {{ 'text-bg-primary' if machine.boot_mode in ('nbdboot-ephemeral', 'nbdboot-overlay') else 'text-bg-secondary' }}"
@@ -45,6 +47,28 @@
     </div>
     <div class="card-body">
         <dl class="row mb-0">
+            <dt class="col-sm-3 text-muted small">Name</dt>
+            <dd class="col-sm-9">
+                <form method="post"
+                      action="/ui/machines/{{ machine.mac }}/name/edit"
+                      class="d-flex flex-wrap gap-2 align-items-start">
+                    <input type="text" name="name"
+                           class="form-control form-control-sm font-monospace"
+                           style="max-width: 20rem;"
+                           value="{{ machine.name }}"
+                           required maxlength="63"
+                           pattern="[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?"
+                           title="Hostname label: a-z / 0-9 / -, 1-63 chars, no leading or trailing -. Stored lowercase."
+                           aria-label="Machine name">
+                    <button type="submit" class="btn btn-sm btn-outline-primary">
+                        <i class="bi bi-check2 me-1"></i>Rename
+                    </button>
+                </form>
+                <div class="form-text small text-muted mt-1">
+                    Unique, hostname-style. Discovery assigns
+                    <code>machine-&lt;mac&gt;</code>; rename it to what people call it.
+                </div>
+            </dd>
             <dt class="col-sm-3 text-muted small">Image content sha</dt>
             <dd class="col-sm-9">
                 {% if machine.image_content_sha256 %}
