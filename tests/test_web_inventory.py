@@ -10,7 +10,7 @@ records at all (some firmwares don't populate SMBIOS type 17 fully).
 
 from __future__ import annotations
 
-from pixie.web._inventory import humanize_bytes, humanize_hz, normalise_inventory
+from pixie.web._inventory import humanize_bps, humanize_bytes, humanize_hz, normalise_inventory
 
 
 def _dimm(slot: str, size: int, mhz: int = 3200, ddr: str = "DDR4") -> dict:
@@ -212,7 +212,7 @@ def test_normalise_inventory_extracts_nics() -> None:
             "mac": "aa:bb:cc:dd:ee:ff",
             "vendor": "Intel Corporation",
             "driver": "e1000e",
-            "speed": "1.00 GHz",
+            "speed": "1 Gbit/s",
         }
     ]
 
@@ -230,3 +230,10 @@ def test_humanize_hz() -> None:
     assert humanize_hz(0) == "-"
     assert humanize_hz(2_800_000_000) == "2.80 GHz"
     assert humanize_hz(100_000_000) == "0.10 GHz"
+
+
+def test_humanize_bps() -> None:
+    assert humanize_bps(1_000_000_000) == "1 Gbit/s"
+    assert humanize_bps(2_500_000_000) == "2.5 Gbit/s"
+    assert humanize_bps(100_000_000) == "100 Mbit/s"
+    assert humanize_bps(None) == "-"

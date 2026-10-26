@@ -100,6 +100,17 @@ def humanize_hz(n: int | float | None) -> str:
     return f"{mhz:.0f} MHz"
 
 
+def humanize_bps(n: int | float | None) -> str:
+    """Auto-scaled link speed: ``1000000000`` -> ``"1 Gbit/s"``. lshw
+    reports a NIC's ``capacity`` / ``size`` in bits per second."""
+    if not n:
+        return "-"
+    for scale, unit in ((1e9, "Gbit/s"), (1e6, "Mbit/s"), (1e3, "kbit/s")):
+        if n >= scale:
+            return f"{n / scale:g} {unit}"
+    return f"{n:g} bit/s"
+
+
 def _extract_system(lshw: Any) -> dict[str, Any]:
     if not isinstance(lshw, dict):
         return {}
@@ -238,14 +249,14 @@ def _extract_nics(lshw: Any) -> list[dict[str, Any]]:
     nics: list[dict[str, Any]] = []
     for node in _find_all(lshw, "network"):
         config = node.get("configuration") or {}
-        speed_hz = node.get("capacity") or node.get("size")
+        speed_bps = node.get("capacity") or node.get("size")
         nics.append(
             {
                 "name": node.get("logicalname") or node.get("id"),
                 "mac": node.get("serial"),
                 "vendor": node.get("vendor"),
                 "driver": config.get("driver"),
-                "speed": humanize_hz(speed_hz) if speed_hz else None,
+                "speed": humanize_bps(speed_bps) if speed_bps else None,
             }
         )
     return nics
