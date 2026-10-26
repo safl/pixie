@@ -11,6 +11,14 @@ operator-facing summary.
 
 ## [Unreleased]
 
+### Changed
+
+- **The bundled catalog carries Ubuntu 26.04 and 26.10, not 24.04.** nosi
+  dropped `ubuntu-2404-headless` and added `ubuntu-2610-headless`, so a
+  fresh pixie seeds the latest LTS and the latest release, each with its
+  netboot bundle. A catalog already seeded keeps its 24.04 entries, whose
+  `:latest` image no longer gets updates.
+
 ## [0.8.1] - 2026-07-30
 
 ### Fixed
