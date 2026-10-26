@@ -1,8 +1,10 @@
 """HTTP routes for machine CRUD.
 
-Read routes (``GET /machines``, ``GET /machines/{mac}``) are OPEN
+Read routes (``GET /machines``, ``GET /machines/{ref}``) are OPEN
 because the machine list is what an on-call operator glances at.
-Write routes require the pixie session cookie.
+Write routes require the pixie session cookie. ``{ref}`` is a MAC or
+a machine name; only a MAC can address a machine that does not exist
+yet.
 
 Discovery (creating a row on first PXE contact) lives under the
 ``/pxe/`` router in :mod:`pixie.pxe._routes`; this module owns only
@@ -21,6 +23,7 @@ from pixie.machines._bind_events import delete_machine_row, emit_bind_event
 from pixie.machines._store import (
     BOOT_MODES,
     BadMac,
+    DuplicateName,
     MachinesStore,
     normalise_mac,
     parse_labels,
@@ -81,11 +84,28 @@ class BindBody(BaseModel):
     )
 
 
+class NameBody(BaseModel):
+    name: str = Field(..., description="Hostname label: a-z / 0-9 / -, 1-63 chars")
+
+
 def _get_machines(request: Request) -> MachinesStore:
     store: MachinesStore | None = getattr(request.app.state, "machines_store", None)
     if store is None:
         raise HTTPException(status_code=503, detail="machines store not initialised")
     return store
+
+
+def _resolve_mac(request: Request, ref: str) -> str:
+    """Canonical MAC for ``ref``. A MAC passes through even when no row
+    exists (writes create one); a name must match an existing machine."""
+    try:
+        return normalise_mac(ref)
+    except BadMac:
+        pass
+    row = _get_machines(request).resolve(ref)
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"no machine named {ref!r}")
+    return row.mac
 
 
 @router.get("/machines")
@@ -95,10 +115,7 @@ def list_machines(request: Request) -> dict[str, list[dict[str, Any]]]:
 
 @router.get("/machines/{mac}")
 def get_machine(request: Request, mac: str) -> dict[str, Any]:
-    try:
-        canon = normalise_mac(mac)
-    except BadMac as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    canon = _resolve_mac(request, mac)
     row = _get_machines(request).get(canon)
     if row is None:
         raise HTTPException(status_code=404, detail=f"no machine {canon}")
@@ -112,10 +129,7 @@ def upsert_machine(
     body: BindBody,
     _auth: None = Depends(require_auth),
 ) -> dict[str, Any]:
-    try:
-        canon = normalise_mac(mac)
-    except BadMac as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    canon = _resolve_mac(request, mac)
     # Snapshot the pre-bind state so we can distinguish a fresh
     # bind (no row existed, or existed but had no binding) from a
     # binding CHANGE on an already-bound row. Two event kinds so an
@@ -165,16 +179,30 @@ def upsert_machine(
     return row.to_dict()
 
 
+@router.put("/machines/{mac}/name")
+def rename_machine(
+    request: Request,
+    mac: str,
+    body: NameBody,
+    _auth: None = Depends(require_auth),
+) -> dict[str, Any]:
+    canon = _resolve_mac(request, mac)
+    try:
+        row = _get_machines(request).set_name(canon, body.name)
+    except DuplicateName as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return row.to_dict()
+
+
 @router.delete("/machines/{mac}", status_code=204)
 def delete_machine(
     request: Request,
     mac: str,
     _auth: None = Depends(require_auth),
 ) -> Response:
-    try:
-        canon = normalise_mac(mac)
-    except BadMac as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    canon = _resolve_mac(request, mac)
     if not delete_machine_row(request.app.state, canon):
         raise HTTPException(status_code=404, detail=f"no machine {canon}")
     return Response(status_code=204)

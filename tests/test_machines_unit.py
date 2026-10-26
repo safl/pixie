@@ -149,9 +149,12 @@ def test_put_machine_requires_session(client: TestClient) -> None:
     assert r.status_code == 401
 
 
-def test_put_machine_rejects_bad_mac(client: TestClient) -> None:
+def test_put_machine_unknown_name_is_404(client: TestClient) -> None:
+    """A ref that is not a MAC is read as a name, and only a MAC can
+    create a row, so an unknown name 404s rather than conjuring one."""
     r = _authed(client).put("/machines/not-a-mac", json={"boot_mode": "ipxe-exit"})
-    assert r.status_code == 400
+    assert r.status_code == 404
+    assert "no machine named" in r.json()["detail"]
 
 
 def test_put_machine_rejects_unknown_boot_mode(client: TestClient) -> None:
