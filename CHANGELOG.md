@@ -20,6 +20,10 @@ operator-facing summary.
   every `/machines/{ref}` route and `/ui/machines/{ref}` page accepts the
   name in place of the MAC. `PUT /machines/{ref}/name` renames over the
   API, and registers a machine by MAC that never PXEs into pixie.
+- **`GET /machines/{ref}/info`** describes one machine for other tools:
+  name, labels, binding (with the image's catalog name), last contact,
+  and the hardware inventory summarised the way the machine page shows
+  it. Open, like the other machine reads.
 
 ### Changed
 

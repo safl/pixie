@@ -64,7 +64,9 @@ from pixie.events._routes import router as events_router
 from pixie.exports._routes import router as exports_router
 from pixie.exports._store import ExportsStore, OverlaysStore
 from pixie.exports._supervisor import DEFAULT_PORT_BASE, NbdServer
+from pixie.images import bindable_image_names
 from pixie.machines._bind_events import emit_bind_event
+from pixie.machines._info import router as machine_info_router
 from pixie.machines._routes import router as machines_router
 from pixie.machines._store import (
     BOOT_MODES,
@@ -582,18 +584,6 @@ def _recent_events_for(events_log: EventsLog, subject_kind: str) -> list[Event]:
     read with ``subject_id`` + a larger limit and does not go
     through this helper)."""
     return events_log.list(subject_kind=subject_kind, limit=_RECENT_EVENTS_LIMIT)
-
-
-def _bindable_image_names(catalog: Any) -> dict[str, str]:
-    """Map disk-content sha -> a human name, for resolving a machine's
-    bound image to something readable. Multiple catalog entries can
-    resolve to one sha; the alphabetically-first name wins so the label
-    is stable across polls."""
-    names: dict[str, str] = {}
-    for e in sorted(catalog.list_entries(), key=lambda e: e.name):
-        if e.is_bindable() and e.content_sha256 and e.content_sha256 not in names:
-            names[e.content_sha256] = e.name
-    return names
 
 
 def _machine_image_cell(machine: Any, image_names: dict[str, str]) -> tuple[str, str]:
@@ -1263,7 +1253,7 @@ def create_app() -> FastAPI:
         # Resolve each bound image sha to a readable name so the Image
         # column links to /ui/images/<sha> instead of showing a bare
         # hash; the cell is blank for modes that don't consume an image.
-        image_names = _bindable_image_names(request.app.state.catalog_store)
+        image_names = bindable_image_names(request.app.state.catalog_store)
         image_cells = {m.mac: _machine_image_cell(m, image_names) for m in page_machines}
         return templates.TemplateResponse(
             request,
@@ -2401,7 +2391,7 @@ def create_app() -> FastAPI:
         _auth: None = Depends(_require_ui_auth),
     ) -> JSONResponse:
         store: SettingsStore = request.app.state.settings_store
-        image_names = _bindable_image_names(request.app.state.catalog_store)
+        image_names = bindable_image_names(request.app.state.catalog_store)
         out: dict[str, dict[str, Any]] = {}
         for m in request.app.state.machines_store.list():
             disks = (m.inventory or {}).get("disks") or []
@@ -2925,7 +2915,7 @@ def create_app() -> FastAPI:
             },
             # Fetched bindable images (sha -> name) so the Advanced sha
             # field can be a dropdown instead of a raw 64-hex paste.
-            "fetched_images": _bindable_image_names(state.catalog_store),
+            "fetched_images": bindable_image_names(state.catalog_store),
             "flash_error": flash_error,
         }
 
@@ -3148,6 +3138,7 @@ def create_app() -> FastAPI:
     app.include_router(catalog_router)
     app.include_router(exports_router)
     app.include_router(machines_router)
+    app.include_router(machine_info_router)
     app.include_router(pxe_router)
     app.include_router(events_router)
 

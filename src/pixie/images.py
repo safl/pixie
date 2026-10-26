@@ -265,6 +265,18 @@ SHA256_HEX_LEN = 64
 _SHA_HEX = frozenset("0123456789abcdef")
 
 
+def bindable_image_names(catalog: Any) -> dict[str, str]:
+    """Map disk-content sha -> a human name, for resolving a machine's
+    bound image to something readable. Multiple catalog entries can
+    resolve to one sha; the alphabetically-first name wins so the label
+    is stable across polls."""
+    names: dict[str, str] = {}
+    for e in sorted(catalog.list_entries(), key=lambda e: e.name):
+        if e.is_bindable() and e.content_sha256 and e.content_sha256 not in names:
+            names[e.content_sha256] = e.name
+    return names
+
+
 def is_sha256_hex(s: str) -> bool:
     """Return ``True`` iff ``s`` is a lower-case 64-char SHA-256
     hex digest. Single predicate shared by sidecar parsing,

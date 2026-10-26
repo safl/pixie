@@ -33,7 +33,10 @@ PXEs into pixie, named `machine-<mac>`; rename it on its page to what
 people call it. A name is a unique, lowercase hostname label (`a-z`,
 `0-9`, `-`), and every `/machines/...` route and `/ui/machines/...` page
 accepts it in place of the MAC. A machine that never PXEs into pixie can
-still be registered by naming its MAC: `PUT /machines/<mac>/name`. You
+still be registered by naming its MAC: `PUT /machines/<mac>/name`.
+`GET /machines/<name>/info` describes one machine for other tools: its
+binding, when pixie last heard from it, and its inventory already
+summarised, with unknown values left out rather than sent as null. You
 **bind** it to a **boot mode** + an image; on its
 next PXE, pixie serves that plan. The modes are covered in detail on
 [](boot-modes.md); in short: `ipxe-exit` (fall through to firmware),
