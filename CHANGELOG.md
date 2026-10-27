@@ -11,6 +11,8 @@ operator-facing summary.
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-10-27
+
 ### Added
 
 - **Machines have names.** Every machine carries a unique, lowercase
