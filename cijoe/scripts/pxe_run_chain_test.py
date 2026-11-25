@@ -69,18 +69,18 @@ FLASH_TARGET_SERIAL = "PIXIETEST"
 # so a new weekly release cannot silently shift what the test
 # targets -- a nosi format / partition-layout change should fail
 # the test on a controlled bump, not on the next Monday's release.
-# 2.6 GiB compressed (img.gz) / ~10 GiB uncompressed sparsely
+# 2.4 GiB compressed (img.gz) at 2026.W48 / ~10 GiB uncompressed sparsely
 # written; adjust the QEMU virtio-blk backing store below if this
 # tag ever exceeds ~11 GiB uncompressed.
-NOSI_FLASH_TAG = "2026.W29"
+NOSI_FLASH_TAG = "2026.W48"
 # Real nosi catalog URL. The flash + tui tests POST this to
 # pixie's ``/ui/catalog/import`` which fetches, parses, and
 # upserts every entry -- exercising the real catalog wire (HTTPS
-# to github.com/safl/nosi releases, real TOML parse against the
+# to github.com/refenv/nosi releases, real TOML parse against the
 # real schema) instead of a hand-authored POST /catalog/entries.
 # Pinned by tag so a weekly nosi release cannot silently shift
 # what the test targets.
-NOSI_CATALOG_URL = f"https://github.com/safl/nosi/releases/download/{NOSI_FLASH_TAG}/catalog.toml"
+NOSI_CATALOG_URL = f"https://github.com/refenv/nosi/releases/download/{NOSI_FLASH_TAG}/catalog.toml"
 # Names of the catalog entries the flash + tui tests pick after
 # import. Must match nosi's published entry names for the pinned
 # tag exactly; a rename upstream fails the test on the fetch step

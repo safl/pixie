@@ -36,7 +36,7 @@ DEFAULT_CATALOG_URL = "https://github.com/safl/pixie/releases/latest/download/ca
 # Catalog page's "Fetch latest catalog" button imports this so an
 # operator can pull the whole nosi set on demand without pixie
 # hand-maintaining a copy that drifts each week.
-NOSI_CATALOG_URL = "https://github.com/safl/nosi/releases/latest/download/catalog-latest.toml"
+NOSI_CATALOG_URL = "https://github.com/refenv/nosi/releases/latest/download/catalog-latest.toml"
 
 # The same curated catalog shipped INSIDE the package, used to seed a
 # fresh (empty) catalog on first start so a plain deploy comes up with

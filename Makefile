@@ -126,7 +126,7 @@ test-pxe:
 # bundle + disk image over oras, bind the client MAC to
 # boot_mode=nbdboot, PXE-boot QEMU, and assert every marker in
 # cijoe/configs/test-pxe-nbdboot.toml shows up through the initramfs
-# nbdboot script. Needs internet to ghcr.io + github.com/safl/nosi.
+# nbdboot script. Needs internet to ghcr.io + github.com/refenv/nosi.
 test-pxe-nbdboot:
 	cd cijoe && cijoe tasks/test-pxe-nbdboot.yaml --monitor -c configs/test-pxe-nbdboot.toml
 

@@ -50,7 +50,7 @@ version = 1
 
 [[images]]
 name = "ventoy-test-fedora-44-headless"
-src = "oras://ghcr.io/safl/nosi/fedora-44-headless:latest"
+src = "oras://ghcr.io/refenv/nosi/fedora-44-headless:latest"
 format = "img.gz"
 arch = "x86_64"
 description = "Sentinel remote entry for the Ventoy-boot test"

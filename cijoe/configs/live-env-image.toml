@@ -19,8 +19,8 @@ fail_fast = true
 # transform only mutates userspace, so the pixie-live-env image reuses
 # arch-headless's own kernel/initrd unchanged -- ``netboot_src`` points
 # straight at the arch-headless netboot bundle.
-base_src = "oras://ghcr.io/safl/nosi/arch-headless:latest"
-netboot_src = "oras://ghcr.io/safl/nosi/arch-headless-netboot:latest"
+base_src = "oras://ghcr.io/refenv/nosi/arch-headless:latest"
+netboot_src = "oras://ghcr.io/refenv/nosi/arch-headless-netboot:latest"
 
 # The stable release-asset URL the shipped catalog entry references
 # (``.../releases/latest/download/pixie-live-env-x86_64.img.gz``), so a

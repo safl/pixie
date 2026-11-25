@@ -18,7 +18,7 @@ from tests.conftest import authed
 
 _SHA = "a" * 64  # disk image
 _BSHA = "b" * 64  # netboot bundle
-_BUNDLE_SRC = "oras://ghcr.io/safl/nosi/x-netboot:latest"
+_BUNDLE_SRC = "oras://ghcr.io/refenv/nosi/x-netboot:latest"
 
 
 class _StubNbd:
@@ -42,7 +42,7 @@ def _seed(tmp: Path):
     catalog.upsert(
         CatalogEntry(
             name="ubuntu",
-            src="oras://ghcr.io/safl/nosi/x:latest",
+            src="oras://ghcr.io/refenv/nosi/x:latest",
             format="img.gz",
             content_sha256=_SHA,
             netboot_src=_BUNDLE_SRC,
