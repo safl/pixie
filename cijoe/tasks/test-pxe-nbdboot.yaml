@@ -32,7 +32,7 @@ doc: |
 
   Requires: podman, qemu-system-x86, dnsmasq, ipxe,
   bridge-utils / iproute2, KVM, passwordless sudo, and internet
-  access to ghcr.io + github.com/safl/nosi.
+  access to ghcr.io + github.com/refenv/nosi.
 
 steps:
 - name: pxe_prepare

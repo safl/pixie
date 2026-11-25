@@ -20,7 +20,7 @@ from pixie.oras import OrasError, ResolvedBlob
 
 def _fake_resolved(digest: str) -> ResolvedBlob:
     return ResolvedBlob(
-        blob_url="https://ghcr.io/v2/safl/nosi/arch-headless/blobs/" + digest,
+        blob_url="https://ghcr.io/v2/refenv/nosi/arch-headless/blobs/" + digest,
         headers={"Authorization": "Bearer tok"},
         digest=digest,
         size=None,
@@ -48,7 +48,7 @@ def test_pull_writes_blob_and_returns_digest(monkeypatch, tmp_path: Path) -> Non
     _patch_stream(monkeypatch, payload)
 
     out = tmp_path / "nested" / "base.img.gz"
-    got = oras_pull.pull("oras://ghcr.io/safl/nosi/arch-headless:latest", out)
+    got = oras_pull.pull("oras://ghcr.io/refenv/nosi/arch-headless:latest", out)
 
     assert got == digest
     assert out.read_bytes() == payload
@@ -62,7 +62,7 @@ def test_pull_rejects_digest_mismatch(monkeypatch, tmp_path: Path) -> None:
 
     out = tmp_path / "base.img.gz"
     with pytest.raises(ValueError, match="digest mismatch"):
-        oras_pull.pull("oras://ghcr.io/safl/nosi/arch-headless:latest", out)
+        oras_pull.pull("oras://ghcr.io/refenv/nosi/arch-headless:latest", out)
     assert not out.exists()
 
 
@@ -71,7 +71,7 @@ def test_main_reports_resolution_error(monkeypatch, tmp_path: Path, capsys) -> N
         raise OrasError("no such tag")
 
     monkeypatch.setattr(oras_pull, "resolve_ref", boom)
-    rc = oras_pull.main(["oras://ghcr.io/safl/nosi/arch-headless:latest", str(tmp_path / "o")])
+    rc = oras_pull.main(["oras://ghcr.io/refenv/nosi/arch-headless:latest", str(tmp_path / "o")])
     assert rc == 1
     assert "no such tag" in capsys.readouterr().err
 
@@ -83,7 +83,7 @@ def test_main_success(monkeypatch, tmp_path: Path, capsys) -> None:
     _patch_stream(monkeypatch, payload)
 
     out = tmp_path / "base.img.gz"
-    rc = oras_pull.main(["oras://ghcr.io/safl/nosi/arch-headless:latest", str(out)])
+    rc = oras_pull.main(["oras://ghcr.io/refenv/nosi/arch-headless:latest", str(out)])
     assert rc == 0
     assert out.read_bytes() == payload
     assert digest in capsys.readouterr().out

@@ -73,8 +73,8 @@ CATALOG_FRAGMENT_BASENAME = "pixie-live-env-catalog.toml"
 CONTENT_SHA_BASENAME = "pixie-live-env-x86_64.content-sha256"
 
 # Defaults; overridable via the ``[live-env-image]`` config table.
-DEFAULT_BASE_SRC = "oras://ghcr.io/safl/nosi/arch-headless:latest"
-DEFAULT_NETBOOT_SRC = "oras://ghcr.io/safl/nosi/arch-headless-netboot:latest"
+DEFAULT_BASE_SRC = "oras://ghcr.io/refenv/nosi/arch-headless:latest"
+DEFAULT_NETBOOT_SRC = "oras://ghcr.io/refenv/nosi/arch-headless-netboot:latest"
 DEFAULT_CATALOG_SRC = (
     "https://github.com/safl/pixie/releases/latest/download/pixie-live-env-x86_64.img.gz"
 )

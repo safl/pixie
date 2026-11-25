@@ -23,7 +23,7 @@ Why ``oras://`` and not ``ghcr:``
 ---------------------------------
 
 The ORAS spelling disambiguates from container references. A reader
-who sees ``ghcr.io/safl/nosi/debian-sysdev:latest`` in a docs example
+who sees ``ghcr.io/refenv/nosi/debian-sysdev:latest`` in a docs example
 might reach for ``docker pull`` or ``podman run`` -- which would
 fail and leave them confused, because nosi publishes disk-image
 artifacts, not runnable container images. ``oras://`` is the
@@ -177,7 +177,7 @@ class OrasRef:
     """
 
     host: str  # e.g. "ghcr.io" or "registry.example.com:5000"
-    repository: str  # e.g. "safl/nosi/debian-sysdev"
+    repository: str  # e.g. "refenv/nosi/debian-sysdev"
     tag: str | None = None
     digest: str | None = None
 

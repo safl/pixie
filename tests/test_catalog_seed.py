@@ -66,7 +66,6 @@ def test_bundled_catalog_matches_the_supported_images() -> None:
         "nosi arch-headless",
         # flash-only (no netboot bundle published).
         "nosi freebsd-14-headless",
-        "nosi freebsd-15-headless",
         # pixie's own live-env image (arch-headless + injected CLI/service).
         "pixie-live-env",
     }
@@ -83,7 +82,7 @@ def test_default_catalog_url_points_at_pixie_not_nosi() -> None:
 def test_seed_populates_empty_catalog(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     app = _build_app(monkeypatch, tmp_path, seed="1")
     entries = app.state.catalog_store.list_entries()
-    assert len(entries) == 13
+    assert len(entries) == 12
     assert app.state.settings_store.get(CATALOG_SEEDED_KEY) == "1"
 
 
@@ -97,7 +96,7 @@ def test_seed_disabled_leaves_catalog_empty(
 
 def test_seed_is_one_shot(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     app1 = _build_app(monkeypatch, tmp_path, seed="1")
-    assert len(app1.state.catalog_store.list_entries()) == 13
+    assert len(app1.state.catalog_store.list_entries()) == 12
     # Operator curates the catalog down to nothing.
     for e in list(app1.state.catalog_store.list_entries()):
         app1.state.catalog_store.delete(e.name)
@@ -139,4 +138,4 @@ def test_catalog_page_has_fetch_latest_nosi_button(client: TestClient) -> None:
     body = c.get("/ui/catalog").text
     assert "Import full nosi catalog" in body
     assert NOSI_CATALOG_URL in body
-    assert "safl/nosi" in NOSI_CATALOG_URL
+    assert "refenv/nosi" in NOSI_CATALOG_URL

@@ -15,15 +15,15 @@ version = 1
 
 [[images]]
 name = "nosi ubuntu-2604-headless (x86_64, 2026.W28)"
-src = "oras://ghcr.io/safl/nosi/ubuntu-2604-headless:2026.W28"
+src = "oras://ghcr.io/refenv/nosi/ubuntu-2604-headless:2026.W28"
 format = "img.gz"
 arch = "x86_64"
 description = "Ubuntu 26.04 LTS (resolute) headless."
-netboot_src = "oras://ghcr.io/safl/nosi/ubuntu-2604-headless-netboot:2026.W28"
+netboot_src = "oras://ghcr.io/refenv/nosi/ubuntu-2604-headless-netboot:2026.W28"
 
 [[images]]
 name = "nosi ubuntu-2604-headless netboot bundle (x86_64, 2026.W28)"
-src = "oras://ghcr.io/safl/nosi/ubuntu-2604-headless-netboot:2026.W28"
+src = "oras://ghcr.io/refenv/nosi/ubuntu-2604-headless-netboot:2026.W28"
 format = "tar.gz"
 arch = "x86_64"
 """

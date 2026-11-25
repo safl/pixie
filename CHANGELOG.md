@@ -11,6 +11,15 @@ operator-facing summary.
 
 ## [Unreleased]
 
+### Changed
+
+- **nosi images come from refenv.** The seeded catalog, the "Import full
+  nosi catalog" URL, the live-env wizard's default and the live-env image
+  build now take nosi from `ghcr.io/refenv/nosi` and
+  `github.com/refenv/nosi`, where nosi moved; `ghcr.io/safl/nosi` gets no
+  new builds. The seeded catalog no longer has `nosi freebsd-15-headless`,
+  which nosi does not publish under refenv.
+
 ## [0.9.0] - 2026-10-27
 
 ### Added
